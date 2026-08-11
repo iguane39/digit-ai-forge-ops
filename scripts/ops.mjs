@@ -105,8 +105,135 @@ function etat(cible) {
   console.log(JSON.stringify({ courant, releases, evenements: lignes.length, dernier }, null, 2));
 }
 
-const [verbe, a, b] = process.argv.slice(2);
+// ───────────────────────────── PLANS CLOUD (v1, TF-0081) ─────────────────────────────
+// Mode PLAN-FIRST : générer le plan d'exécution déterministe d'une cible cloud — commandes
+// exactes ordonnées en 4 phases (provision, deploiement, healthcheck, rollback) — SANS RIEN
+// exécuter et sans jamais lire de credential. L'exécution réelle d'un plan est un acte de
+// run MEP (environnement authentifié fourni par l'humain, GO humain) — jamais un self-test.
+// Chaque plan est adossé à sa fiche expert admise (experts-forge, verdict MATERIEL).
+const PLANS = {
+  railway: {
+    service: "Railway service (conteneur)",
+    fiche: "experts-forge/fiches/expert-ops-railway.md",
+    placeholders: ["<PROJET>", "<ENVIRONNEMENT>", "<URL_SERVICE>", "<ID_DEPLOIEMENT_PRECEDENT>"],
+    provision: [
+      "railway link <PROJET> --environment <ENVIRONNEMENT>",
+      "verifier railway.json : deploy.healthcheckPath=\"/sante\" + healthcheckTimeout (bascule aveugle sinon)",
+      "verifier la region UE du service (europe-west4) — le defaut n'est pas garanti UE",
+    ],
+    deploiement: [
+      "railway up --ci   # build Dockerfile + deploiement ; trafic route seulement apres healthcheck vert",
+    ],
+    healthcheck: [
+      "railway status   # deploiement SUCCESS attendu",
+      "curl -fsS <URL_SERVICE>/sante   # 200 attendu (contrat sante.mjs de forge-ops)",
+    ],
+    rollback: [
+      "dashboard Railway → deployment <ID_DEPLOIEMENT_PRECEDENT> → Rollback (piege : `railway redeploy` rejoue le COURANT, pas l'anterieur)",
+      "curl -fsS <URL_SERVICE>/sante   # re-verification apres retour",
+    ],
+  },
+  gcp: {
+    service: "Cloud Run — service conteneur managé",
+    fiche: "experts-forge/fiches/expert-ops-gcp.md",
+    placeholders: ["<PROJET>", "<REGION>", "<SERVICE>", "<IMAGE>", "<HASH>", "<REVISION_PRECEDENTE>"],
+    provision: [
+      "gcloud auth list   # identite de deploiement : roles/run.admin + iam.serviceAccountUser + artifactregistry.reader",
+      "gcloud artifacts repositories describe <DEPOT> --location <REGION> --project <PROJET>",
+    ],
+    deploiement: [
+      "gcloud builds submit <BUILD> --tag <IMAGE> --project <PROJET>",
+      "gcloud run deploy <SERVICE> --image <IMAGE> --region <REGION> --project <PROJET> --port 8080 --no-traffic --tag candidat   # revision creee SANS trafic",
+    ],
+    healthcheck: [
+      "curl -fsS https://candidat---<SERVICE>-<HASH>.a.run.app/sante   # smoke sur l'URL taguee, 200 attendu",
+      "gcloud run services update-traffic <SERVICE> --region <REGION> --to-latest   # bascule APRES healthcheck vert",
+    ],
+    rollback: [
+      "gcloud run services update-traffic <SERVICE> --region <REGION> --to-revisions <REVISION_PRECEDENTE>=100   # instantane, sans rebuild",
+      "ne jamais purger les revisions saines anterieures (O-4 : histoire purgee = rollback impossible)",
+    ],
+  },
+  azure: {
+    service: "Azure Container Apps",
+    fiche: "experts-forge/fiches/expert-ops-azure.md",
+    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>"],
+    provision: [
+      "az group create --name <RG> --location <REGION>",
+      "az containerapp env create --name <ENV> --resource-group <RG> --location <REGION>",
+      "az containerapp revision set-mode --name <APP> --resource-group <RG> --mode multiple   # SANS multiple, aucun retour instantane possible",
+    ],
+    deploiement: [
+      "az acr build --registry <ACR> --image <IMAGE> <BUILD>",
+      "az containerapp update --name <APP> --resource-group <RG> --image <IMAGE> --revision-suffix <SUFFIXE>   # nouvelle revision, ingress targetPort=8080",
+    ],
+    healthcheck: [
+      "curl -fsS https://<APP>--<SUFFIXE>.<DOMAINE_ENV>/sante   # URL de revision, 200 attendu",
+      "az containerapp ingress traffic set --name <APP> --resource-group <RG> --revision-weight <SUFFIXE>=100   # bascule APRES healthcheck vert",
+    ],
+    rollback: [
+      "az containerapp ingress traffic set --name <APP> --resource-group <RG> --revision-weight <SUFFIXE_PRECEDENT>=100   # instantane en mode multiple",
+      "az containerapp revision activate --name <APP> --resource-group <RG> --revision <APP>--<SUFFIXE_PRECEDENT>   # si la revision etait desactivee",
+    ],
+  },
+  aws: {
+    service: "AWS App Runner",
+    fiche: "experts-forge/fiches/expert-ops-aws.md",
+    placeholders: ["<REGION>", "<ARN_SERVICE>", "<DEPOT_ECR>", "<TAG_IMMUABLE>", "<TAG_PRECEDENT>", "<URL_SERVICE>"],
+    provision: [
+      "aws ecr describe-repositories --repository-names <DEPOT_ECR> --region <REGION>   # tags IMMUABLES exiges (jamais :latest)",
+      "verifier le role d'acces ECR : AWSAppRunnerServicePolicyForECRAccess + iam:PassRole restreint",
+      "desactiver le deploiement automatique sur push ECR (la bascule reste un geste du run, pas un effet de bord)",
+    ],
+    deploiement: [
+      "docker build -t <DEPOT_ECR>:<TAG_IMMUABLE> <BUILD> && docker push <DEPOT_ECR>:<TAG_IMMUABLE>",
+      "aws apprunner update-service --service-arn <ARN_SERVICE> --region <REGION> --source-configuration ImageRepository={ImageIdentifier=<DEPOT_ECR>:<TAG_IMMUABLE>}",
+    ],
+    healthcheck: [
+      "aws apprunner describe-service --service-arn <ARN_SERVICE> --region <REGION>   # Status=RUNNING, HealthCheck Path=/sante",
+      "curl -fsS <URL_SERVICE>/sante   # 200 attendu (echec de deploiement = auto-rollback par le service)",
+    ],
+    rollback: [
+      "aws apprunner update-service --service-arn <ARN_SERVICE> --region <REGION> --source-configuration ImageRepository={ImageIdentifier=<DEPOT_ECR>:<TAG_PRECEDENT>}   # pas de bascule de trafic native : le rollback volontaire est un redeploiement du tag anterieur",
+      "condition : retention des images au registre (image purgee = rollback impossible)",
+    ],
+  },
+};
+
+function plan(cible, build, sortie) {
+  const p = PLANS[cible];
+  if (!p) fail(`cible inconnue « ${cible} » — cibles connues : ${Object.keys(PLANS).join(", ")}`);
+  const doc = {
+    format: "forge-ops/plan@1",
+    cible,
+    service: p.service,
+    build: build,
+    source_fiche: p.fiche,
+    garde_fous: [
+      "healthcheck avant toute bascule — jamais de bascule sur release malade",
+      "aucun credential dans la forge ni dans ce plan (placeholders <...> a resoudre par l'environnement du run)",
+      "execution reelle = run MEP, GO humain — jamais un self-test",
+    ],
+    placeholders: p.placeholders,
+    phases: {
+      provision: p.provision,
+      deploiement: p.deploiement.map(c => c.replace("<BUILD>", build)),
+      healthcheck: p.healthcheck,
+      rollback: p.rollback,
+    },
+  };
+  const json = JSON.stringify(doc, null, 2);
+  if (sortie) { fs.writeFileSync(sortie, json + "\n", "utf8"); console.log(`[OPS OK] plan ${cible} écrit : ${sortie}`); }
+  else console.log(json);
+}
+
+const argv = process.argv.slice(2);
+const iSortie = argv.indexOf("--sortie");
+const sortiePlan = iSortie >= 0 ? argv[iSortie + 1] : null;
+if (iSortie >= 0) argv.splice(iSortie, 2);
+const [verbe, a, b] = argv;
 if (verbe === "deployer") { if (!b) fail("usage : deployer <build> <cible>"); deployer(a, b); }
 else if (verbe === "restaurer") { if (!a) fail("usage : restaurer <cible>"); restaurer(a); }
 else if (verbe === "etat") { if (!a) fail("usage : etat <cible>"); etat(a); }
-else fail("verbe inconnu — deployer | restaurer | etat");
+else if (verbe === "plan") { if (!b) fail("usage : plan <cible> <build> [--sortie plan.json]"); plan(a, b, sortiePlan); }
+else fail("verbe inconnu — deployer | restaurer | etat | plan");

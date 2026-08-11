@@ -25,8 +25,46 @@ const TYPES = ["deploiement", "deploiement_refuse", "restauration"];
 const args = process.argv.slice(2);
 const cible = args.find(a => !a.startsWith("--"));
 const jsonOnly = args.includes("--json-only");
+const iPlan = args.indexOf("--plan");
+const planPath = iPlan >= 0 ? args[iPlan + 1] : null;
 const F = [];
 const add = (sev, regle, msg, where) => F.push({ sev, regle, msg, where });
+
+// ── O5 · mode plan : un plan cloud est complet et cohérent (TF-0081) ────────
+// Vérifie un fichier produit par `ops.mjs plan` : 4 phases non vides, rollback réel,
+// commandes cohérentes avec la CLI de la cible, aucun credential en clair.
+if (planPath) {
+  const DOM5 = "Exploitation : plan de déploiement cloud complet (O-5)";
+  const NJ5 = [
+    "exécution réelle du plan (run MEP, environnement authentifié fourni par l'humain, GO humain)",
+    "validité des valeurs substituées aux placeholders <...> au moment du run",
+    "coûts réels de la cible — ordres de grandeur documentés par la fiche expert",
+  ];
+  const fin5 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM5, artefact: planPath, verdict, findings: F.length ? F : [{ sev: "info", regle: "O5", msg: "plan complet — 4 phases, rollback présent, CLI cohérente", where: planPath }], non_juge: NJ5 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fs.existsSync(planPath)) { add("info", "O5", "plan introuvable", String(planPath)); fin5("SKIP", 2); }
+  let p = null;
+  try { p = JSON.parse(fs.readFileSync(planPath, "utf8")); } catch { add("bloquant", "O5", "JSON invalide", planPath); fin5("FAIL", 1); }
+  const CLI = { railway: "railway", gcp: "gcloud", azure: "az ", aws: "aws " };
+  if (p.format !== "forge-ops/plan@1") add("bloquant", "O5", `format inconnu « ${p.format} » (attendu forge-ops/plan@1)`, planPath);
+  if (!CLI[p.cible]) add("bloquant", "O5", `cible inconnue « ${p.cible} »`, planPath);
+  for (const ph of ["provision", "deploiement", "healthcheck", "rollback"]) {
+    const l = p.phases?.[ph];
+    if (!Array.isArray(l) || l.length === 0)
+      add("bloquant", "O5", `phase « ${ph} » absente ou vide — un plan sans ${ph === "rollback" ? "retour arrière n'est pas un plan MEP" : "cette phase est incomplet"}`, planPath);
+  }
+  if (CLI[p.cible] && Array.isArray(p.phases?.deploiement) && !p.phases.deploiement.some(c => String(c).includes(CLI[p.cible])))
+    add("bloquant", "O5", `aucune commande de déploiement n'utilise la CLI attendue « ${CLI[p.cible].trim()} » pour la cible ${p.cible}`, planPath);
+  if (Array.isArray(p.phases?.healthcheck) && !p.phases.healthcheck.some(c => /sante|health/i.test(String(c))))
+    add("majeur", "O5", "la phase healthcheck ne référence aucun contrôle de santé (/sante attendu)", planPath);
+  const brut = JSON.stringify(p);
+  if (/AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|sk-[a-zA-Z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY/.test(brut))
+    add("bloquant", "O5", "motif de credential détecté dans le plan — un plan ne transporte jamais de secret", planPath);
+  const durs5 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin5(durs5.length ? "FAIL" : "PASS", durs5.length ? 1 : 0);
+}
 
 function sortir(verdict, code) {
   process.stdout.write(JSON.stringify({

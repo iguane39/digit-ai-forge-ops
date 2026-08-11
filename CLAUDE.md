@@ -27,6 +27,25 @@ pilot — elle ne la remplace pas.
 **Règle dure : jamais de bascule sur release malade.** Un healthcheck en échec laisse
 `COURANT` intact et journalise `deploiement_refuse` (exit 1).
 
+## Plans cloud (v1 — TF-0081, plan-first)
+
+| Verbe | Commande | Effet |
+|---|---|---|
+| **plan** | `node scripts/ops.mjs plan <cible> <build> [--sortie plan.json]` | génère le plan d'exécution **déterministe** d'une cible cloud — 4 phases ordonnées (provision, déploiement, healthcheck, **rollback**) — sans rien exécuter |
+
+Cibles : `railway` · `gcp` (Cloud Run) · `azure` (Container Apps) · `aws` (App Runner) —
+chacune adossée à sa **fiche expert admise** (`experts-forge/fiches/expert-ops-<cible>.md`,
+verdict MATERIEL). L'oracle **O-5** juge un plan (`oracle-ops.mjs --plan plan.json`) :
+4 phases non vides, rollback réel, CLI cohérente avec la cible, zéro credential.
+
+**Frontière credentials (non négociable).** Aucun credential ne transite par la forge,
+jamais : les plans portent des **placeholders** (`<PROJET>`, `<REGION>`…) résolus par
+l'environnement du run. Les self-tests restent hors-ligne, déterministes, à coût nul.
+**L'exécution réelle d'un plan est un acte de run MEP** : environnement authentifié fourni
+par l'humain, GO humain, verdicts O-1…O-5 + M-1…M-5 au dossier. La première exécution
+réelle par cible est consignée dans `fiches\forge-ops.md` du pilot — c'est elle qui
+transforme le plan prouvé en geste prouvé.
+
 ## Contrat de la cible d'exploitation
 
 ```

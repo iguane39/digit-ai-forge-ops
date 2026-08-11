@@ -20,6 +20,10 @@ node scripts/ops.mjs etat <cible>
 # Verdict d'exploitation O1-O4 (consommé par l'étape MEP du pilot)
 node oracles/oracle-ops.mjs <cible> [--json-only]
 
+# Plan cloud déterministe (railway | gcp | azure | aws) — génère, n'exécute jamais
+node scripts/ops.mjs plan <cible> <build> --sortie plan.json
+node oracles/oracle-ops.mjs --plan plan.json   # O-5 : 4 phases, rollback réel, zéro credential
+
 # Preuve par le geste : déploiement réel local + rollback + défauts types refusés
 node oracles/self-test.mjs
 ```

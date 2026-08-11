@@ -83,6 +83,30 @@ fs.cpSync(cible, c3, { recursive: true });
 fs.writeFileSync(path.join(c3, "COURANT"), "release-inexistante", "utf8");
 ok(verdict(c3) === "FAIL", "COURANT fantôme → oracle FAIL");
 
+// ── PLANS CLOUD (TF-0081) · vertes : un plan complet par cible, O-5 PASS ──
+console.log("");
+const verdictPlan = (fichier) => {
+  try { return JSON.parse(run(oracle, ["--plan", fichier, "--json-only"])).verdict; }
+  catch (e) { try { return JSON.parse(String(e.stdout)).verdict; } catch { return "ILLISIBLE"; } }
+};
+for (const cible of ["railway", "gcp", "azure", "aws"]) {
+  const pf = path.join(base, `plan-${cible}.json`);
+  run(ops, ["plan", cible, fx("app-verte"), "--sortie", pf]);
+  const p = JSON.parse(fs.readFileSync(pf, "utf8"));
+  ok(p.format === "forge-ops/plan@1" && ["provision", "deploiement", "healthcheck", "rollback"].every(k => p.phases[k]?.length),
+    `plan ${cible} : 4 phases générées (déterministe, zéro exécution)`);
+  ok(verdictPlan(pf) === "PASS", `oracle O-5 PASS sur le plan ${cible}`);
+}
+// rouge : cible inconnue refusée
+ok(mustFail(ops, ["plan", "heroku", fx("app-verte")], "cible inconnue"), "plan heroku → refus explicite");
+// rouge : plan amputé du rollback → FAIL O-5 localisant
+const pAmpute = path.join(base, "plan-ampute.json");
+run(ops, ["plan", "gcp", fx("app-verte"), "--sortie", pAmpute]);
+const doc = JSON.parse(fs.readFileSync(pAmpute, "utf8"));
+doc.phases.rollback = [];
+fs.writeFileSync(pAmpute, JSON.stringify(doc), "utf8");
+ok(verdictPlan(pAmpute) === "FAIL", "plan sans rollback → O-5 FAIL");
+
 fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);
