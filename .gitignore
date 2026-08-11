@@ -1,2 +1,10 @@
 .oracles/
 *.bak
+
+# journaux du hook qualité (TF-0065) : sidecars d'oracles hors dépôt — les preuves
+# VOULUES vivent versionnées sous forge/ (décision C4)
+*.oracles.json
+*.oracles-cache.json
+*.oracles-historique.jsonl
+!forge/**/*.oracles.json
+!forge/**/*.oracles-historique.jsonl
