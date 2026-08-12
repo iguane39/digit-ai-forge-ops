@@ -1,0 +1,6 @@
+{
+  "_commentaire": "Seuils canary volontairement stricts (fixture de test) — prouve que le critère de promotion vient bien du fichier de config et non d'une valeur programmée en dur.",
+  "paliers_pct": [1, 5, 25, 50, 100],
+  "seuil_erreur_pct": 0.2,
+  "seuil_latence_ms": 100
+}

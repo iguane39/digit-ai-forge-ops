@@ -1,0 +1,6 @@
+{
+  "_commentaire": "Exemple de seuils SLO post-bascule (TF-0107) — fixés par l'humain, jamais une valeur devinée par l'oracle. Alimente le verdict « rollback recommandé » (recommandation seule, jamais d'exécution automatique).",
+  "latence_p95_max_ms": 400,
+  "erreur_max_pct": 2,
+  "fenetre_min_echantillons": 3
+}

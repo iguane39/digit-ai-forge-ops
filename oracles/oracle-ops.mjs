@@ -7,11 +7,17 @@
 //   O4  rollback prouvable : s'il existe une release antérieure à la courante, elle est
 //       toujours présente (capacité de restauration réelle) ET le dernier événement du
 //       journal désigne la release courante (cohérence pointeur ↔ histoire).
+//   O5  --plan <fichier>       : plan cloud complet (TF-0081, cf. plus bas).
+//   O6  --drift <fichier> <cible> : état déclaré (`ops.mjs etat --sortie`) vs constaté
+//       maintenant — troncature/réécriture du journal, déploiement furtif (TF-0107).
+//   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
+//       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
 // Usage : node oracle-ops.mjs <cible> [--json-only]
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const DOM = "Exploitation : cible déployée saine et restaurable";
 const NON_JUGE = [
@@ -20,7 +26,7 @@ const NON_JUGE = [
   "supervision continue / alerting (hors périmètre v0)",
   "secrets et configuration d'environnement — jamais transportés par la forge",
 ];
-const TYPES = ["deploiement", "deploiement_refuse", "restauration"];
+const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation"];
 
 const args = process.argv.slice(2);
 const cible = args.find(a => !a.startsWith("--"));
@@ -64,6 +70,105 @@ if (planPath) {
     add("bloquant", "O5", "motif de credential détecté dans le plan — un plan ne transporte jamais de secret", planPath);
   const durs5 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin5(durs5.length ? "FAIL" : "PASS", durs5.length ? 1 : 0);
+}
+
+// ── O6 · dérive état déclaré ↔ état constaté (TF-0107) ──────────────────────────────
+// Compare un instantané DÉCLARÉ (produit par `ops.mjs etat <cible> --sortie fichier.json`,
+// hash du journal inclus) à l'état RÉEL de la cible maintenant. Comble un angle mort d'O1-O4
+// (self-cohérence interne du journal courant, jamais vérifiée contre un témoin extérieur) :
+//   - journal tronqué/purgé après la déclaration (moins d'événements que déclaré) ;
+//   - historique réécrit en conservant seq/types valides (hash du segment déclaré altéré) ;
+//   - déploiement furtif : release présente sur disque, absente de tout événement journal.
+// La correction de la dérive n'est jamais automatique — c'est un constat, pas un geste.
+const iDrift = args.indexOf("--drift");
+const driftPath = iDrift >= 0 ? args[iDrift + 1] : null;
+if (driftPath) {
+  const DOM6 = "Exploitation : dérive entre état déclaré et état constaté (O-6)";
+  const NJ6 = [
+    "cause du changement manuel (accès disque direct, script tiers...) — hors périmètre",
+    "état déclaré issu d'un plan cloud jamais exécuté réellement — O-6 juge une cible réelle",
+    "correction de la dérive — un constat, jamais un geste automatique",
+  ];
+  const fin6 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM6, artefact: cible || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O6", msg: "aucune dérive : état constaté conforme à l'état déclaré", where: cible }], non_juge: NJ6 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!cible || !fs.existsSync(cible)) { add("info", "O6", "cible introuvable", String(cible)); fin6("SKIP", 2); }
+  if (!fs.existsSync(driftPath)) { add("bloquant", "O6", "état déclaré introuvable", driftPath); fin6("FAIL", 1); }
+  let declare = null;
+  try { declare = JSON.parse(fs.readFileSync(driftPath, "utf8")); } catch { add("bloquant", "O6", "état déclaré illisible (JSON invalide)", driftPath); fin6("FAIL", 1); }
+
+  const jp6 = path.join(cible, "journal.jsonl");
+  const contenuNow = fs.existsSync(jp6) ? fs.readFileSync(jp6, "utf8") : "";
+  const lignesNow = contenuNow.split("\n").filter(Boolean);
+  const declEven = declare.evenements ?? 0;
+
+  if (lignesNow.length < declEven) {
+    add("bloquant", "O6", `journal régressé : ${lignesNow.length} événement(s) constaté(s) contre ${declEven} déclaré(s) — troncature ou purge`, "journal.jsonl");
+  } else if (declare.journal_sha256) {
+    const prefixe = declEven ? lignesNow.slice(0, declEven).join("\n") + "\n" : "";
+    if (createHash("sha256").update(prefixe).digest("hex") !== declare.journal_sha256)
+      add("bloquant", "O6", "historique du journal modifié après la déclaration (segment déclaré altéré)", "journal.jsonl");
+  }
+
+  const releasesDisque = fs.existsSync(path.join(cible, "releases")) ? fs.readdirSync(path.join(cible, "releases")) : [];
+  const releasesJournalisees = new Set(lignesNow.map(l => { try { return JSON.parse(l).release; } catch { return null; } }).filter(Boolean));
+  for (const r of releasesDisque)
+    if (!releasesJournalisees.has(r))
+      add("majeur", "O6", `release « ${r} » présente sur disque mais absente de tout le journal — déploiement furtif (hors ops.mjs)`, "releases/" + r);
+
+  const durs6 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin6(durs6.length ? "FAIL" : "PASS", durs6.length ? 1 : 0);
+}
+
+// ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
+// RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a
+// figés dans un fichier de config (latence, taux d'erreur, fenêtre minimale) — aucun défaut
+// implicite (fichier de seuils obligatoire), jamais d'exécution. Doctrine « ops outille, ne
+// décide jamais » : la bascule arrière reste un geste humain via `ops.mjs restaurer`.
+const iVR = args.indexOf("--verdict-rollback");
+const mesuresPath = iVR >= 0 ? args[iVR + 1] : null;
+const iSeuilsSlo = args.indexOf("--seuils");
+const seuilsSloPath = iSeuilsSlo >= 0 ? args[iSeuilsSlo + 1] : null;
+if (mesuresPath) {
+  const DOMR = "Exploitation : recommandation de rollback post-bascule (seuils SLO humains)";
+  const NJR = [
+    "exécution du rollback — geste humain via `ops.mjs restaurer`, jamais automatique",
+    "le choix des seuils — responsabilité humaine ; l'oracle ne fixe ni ne devine de défaut",
+    "cause racine de la dégradation observée",
+  ];
+  const finR = (verdict, code, extra = {}) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOMR, artefact: mesuresPath, verdict, ...extra, findings: F.length ? F : [{ sev: "info", regle: "R", msg: "mesures sous les seuils — aucune dérive", where: mesuresPath }], non_juge: NJR }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!seuilsSloPath || !fs.existsSync(seuilsSloPath)) { add("bloquant", "R", "fichier de seuils SLO introuvable — seuils obligatoirement humains, aucun défaut implicite", String(seuilsSloPath)); finR("donnees_insuffisantes", 2); }
+  if (!fs.existsSync(mesuresPath)) { add("bloquant", "R", "fichier de mesures introuvable", mesuresPath); finR("donnees_insuffisantes", 2); }
+  let mesures = null, seuilsSlo = null;
+  try { mesures = JSON.parse(fs.readFileSync(mesuresPath, "utf8")); } catch { add("bloquant", "R", "mesures illisibles (JSON invalide)", mesuresPath); finR("donnees_insuffisantes", 2); }
+  try { seuilsSlo = JSON.parse(fs.readFileSync(seuilsSloPath, "utf8")); } catch { add("bloquant", "R", "seuils illisibles (JSON invalide)", seuilsSloPath); finR("donnees_insuffisantes", 2); }
+  if (!Array.isArray(mesures) || !mesures.length) { add("bloquant", "R", "mesures vides", mesuresPath); finR("donnees_insuffisantes", 2); }
+  const requis = typeof seuilsSlo.fenetre_min_echantillons === "number" ? seuilsSlo.fenetre_min_echantillons : 1;
+  if (mesures.length < requis) { add("info", "R", `fenêtre insuffisante : ${mesures.length}/${requis} échantillon(s) — verdict non rendu`, mesuresPath); finR("donnees_insuffisantes", 2); }
+
+  const latences = mesures.map(m => m.latence_ms).filter(v => typeof v === "number").sort((a, b) => a - b);
+  const erreurs = mesures.map(m => m.erreur_pct).filter(v => typeof v === "number");
+  if (latences.length !== mesures.length || erreurs.length !== mesures.length)
+    { add("bloquant", "R", "mesure incomplète (latence_ms/erreur_pct numériques attendus sur chaque échantillon)", mesuresPath); finR("donnees_insuffisantes", 2); }
+  const p95 = latences[Math.min(latences.length - 1, Math.ceil(0.95 * latences.length) - 1)];
+  const erreurMax = Math.max(...erreurs);
+
+  if (typeof seuilsSlo.latence_p95_max_ms === "number" && p95 > seuilsSlo.latence_p95_max_ms)
+    add("bloquant", "R", `latence p95 ${p95}ms > seuil humain ${seuilsSlo.latence_p95_max_ms}ms`, mesuresPath);
+  if (typeof seuilsSlo.erreur_max_pct === "number" && erreurMax > seuilsSlo.erreur_max_pct)
+    add("bloquant", "R", `taux d'erreur ${erreurMax}% > seuil humain ${seuilsSlo.erreur_max_pct}%`, mesuresPath);
+
+  const dursR = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  const verdictR = dursR.length ? "rollback_recommande" : "stable";
+  finR(verdictR, dursR.length ? 1 : 0, {
+    mesures_observees: { p95_latence_ms: p95, erreur_max_pct: erreurMax, echantillons: mesures.length },
+    seuils_appliques: seuilsSlo,
+    recommandation: dursR.length ? "geste humain suggéré : `node scripts/ops.mjs restaurer <cible>` après revue" : "aucune action requise",
+  });
 }
 
 function sortir(verdict, code) {
@@ -118,7 +223,7 @@ else {
 // événement actif du journal existe encore sur disque (on peut toujours y revenir).
 // Être positionné sur la plus ancienne release après une restauration est un état sain.
 if (courant && fs.existsSync(releaseDir)) {
-  const actifs = entrees.filter(e => e.type === "deploiement" || e.type === "restauration");
+  const actifs = entrees.filter(e => e.type === "deploiement" || e.type === "restauration" || e.type === "canary_promotion");
   for (const e of actifs) {
     if (e.release && !fs.existsSync(path.join(cible, "releases", e.release)))
       add("majeur", "O4", `release ${e.release} citée au journal (seq ${e.seq}) mais purgée du disque — rollback impossible vers cet état`, "releases/");

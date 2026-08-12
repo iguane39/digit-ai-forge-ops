@@ -6,15 +6,17 @@
 // Usage :
 //   node ops.mjs deployer <dossier-build> <cible>
 //   node ops.mjs restaurer <cible>
-//   node ops.mjs etat <cible>
+//   node ops.mjs etat <cible> [--sortie fichier.json]
+//   node ops.mjs canary <dossier-build> <cible> [--seuils fichier.json]
 //
 // Contrat de la cible : releases/<ts>/ + COURANT (pointeur texte) + journal.jsonl
 // (append-only, contrat ledger forge-agents : seq strictement croissant depuis 1).
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
-const TYPES = ["deploiement", "deploiement_refuse", "restauration"];
+const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation"];
 
 function fail(msg) { console.error(`[OPS REFUS] ${msg}`); process.exit(1); }
 
@@ -96,13 +98,96 @@ function restaurer(cible) {
   console.log(`[OPS OK] restauré : ${precedente} (depuis ${courant})`);
 }
 
-function etat(cible) {
+function etat(cible, sortie) {
   const courant = lireCourant(cible);
   const releases = releasesTriees(cible);
   const jp = path.join(cible, "journal.jsonl");
-  const lignes = fs.existsSync(jp) ? fs.readFileSync(jp, "utf8").split("\n").filter(Boolean) : [];
+  const contenu = fs.existsSync(jp) ? fs.readFileSync(jp, "utf8") : "";
+  const lignes = contenu.split("\n").filter(Boolean);
   const dernier = lignes.length ? JSON.parse(lignes[lignes.length - 1]) : null;
-  console.log(JSON.stringify({ courant, releases, evenements: lignes.length, dernier }, null, 2));
+  const doc = { courant, releases, evenements: lignes.length, dernier };
+  if (sortie) {
+    // état déclaré (référence pour l'oracle O-6 « dérive ») : le hash du journal fige le
+    // segment qu'on pourra vérifier non réécrit, indépendamment du journal courant.
+    const journal_sha256 = createHash("sha256").update(contenu).digest("hex");
+    fs.writeFileSync(sortie, JSON.stringify({ ...doc, journal_sha256 }, null, 2) + "\n", "utf8");
+    console.log(`[OPS OK] état déclaré écrit (référence O-6) : ${sortie}`);
+  } else {
+    console.log(JSON.stringify(doc, null, 2));
+  }
+}
+
+// ─────────────────────── CANARY LOCAL SIMULÉ (TF-0107 · 1) ───────────────────────────
+// Bascule progressive SIMULÉE entre COURANT et un candidat : paliers de trafic croissants,
+// chaque palier mesuré (contrat metriques.mjs de la release candidate) et confronté à un
+// critère de promotion EXPLICITE venu d'un fichier de config — jamais un seuil implicite.
+// Un seul palier rejeté ⇒ abandon, COURANT intact (même garde-fou que deployer : jamais de
+// bascule sur release dégradée). Sans cible k8s : prépare la marche vers Argo Rollouts/Flagger.
+const CANARY_DEFAUT = { paliers_pct: [1, 5, 25, 50, 100], seuil_erreur_pct: 5, seuil_latence_ms: 500 };
+
+function lireSeuilsCanary(fichier) {
+  if (!fichier) return CANARY_DEFAUT;
+  if (!fs.existsSync(fichier)) fail(`fichier de seuils canary introuvable : ${fichier}`);
+  let cfg;
+  try { cfg = JSON.parse(fs.readFileSync(fichier, "utf8")); }
+  catch { fail(`fichier de seuils canary illisible (JSON invalide) : ${fichier}`); }
+  const paliers = Array.isArray(cfg.paliers_pct) && cfg.paliers_pct.length ? cfg.paliers_pct : CANARY_DEFAUT.paliers_pct;
+  if (paliers[paliers.length - 1] !== 100) fail("le dernier palier du canary doit être 100 (promotion complète)");
+  return {
+    paliers_pct: paliers,
+    seuil_erreur_pct: typeof cfg.seuil_erreur_pct === "number" ? cfg.seuil_erreur_pct : CANARY_DEFAUT.seuil_erreur_pct,
+    seuil_latence_ms: typeof cfg.seuil_latence_ms === "number" ? cfg.seuil_latence_ms : CANARY_DEFAUT.seuil_latence_ms,
+  };
+}
+
+function mesurerPalier(releaseDir, palier) {
+  const script = path.join(releaseDir, "metriques.mjs");
+  const r = spawnSync(process.execPath, [script, String(palier)], { cwd: releaseDir, encoding: "utf8", timeout: 30000 });
+  if (r.status !== 0)
+    return { ok: false, raison: `métriques en échec (exit ${r.status})${r.stderr ? " — " + r.stderr.trim().slice(0, 120) : ""}` };
+  let mesure;
+  try { mesure = JSON.parse((r.stdout || "").trim()); }
+  catch { return { ok: false, raison: "sortie de metriques.mjs illisible (JSON attendu)" }; }
+  if (typeof mesure.erreur_pct !== "number" || typeof mesure.latence_ms !== "number")
+    return { ok: false, raison: "mesure incomplète (erreur_pct/latence_ms numériques attendus)" };
+  return { ok: true, mesure };
+}
+
+function canary(build, cible, fichierSeuils) {
+  if (!build || !fs.existsSync(build)) fail(`build introuvable : ${build}`);
+  const seuils = lireSeuilsCanary(fichierSeuils);
+  fs.mkdirSync(path.join(cible, "releases"), { recursive: true });
+  const nom = new Date().toISOString().replace(/[-:]/g, "").replace(/\..+/, "");
+  let release = nom, i = 0;
+  while (fs.existsSync(path.join(cible, "releases", release))) release = `${nom}-${++i}`;
+  const dest = path.join(cible, "releases", release);
+  fs.cpSync(build, dest, { recursive: true });
+
+  const annuler = (raison) => {
+    journalAppend(cible, "canary_annulation", { release, raison });
+    fs.rmSync(dest, { recursive: true, force: true }); // candidat non promu : jamais basculable
+    fail(`canary refusé — ${raison}`);
+  };
+
+  const santé = healthcheck(dest);
+  if (!santé.ok) annuler(`healthcheck en échec — ${santé.raison}`);
+  if (!fs.existsSync(path.join(dest, "metriques.mjs")))
+    annuler("candidat sans contrat de métriques (metriques.mjs absent) — canary impossible, utiliser deployer");
+
+  for (const palier of seuils.paliers_pct) {
+    const m = mesurerPalier(dest, palier);
+    if (!m.ok) annuler(`palier ${palier}% : ${m.raison}`);
+    const { erreur_pct, latence_ms } = m.mesure;
+    const franchi = erreur_pct <= seuils.seuil_erreur_pct && latence_ms <= seuils.seuil_latence_ms;
+    journalAppend(cible, "canary_etape", { release, palier_pct: palier, mesure: { erreur_pct, latence_ms }, seuils, verdict: franchi ? "franchi" : "rejete" });
+    console.log(`  [CANARY ${franchi ? "OK" : "STOP"}] palier ${palier}% — erreur ${erreur_pct}% (seuil ${seuils.seuil_erreur_pct}%), latence ${latence_ms}ms (seuil ${seuils.seuil_latence_ms}ms)`);
+    if (!franchi) annuler(`critère de promotion non atteint au palier ${palier}% (erreur ${erreur_pct}%/latence ${latence_ms}ms)`);
+  }
+
+  const precedent = lireCourant(cible);
+  ecrireCourant(cible, release);
+  journalAppend(cible, "canary_promotion", { release, precedent, paliers_pct: seuils.paliers_pct });
+  console.log(`[OPS OK] canary promu : ${release}${precedent ? ` (précédent : ${precedent})` : ""}`);
 }
 
 // ───────────────────────────── PLANS CLOUD (v1, TF-0081) ─────────────────────────────
@@ -229,11 +314,15 @@ function plan(cible, build, sortie) {
 
 const argv = process.argv.slice(2);
 const iSortie = argv.indexOf("--sortie");
-const sortiePlan = iSortie >= 0 ? argv[iSortie + 1] : null;
+const sortieOpt = iSortie >= 0 ? argv[iSortie + 1] : null;
 if (iSortie >= 0) argv.splice(iSortie, 2);
+const iSeuils = argv.indexOf("--seuils");
+const fichierSeuils = iSeuils >= 0 ? argv[iSeuils + 1] : null;
+if (iSeuils >= 0) argv.splice(iSeuils, 2);
 const [verbe, a, b] = argv;
 if (verbe === "deployer") { if (!b) fail("usage : deployer <build> <cible>"); deployer(a, b); }
 else if (verbe === "restaurer") { if (!a) fail("usage : restaurer <cible>"); restaurer(a); }
-else if (verbe === "etat") { if (!a) fail("usage : etat <cible>"); etat(a); }
-else if (verbe === "plan") { if (!b) fail("usage : plan <cible> <build> [--sortie plan.json]"); plan(a, b, sortiePlan); }
-else fail("verbe inconnu — deployer | restaurer | etat | plan");
+else if (verbe === "etat") { if (!a) fail("usage : etat <cible> [--sortie fichier.json]"); etat(a, sortieOpt); }
+else if (verbe === "plan") { if (!b) fail("usage : plan <cible> <build> [--sortie plan.json]"); plan(a, b, sortieOpt); }
+else if (verbe === "canary") { if (!b) fail("usage : canary <build> <cible> [--seuils fichier.json]"); canary(a, b, fichierSeuils); }
+else fail("verbe inconnu — deployer | restaurer | etat | plan | canary");

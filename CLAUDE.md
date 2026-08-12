@@ -22,10 +22,21 @@ pilot — elle ne la remplace pas.
 |---|---|---|
 | **déployer** | `node scripts/ops.mjs deployer <build> <cible>` | copie le build en release datée, exécute le healthcheck **avant** toute bascule, repointe `COURANT`, journalise |
 | **restaurer** | `node scripts/ops.mjs restaurer <cible>` | re-healthcheck de la release précédente puis bascule arrière, journalisée — le rollback n'est pas un écrit, c'est un geste prouvé |
-| **exploiter** | `node scripts/ops.mjs etat <cible>` + `journal.jsonl` | état machine-lisible et journal append-only au contrat ledger (seq croissant depuis 1) |
+| **exploiter** | `node scripts/ops.mjs etat <cible> [--sortie fichier.json]` + `journal.jsonl` | état machine-lisible (option : instantané déclaré pour O-6) et journal append-only au contrat ledger (seq croissant depuis 1) |
 
 **Règle dure : jamais de bascule sur release malade.** Un healthcheck en échec laisse
 `COURANT` intact et journalise `deploiement_refuse` (exit 1).
+
+## Canary local simulé (v0 — TF-0107)
+
+| Verbe | Commande | Effet |
+|---|---|---|
+| **canary** | `node scripts/ops.mjs canary <build> <cible> [--seuils fichier.json]` | bascule progressive **simulée** (paliers de trafic croissants, défaut `1→5→25→50→100`) entre `COURANT` et un candidat ; chaque palier mesuré (`metriques.mjs` de la release) contre un **critère de promotion explicite** venu du fichier de config — un palier rejeté ⇒ abandon (`canary_annulation`), `COURANT` intact |
+
+Sans cible k8s : prépare la marche vers Argo Rollouts/Flagger. Candidat sans `metriques.mjs`
+→ canary refusé (utiliser `deployer`) — l'oubli n'existe pas. Événements journal :
+`canary_etape` (par palier) et `canary_promotion` (bascule finale, traité comme `deploiement`
+par O4).
 
 ## Plans cloud (v1 — TF-0081, plan-first)
 
@@ -68,16 +79,32 @@ findings,non_juge}`, exit 0/1/2 :
 - **O3** journal intègre (seq strictement croissant depuis 1, types connus) ;
 - **O4** rollback prouvable : la release précédente existe encore et le journal est
   cohérent avec `COURANT`.
+- **O5** `--plan <fichier>` : plan cloud complet (4 phases, rollback réel, zéro credential).
+- **O6** `--drift <fichier> <cible>` (TF-0107) : état déclaré (`etat --sortie`) vs constaté
+  maintenant — comble un angle mort d'O1-O4 (self-cohérence interne seulement, jamais
+  vérifiée contre un témoin extérieur) : journal tronqué/réécrit après coup, déploiement
+  furtif (release sur disque, absente du journal). Toujours un constat, jamais un geste.
 
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge).
+
+## Verdict « rollback recommandé » (v0 — TF-0107, recommandation seule)
+
+`node oracles/oracle-ops.mjs --verdict-rollback <mesures.json> --seuils <fichier.json>` —
+compare des mesures post-bascule (latence, taux d'erreur) à des **seuils SLO fixés par
+l'humain** (fichier de config **obligatoire**, aucun défaut implicite). Verdict
+`stable` (exit 0) · `rollback_recommande` (exit 1) · `donnees_insuffisantes` (exit 2, fenêtre
+sous le minimum ou seuils absents). **Doctrine intacte : ops outille, ne décide jamais** —
+la recommandation ne déclenche rien ; le rollback reste un geste humain via
+`ops.mjs restaurer`.
 
 ## Preuve par le geste
 
 `node oracles/self-test.mjs` rejoue un **déploiement réel local** : app témoin déployée,
 mise à jour, restaurée — chaque état validé par l'oracle (fixture verte), et chaque défaut
 type prouvé refusé (fixtures rouges : healthcheck en échec, journal corrompu, pointeur
-fantôme, restauration sans précédent). À rejouer après toute modification.
+fantôme, restauration sans précédent, canary dégradé, dérive O-6, mesures hors seuils SLO).
+À rejouer après toute modification.
 
 ## Langue
 

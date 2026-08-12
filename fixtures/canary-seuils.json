@@ -1,0 +1,6 @@
+{
+  "_commentaire": "Exemple de fichier de seuils canary (TF-0107) — critère de promotion explicite fixé par l'humain, jamais un défaut implicite silencieux.",
+  "paliers_pct": [1, 5, 25, 50, 100],
+  "seuil_erreur_pct": 5,
+  "seuil_latence_ms": 500
+}
