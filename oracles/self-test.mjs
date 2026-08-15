@@ -83,6 +83,24 @@ fs.cpSync(cible, c3, { recursive: true });
 fs.writeFileSync(path.join(c3, "COURANT"), "release-inexistante", "utf8");
 ok(verdict(c3) === "FAIL", "COURANT fantôme → oracle FAIL");
 
+// ── VERTE · CHEMINS RELATIFS (TF-0245) ─────────────────────────────────────
+// Le healthcheck s'exécute avec cwd=releaseDir : un chemin resté relatif serait résolu
+// par node contre ce nouveau cwd — refus à tort journalisé deploiement_refuse (et, dès
+// node 25/Windows, cpSync échoue avant même le healthcheck). ops.mjs doit résoudre ses
+// chemins À L'ENTRÉE : le même déploiement, lancé en relatif depuis un cwd quelconque,
+// aboutit exactement comme en absolu.
+const buildRel = path.join(base, "build-relatif");
+fs.cpSync(fx("app-verte"), buildRel, { recursive: true });
+let relOk = true, relErr = "";
+try {
+  execFileSync(process.execPath, [ops, "deployer", "build-relatif", "cible-relative"],
+    { cwd: base, encoding: "utf8", stdio: "pipe" });
+} catch (e) { relOk = false; relErr = String(e.stderr || e.message).slice(0, 100); }
+ok(relOk, `déploiement en chemins relatifs (cwd=${path.basename(base)}) : accepté${relOk ? "" : " — " + relErr}`);
+const cibleRel = path.join(base, "cible-relative");
+ok(relOk && !!courant(cibleRel), "chemins relatifs : COURANT pointé sur la release déployée");
+ok(relOk && verdict(cibleRel) === "PASS", "oracle O1-O4 PASS sur la cible déployée en relatif");
+
 // ── PLANS CLOUD (TF-0081) · vertes : un plan complet par cible, O-5 PASS ──
 console.log("");
 const verdictPlan = (fichier) => {

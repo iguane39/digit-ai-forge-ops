@@ -320,9 +320,17 @@ const iSeuils = argv.indexOf("--seuils");
 const fichierSeuils = iSeuils >= 0 ? argv[iSeuils + 1] : null;
 if (iSeuils >= 0) argv.splice(iSeuils, 2);
 const [verbe, a, b] = argv;
-if (verbe === "deployer") { if (!b) fail("usage : deployer <build> <cible>"); deployer(a, b); }
-else if (verbe === "restaurer") { if (!a) fail("usage : restaurer <cible>"); restaurer(a); }
-else if (verbe === "etat") { if (!a) fail("usage : etat <cible> [--sortie fichier.json]"); etat(a, sortieOpt); }
-else if (verbe === "plan") { if (!b) fail("usage : plan <cible> <build> [--sortie plan.json]"); plan(a, b, sortieOpt); }
-else if (verbe === "canary") { if (!b) fail("usage : canary <build> <cible> [--seuils fichier.json]"); canary(a, b, fichierSeuils); }
+// TF-0245 : tout chemin reçu est résolu en absolu ICI, une seule fois — jamais de
+// rustine en aval. healthcheck et mesurerPalier s'exécutent avec cwd=releaseDir : un
+// chemin resté relatif serait résolu par node contre ce NOUVEAU cwd (module introuvable,
+// refus à tort journalisé deploiement_refuse). Constaté aussi en amont : fs.cpSync
+// échoue en relatif (EIO, node 25 / Windows). Exception : la cible de `plan` est un nom
+// de plateforme (railway, gcp…), pas un chemin, et son build reste textuel — le plan
+// s'exécute dans un autre environnement.
+const abs = p => (p ? path.resolve(p) : p);
+if (verbe === "deployer") { if (!b) fail("usage : deployer <build> <cible>"); deployer(abs(a), abs(b)); }
+else if (verbe === "restaurer") { if (!a) fail("usage : restaurer <cible>"); restaurer(abs(a)); }
+else if (verbe === "etat") { if (!a) fail("usage : etat <cible> [--sortie fichier.json]"); etat(abs(a), abs(sortieOpt)); }
+else if (verbe === "plan") { if (!b) fail("usage : plan <cible> <build> [--sortie plan.json]"); plan(a, b, abs(sortieOpt)); }
+else if (verbe === "canary") { if (!b) fail("usage : canary <build> <cible> [--seuils fichier.json]"); canary(abs(a), abs(b), abs(fichierSeuils)); }
 else fail("verbe inconnu — deployer | restaurer | etat | plan | canary");
