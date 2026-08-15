@@ -29,7 +29,15 @@ const NON_JUGE = [
 const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation"];
 
 const args = process.argv.slice(2);
-const cible = args.find(a => !a.startsWith("--"));
+// TF-0281 (propagation de TF-0245) : la cible est résolue en absolu ICI, une seule fois.
+// O2 exécute sante.mjs avec cwd=releaseDir : une cible restée relative rend le chemin du
+// script relatif lui aussi, résolu par node contre ce NOUVEAU cwd — chemin doublé,
+// « Cannot find module », exit 1 rapporté comme « healthcheck en échec » : un faux échec
+// sur une release saine. Les autres chemins d'argument (--plan, --drift, --seuils,
+// --verdict-rollback) ne sont lus que par fs depuis le cwd du process, jamais sous un cwd
+// changé : ils restent tels quels, pas de rustine par usage.
+const cibleArg = args.find(a => !a.startsWith("--"));
+const cible = cibleArg ? path.resolve(cibleArg) : cibleArg;
 const jsonOnly = args.includes("--json-only");
 const iPlan = args.indexOf("--plan");
 const planPath = iPlan >= 0 ? args[iPlan + 1] : null;

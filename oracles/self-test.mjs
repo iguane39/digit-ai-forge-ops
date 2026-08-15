@@ -101,6 +101,22 @@ const cibleRel = path.join(base, "cible-relative");
 ok(relOk && !!courant(cibleRel), "chemins relatifs : COURANT pointé sur la release déployée");
 ok(relOk && verdict(cibleRel) === "PASS", "oracle O1-O4 PASS sur la cible déployée en relatif");
 
+// ── ROUGE→VERTE · L'ORACLE LUI-MÊME EN CIBLE RELATIVE (TF-0281) ────────────
+// Même piège que TF-0245, resté à propager côté oracle : O2 lance sante.mjs avec
+// cwd=releaseDir. Cible relative → chemin du script relatif lui aussi → résolu par node
+// contre ce NOUVEAU cwd → chemin doublé, « Cannot find module », exit 1 rapporté comme
+// « healthcheck en échec » : un FAUX ÉCHEC sur une release parfaitement saine. La cible
+// est la MÊME qu'à la ligne précédente : seule la façon de la nommer change.
+const oracleDepuis = (cwd, c) => {
+  try { return JSON.parse(execFileSync(process.execPath, [oracle, c, "--json-only"], { cwd, encoding: "utf8", stdio: "pipe" })); }
+  catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } }
+};
+const relOracle = oracleDepuis(base, "cible-relative");
+ok(relOracle.verdict === "PASS",
+  `oracle appelé en cible RELATIVE sur release saine → PASS (obtenu ${relOracle.verdict})`);
+ok(!(relOracle.findings || []).some(f => f.regle === "O2"),
+  "aucun finding O2 en cible relative — le healthcheck n'échoue pas à tort");
+
 // ── PLANS CLOUD (TF-0081) · vertes : un plan complet par cible, O-5 PASS ──
 console.log("");
 const verdictPlan = (fichier) => {
