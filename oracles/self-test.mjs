@@ -152,6 +152,29 @@ for (const cible of ["railway", "gcp", "azure", "aws"]) {
       : `plan railway : pièges TF-0258 manquants : ${manquants.join(", ")}`);
   ok(verdictPlan(pf) === "PASS", "oracle O-5 toujours PASS sur le plan railway enrichi TF-0258");
 }
+// TF-0269 : les 3 constats du SECOND déploiement réel (run 20260815b-bdl) sont au plan —
+// nommage du service vs domaine généré `<service>-<environnement>`, renommage d'un domaine
+// existant par la seule mutation GraphQL, origine publique posée en variable. Fixture de
+// PRÉSENCE : sans elle, le plan resterait complet en forme (O-5 PASS) tout en taisant ce
+// qui a fait livrer une URL publique fausse.
+{
+  const pf = path.join(base, "plan-railway-tf0269.json");
+  run(ops, ["plan", "railway", fx("app-verte"), "--sortie", pf]);
+  const brut = JSON.stringify(JSON.parse(fs.readFileSync(pf, "utf8")).phases);
+  const constatsAttendus = [
+    ["domaine <service>-<environnement>", /<nom-service>-<nom-environnement>|nom-service.{0,3}-.{0,3}nom-environnement/],
+    ["nommage R-24 du service", /R-24/],
+    ["mutation serviceDomainUpdate", /serviceDomainUpdate/],
+    ["5 champs requis de la mutation", /targetPort/],
+    ["origine publique en variable", /URL_BASE/],
+  ];
+  const absents = constatsAttendus.filter(([, re]) => !re.test(brut)).map(([n]) => n);
+  ok(absents.length === 0,
+    absents.length === 0
+      ? "plan railway : les 3 constats TF-0269 sont présents (nommage service/environnement, renommage GraphQL, origine publique en variable)"
+      : `plan railway : constats TF-0269 absents : ${absents.join(", ")}`);
+  ok(verdictPlan(pf) === "PASS", "oracle O-5 toujours PASS sur le plan railway enrichi TF-0269");
+}
 // rouge : cible inconnue refusée
 ok(mustFail(ops, ["plan", "heroku", fx("app-verte")], "cible inconnue"), "plan heroku → refus explicite");
 // rouge : plan amputé du rollback → FAIL O-5 localisant

@@ -200,9 +200,17 @@ const PLANS = {
   railway: {
     service: "Railway service (conteneur)",
     fiche: "experts-forge/fiches/expert-ops-railway.md",
-    placeholders: ["<PROJET>", "<ENVIRONNEMENT>", "<URL_SERVICE>", "<ID_DEPLOIEMENT_PRECEDENT>"],
+    placeholders: ["<PROJET>", "<ENVIRONNEMENT>", "<URL_SERVICE>", "<ID_DEPLOIEMENT_PRECEDENT>", "<SERVICE>", "<PRODUIT>"],
     provision: [
       "railway link <PROJET> --environment <ENVIRONNEMENT>",
+      // TF-0269 (1/3) : le domaine genere est <nom-service>-<nom-environnement>.up.railway.app.
+      // Un service nomme pour son usage (<appli>-recette) dans l'environnement par defaut
+      // « production » donne <appli>-recette-production : doublon contradictoire, URL publique
+      // fausse livree. Le nom du SERVICE ne porte jamais l'environnement.
+      "nommer le service <SERVICE>=<appli> SANS suffixe d'environnement : le domaine genere concatene <nom-service>-<nom-environnement>.up.railway.app — l'environnement porte le suffixe R-24 (<appli>-{dev|qualif|production}), jamais le service ; a decider AVANT le premier deploiement (un domaine cree ne se renomme plus par le CLI)",
+      // TF-0269 (2/3) : rattrapage si le domaine existe deja — `railway domain` repond
+      // « Domains already exist » et n'offre aucun verbe de renommage.
+      "si le domaine existe deja et doit etre renomme : API GraphQL (https://backboard.railway.com/graphql/v2, jeton de projet), mutation serviceDomainUpdate — 5 champs TOUS requis (serviceDomainId, domain, environmentId, serviceId, targetPort) ; le CLI `railway domain` ne renomme pas (« Domains already exist »)",
       "verifier railway.json : deploy.healthcheckPath=\"/sante\" + healthcheckTimeout (bascule aveugle sinon)",
       "verifier la region UE du service (europe-west4) — le defaut n'est pas garanti UE",
       // TF-0258 (1/4) : CMD en forme EXEC (tableau JSON) n'invoque aucun shell — $PORT n'est
@@ -219,6 +227,10 @@ const PLANS = {
       // conteneur en IPv4 ; un bind IPv6-seul (`::`) ou loopback est injoignable sans erreur
       // applicative visible (healthcheck qui timeout, c'est tout).
       "verifier que le serveur applicatif bind 0.0.0.0 (ex. `uvicorn app:app --host 0.0.0.0 --port $PORT`) — jamais `::` seul ni `127.0.0.1` : edge et healthcheck parlent IPv4",
+      // TF-0269 (3/3) : sans origine publique declaree, l'appli retombe sur son hote interne
+      // et sert des URLs auto-referentes (canonical, og:url, sitemap, JSON-LD) pointant
+      // localhost — invisible au healthcheck (200) comme aux tests unitaires.
+      "poser l'origine publique en variable de service : railway variables --set <PRODUIT>_URL_BASE=https://<URL_SERVICE> — sans elle les URLs auto-referentes du produit (canonical, og:url, sitemap, JSON-LD) sortent sur l'hote interne localhost, invisible au healthcheck",
     ],
     healthcheck: [
       "railway status   # deploiement SUCCESS attendu",
