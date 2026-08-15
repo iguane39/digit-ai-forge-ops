@@ -205,9 +205,20 @@ const PLANS = {
       "railway link <PROJET> --environment <ENVIRONNEMENT>",
       "verifier railway.json : deploy.healthcheckPath=\"/sante\" + healthcheckTimeout (bascule aveugle sinon)",
       "verifier la region UE du service (europe-west4) — le defaut n'est pas garanti UE",
+      // TF-0258 (1/4) : CMD en forme EXEC (tableau JSON) n'invoque aucun shell — $PORT n'est
+      // jamais substitue, l'appli recoit la chaine litterale "$PORT" et crash-loop sans erreur
+      // explicite. Verifier au Dockerfile.
+      "verifier le Dockerfile : CMD en forme SHELL (`CMD sh -c \"... --port $PORT\"`) pour que $PORT soit substitue, JAMAIS une forme EXEC (tableau JSON) avec $PORT litteral — sinon crash-loop silencieux au demarrage",
+      // TF-0258 (3/4) : un volume Railway est monte root ; un conteneur non-root ne peut pas y
+      // ecrire (erreur a l'usage, pas au montage).
+      "si un volume est monte : verifier RAILWAY_RUN_UID=0 (conteneur root, aligne avec le volume) ou l'UID du conteneur explicitement aligne sur celui du volume (root, uid 0) — sinon ecriture refusee a l'usage",
     ],
     deploiement: [
       "railway up --ci   # build Dockerfile + deploiement ; trafic route seulement apres healthcheck vert",
+      // TF-0258 (2/4) : l'edge public et le prober de healthcheck de Railway joignent le
+      // conteneur en IPv4 ; un bind IPv6-seul (`::`) ou loopback est injoignable sans erreur
+      // applicative visible (healthcheck qui timeout, c'est tout).
+      "verifier que le serveur applicatif bind 0.0.0.0 (ex. `uvicorn app:app --host 0.0.0.0 --port $PORT`) — jamais `::` seul ni `127.0.0.1` : edge et healthcheck parlent IPv4",
     ],
     healthcheck: [
       "railway status   # deploiement SUCCESS attendu",
@@ -216,6 +227,9 @@ const PLANS = {
     rollback: [
       "dashboard Railway → deployment <ID_DEPLOIEMENT_PRECEDENT> → Rollback (piege : `railway redeploy` rejoue le COURANT, pas l'anterieur)",
       "curl -fsS <URL_SERVICE>/sante   # re-verification apres retour",
+      // TF-0258 (4/4) : pour un deploiement qui n'a jamais ete actif (crash-loop), `railway
+      // logs` ne remonte pas la cause de facon fiable — le canal fiable est l'API GraphQL.
+      "si le deploiement echoue sans cause visible (`railway logs` muet) : interroger l'API GraphQL Railway (https://backboard.railway.com/graphql/v2, jeton de projet) — `deploymentLogs` (build+runtime) et `httpLogs` (edge, champ `upstreamErrors`) — jamais le CLI seul pour diagnostiquer un deploiement mort",
     ],
   },
   gcp: {

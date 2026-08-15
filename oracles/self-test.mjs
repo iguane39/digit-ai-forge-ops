@@ -115,6 +115,27 @@ for (const cible of ["railway", "gcp", "azure", "aws"]) {
     `plan ${cible} : 4 phases générées (déterministe, zéro exécution)`);
   ok(verdictPlan(pf) === "PASS", `oracle O-5 PASS sur le plan ${cible}`);
 }
+// TF-0258 : les 4 pièges du premier déploiement réel Railway sont versés au plan et O-5
+// reste PASS dessus — un plan qui les tairait serait complet en forme (4 phases, rollback,
+// CLI) mais muet sur ce qui a fait échouer un déploiement réel.
+{
+  const pf = path.join(base, "plan-railway-tf0258.json");
+  run(ops, ["plan", "railway", fx("app-verte"), "--sortie", pf]);
+  const p = JSON.parse(fs.readFileSync(pf, "utf8"));
+  const brut = JSON.stringify(p.phases);
+  const piegesAttendus = [
+    ["forme SHELL", /forme SHELL/],                       // (1) $PORT littéral en forme EXEC
+    ["0.0.0.0", /0\.0\.0\.0/],                             // (2) edge/healthcheck IPv4
+    ["RAILWAY_RUN_UID", /RAILWAY_RUN_UID/],                // (3) volume monté root
+    ["API GraphQL", /GraphQL/],                            // (4) logs runtime en échec
+  ];
+  const manquants = piegesAttendus.filter(([, re]) => !re.test(brut)).map(([n]) => n);
+  ok(manquants.length === 0,
+    manquants.length === 0
+      ? "plan railway : les 4 pièges TF-0258 sont présents (startCommand, bind IPv4, volume UID, logs GraphQL)"
+      : `plan railway : pièges TF-0258 manquants : ${manquants.join(", ")}`);
+  ok(verdictPlan(pf) === "PASS", "oracle O-5 toujours PASS sur le plan railway enrichi TF-0258");
+}
 // rouge : cible inconnue refusée
 ok(mustFail(ops, ["plan", "heroku", fx("app-verte")], "cible inconnue"), "plan heroku → refus explicite");
 // rouge : plan amputé du rollback → FAIL O-5 localisant
