@@ -312,8 +312,36 @@ run(ops, ["deployer", fx("app-verte"), cibleEmpreinteAbsente]);
 fs.rmSync(path.join(cibleEmpreinteAbsente, "empreintes"), { recursive: true, force: true });
 const rEmpreinteSkip = verdictEmpreinte(cibleEmpreinteAbsente);
 ok(rEmpreinteSkip.verdict === "SKIP", `O-7 : aucune empreinte scellée → SKIP motivé, jamais un FAIL rétroactif (obtenu ${rEmpreinteSkip.verdict})`);
-ok((rEmpreinteSkip.findings || []).some(f => /antérieur au contrôle|hors ops\.mjs deployer/.test(f.msg)),
+ok((rEmpreinteSkip.findings || []).some(f => /antérieur au contrôle|hors ops\.mjs/.test(f.msg)),
   "O-7 : motif du SKIP explicite (déploiement antérieur au contrôle ou hors ops.mjs)");
+
+// ── O-7 · VOIE CANARY (TF-0298) : le trou SKIP-à-vie sur une cible promue par canary ─────
+// est fermé — canary scelle désormais au même point du cycle que deployer (après critères,
+// avant promotion), même fonction scellerEmpreinte, même format, même emplacement.
+console.log("");
+
+// VERTE · cible promue par canary → empreinte scellée, O-7 PASS (déployé = scellé)
+const cibleEmpreinteCanary = path.join(base, "cible-empreinte-canary");
+run(ops, ["canary", fx("app-canary-stable"), cibleEmpreinteCanary]);
+const releaseEmpreinteCanary = courant(cibleEmpreinteCanary);
+const empreinteCanaryPath = path.join(cibleEmpreinteCanary, "empreintes", `${releaseEmpreinteCanary}.json`);
+ok(fs.existsSync(empreinteCanaryPath), `canary scelle une empreinte à la promotion : ${path.relative(base, empreinteCanaryPath)}`);
+const docEmpreinteCanary = JSON.parse(fs.readFileSync(empreinteCanaryPath, "utf8"));
+ok(docEmpreinteCanary.format === "forge-ops/empreinte@1" && !!docEmpreinteCanary.fichiers["index.html"] && !!docEmpreinteCanary.fichiers["metriques.mjs"],
+  "empreinte canary : même format que deployer (manifeste horodaté, hachés sha256 par fichier)");
+const rEmpreinteCanaryPass = verdictEmpreinte(cibleEmpreinteCanary);
+ok(rEmpreinteCanaryPass.verdict === "PASS", `O-7 sur cible promue par canary : déployé = scellé → PASS (obtenu ${rEmpreinteCanaryPass.verdict}) — plus de SKIP à vie`);
+
+// ROUGE · dérive après promotion canary → FAIL nommant le fichier
+const cibleEmpreinteCanaryAlteree = path.join(base, "cible-empreinte-canary-alteree");
+fs.cpSync(cibleEmpreinteCanary, cibleEmpreinteCanaryAlteree, { recursive: true });
+const releaseCanaryAlteree = courant(cibleEmpreinteCanaryAlteree);
+const fichierCanaryAltere = path.join(cibleEmpreinteCanaryAlteree, "releases", releaseCanaryAlteree, "index.html");
+fs.writeFileSync(fichierCanaryAltere, fs.readFileSync(fichierCanaryAltere, "utf8") + "\n<!-- édité en place après promotion canary -->", "utf8");
+const rEmpreinteCanaryFail = verdictEmpreinte(cibleEmpreinteCanaryAlteree);
+ok(rEmpreinteCanaryFail.verdict === "FAIL", `O-7 : dérive après promotion canary → FAIL (obtenu ${rEmpreinteCanaryFail.verdict})`);
+ok((rEmpreinteCanaryFail.findings || []).some(f => f.regle === "O7" && f.where === "index.html" && /modifié/.test(f.msg)),
+  "O-7 : le fichier divergent après promotion canary est NOMMÉ (index.html), pas un total anonyme");
 
 // ── VERDICT « ROLLBACK RECOMMANDÉ » · seuils SLO humains (TF-0107 · 3) ─────────────
 // Recommandation SEULE : jamais d'exécution automatique — juste un verdict consommable.

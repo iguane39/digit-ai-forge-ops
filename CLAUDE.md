@@ -36,7 +36,9 @@ pilot — elle ne la remplace pas.
 Sans cible k8s : prépare la marche vers Argo Rollouts/Flagger. Candidat sans `metriques.mjs`
 → canary refusé (utiliser `deployer`) — l'oubli n'existe pas. Événements journal :
 `canary_etape` (par palier) et `canary_promotion` (bascule finale, traité comme `deploiement`
-par O4).
+par O4). Tous les paliers franchis ⇒ **empreinte scellée** avant bascule (même fonction,
+même point du cycle que `deployer` — TF-0298) : une cible promue par canary n'est plus
+SKIP à vie sur O-7.
 
 ## Plans cloud (v1 — TF-0081, plan-first)
 
@@ -62,7 +64,7 @@ transforme le plan prouvé en geste prouvé.
 ```
 <cible>/
 ├── releases/<AAAAMMJJTHHMMSS>/    # une release = un déploiement immuable
-├── empreintes/<AAAAMMJJTHHMMSS>.json  # manifeste scellé au déploiement (sha256, TF-0288)
+├── empreintes/<AAAAMMJJTHHMMSS>.json  # manifeste scellé au déploiement ou à la promotion canary (sha256, TF-0288, TF-0298)
 ├── COURANT                        # pointeur texte (pas de symlink : portable Windows)
 └── journal.jsonl                  # append-only, contrat ledger forge-agents (seq, ts, type)
 ```
@@ -85,12 +87,13 @@ findings,non_juge}`, exit 0/1/2 :
   maintenant — comble un angle mort d'O1-O4 (self-cohérence interne seulement, jamais
   vérifiée contre un témoin extérieur) : journal tronqué/réécrit après coup, déploiement
   furtif (release sur disque, absente du journal). Toujours un constat, jamais un geste.
-- **O7** `<cible> --empreinte` (TF-0288, volet prévention) : fichiers de la release
-  COURANTE vs empreinte scellée par `deployer` au moment du déploiement (sha256 par
-  fichier) — comble l'angle mort laissé par O-6 (qui juge le journal, jamais le CONTENU
-  d'une release déjà journalisée) : fichier modifié/supprimé/ajouté en place, nommé au
-  verdict. SKIP motivé (jamais un FAIL rétroactif) si la release n'a pas d'empreinte
-  (déploiement antérieur au contrôle, ou passé hors `ops.mjs deployer` — canary compris).
+- **O7** `<cible> --empreinte` (TF-0288, étendu TF-0298) : fichiers de la release
+  COURANTE vs empreinte scellée par `deployer` OU `canary` au moment de la promotion
+  (sha256 par fichier) — comble l'angle mort laissé par O-6 (qui juge le journal, jamais
+  le CONTENU d'une release déjà journalisée) : fichier modifié/supprimé/ajouté en place,
+  nommé au verdict. SKIP motivé (jamais un FAIL rétroactif) si la release n'a pas
+  d'empreinte (déploiement antérieur au contrôle, ou passé hors `ops.mjs` — le seul trou
+  qui reste : un déploiement fait hors ops, pas via `deployer`/`canary`).
 
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge).
@@ -110,8 +113,8 @@ la recommandation ne déclenche rien ; le rollback reste un geste humain via
 `node oracles/self-test.mjs` rejoue un **déploiement réel local** : app témoin déployée,
 mise à jour, restaurée — chaque état validé par l'oracle (fixture verte), et chaque défaut
 type prouvé refusé (fixtures rouges : healthcheck en échec, journal corrompu, pointeur
-fantôme, restauration sans précédent, canary dégradé, dérive O-6, écart d'empreinte O-7,
-mesures hors seuils SLO). À rejouer après toute modification.
+fantôme, restauration sans précédent, canary dégradé, dérive O-6, écart d'empreinte O-7
+(voies deployer et canary), mesures hors seuils SLO). À rejouer après toute modification.
 
 ## Langue
 

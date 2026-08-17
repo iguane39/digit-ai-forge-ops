@@ -50,7 +50,8 @@ node scripts/ops.mjs etat <cible> --sortie declare.json   # à un instant T
 node oracles/oracle-ops.mjs <cible> --drift declare.json  # plus tard : dérive ?
 
 # Oracle O-7 : empreinte de déploiement — le déployé a-t-il dérivé après coup ?
-# scellée automatiquement par deployer, comparée à la demande sur la release COURANTE
+# scellée automatiquement par deployer ET par canary (TF-0298), comparée à la demande
+# sur la release COURANTE
 node oracles/oracle-ops.mjs <cible> --empreinte
 
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
@@ -65,7 +66,7 @@ node oracles/self-test.mjs
 ```
 <cible>/
 ├── releases/<AAAAMMJJTHHMMSS>/    # une release = un déploiement immuable
-├── empreintes/<AAAAMMJJTHHMMSS>.json  # manifeste scellé au déploiement (chemins + sha256, TF-0288)
+├── empreintes/<AAAAMMJJTHHMMSS>.json  # manifeste scellé au déploiement ou à la promotion canary (chemins + sha256, TF-0288, TF-0298)
 ├── COURANT                        # pointeur texte (portable Windows, pas de symlink)
 └── journal.jsonl                  # append-only, contrat ledger (seq croissant depuis 1)
 ```
@@ -85,7 +86,7 @@ node oracles/self-test.mjs
 | O4 | rollback prouvable : aucune release citée au journal n'est purgée ; pointeur ↔ histoire cohérents |
 | O5 | `--plan <fichier>` : plan cloud complet (4 phases, rollback réel, zéro credential) |
 | O6 | `--drift <fichier> <cible>` : état déclaré (`etat --sortie`) vs constaté — journal tronqué/réécrit, déploiement furtif |
-| O7 | `<cible> --empreinte` : fichiers de la release courante vs empreinte scellée au déploiement — fichier modifié/supprimé/ajouté en place ; SKIP motivé sans empreinte (TF-0288) |
+| O7 | `<cible> --empreinte` : fichiers de la release courante vs empreinte scellée au déploiement ou à la promotion canary — fichier modifié/supprimé/ajouté en place ; SKIP motivé sans empreinte, ex. déploiement fait hors ops (TF-0288, TF-0298) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.
@@ -97,7 +98,10 @@ supervision continue, secrets/config d'environnement.
 `1→5→25→50→100`, override par fichier de config), chaque palier mesuré via le contrat
 `metriques.mjs` de la release et confronté à un **critère de promotion explicite**. Un palier
 rejeté ⇒ abandon (`canary_annulation`), `COURANT` intact. Candidat sans `metriques.mjs` →
-canary refusé (l'oubli n'existe pas — utiliser `deployer`).
+canary refusé (l'oubli n'existe pas — utiliser `deployer`). Tous les paliers franchis ⇒
+empreinte scellée (même fonction, même point du cycle que `deployer` : après critères,
+avant bascule) puis promotion — une cible promue par canary n'est plus SKIP à vie sur O-7
+(TF-0298).
 
 ## Verdict « rollback recommandé » (TF-0107, recommandation seule)
 

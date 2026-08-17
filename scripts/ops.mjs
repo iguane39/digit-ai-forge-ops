@@ -61,10 +61,13 @@ function releasesTriees(cible) {
   return fs.readdirSync(rd).filter(n => fs.statSync(path.join(rd, n)).isDirectory()).sort();
 }
 
-// ── EMPREINTE DE DÉPLOIEMENT (TF-0288, volet prévention) ────────────────────
-// Scellée par deployer juste après le healthcheck vert : manifeste des fichiers du build
-// livré (chemin relatif + sha256), horodaté, VERSIONNÉ À CÔTÉ de releases/ (jamais mêlé au
-// contenu déployé — même logique que journal.jsonl : un artefact de la cible, pas du build).
+// ── EMPREINTE DE DÉPLOIEMENT (TF-0288, volet prévention · étendu canary TF-0298) ────
+// Scellée juste après healthcheck vert et AVANT toute bascule de COURANT : manifeste des
+// fichiers du build livré (chemin relatif + sha256), horodaté, VERSIONNÉ À CÔTÉ de
+// releases/ (jamais mêlé au contenu déployé — même logique que journal.jsonl : un artefact
+// de la cible, pas du build). Fonction réutilisée par deployer ET canary (TF-0298) : les
+// deux voies de promotion scellent au même point du cycle (après healthcheck/critères,
+// avant promotion) — une cible promue par canary n'est plus un SKIP permanent sur O-7.
 // Comparée ensuite par oracle-ops.mjs --empreinte (O-7) : un fichier modifié/supprimé/ajouté
 // dans releases/<release>/ après scellement est une dérive de déploiement détectable.
 function listerFichiers(dir, base = dir, acc = []) {
@@ -213,6 +216,9 @@ function canary(build, cible, fichierSeuils) {
     if (!franchi) annuler(`critère de promotion non atteint au palier ${palier}% (erreur ${erreur_pct}%/latence ${latence_ms}ms)`);
   }
 
+  // TF-0298 : tous les paliers sont franchis — le candidat est accepté, scellement avant
+  // bascule (même point du cycle que deployer : après healthcheck/critères, avant promotion).
+  scellerEmpreinte(cible, release, dest);
   const precedent = lireCourant(cible);
   ecrireCourant(cible, release);
   journalAppend(cible, "canary_promotion", { release, precedent, paliers_pct: seuils.paliers_pct });

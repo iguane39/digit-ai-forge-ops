@@ -11,9 +11,9 @@
 //   O6  --drift <fichier> <cible> : état déclaré (`ops.mjs etat --sortie`) vs constaté
 //       maintenant — troncature/réécriture du journal, déploiement furtif (TF-0107).
 //   O7  --empreinte <cible> : fichiers de la release COURANTE vs empreinte scellée par
-//       `ops.mjs deployer` (sha256 par fichier) — fichier modifié/supprimé/ajouté en place
-//       après déploiement ; SKIP motivé si aucune empreinte (déploiement antérieur au
-//       contrôle ou hors ops.mjs deployer) (TF-0288).
+//       `ops.mjs deployer` OU `ops.mjs canary` (TF-0298, sha256 par fichier) — fichier
+//       modifié/supprimé/ajouté en place après coup ; SKIP motivé si aucune empreinte
+//       (déploiement antérieur au contrôle ou passé hors ops.mjs) (TF-0288).
 //   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
 //       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
@@ -133,19 +133,19 @@ if (driftPath) {
   fin6(durs6.length ? "FAIL" : "PASS", durs6.length ? 1 : 0);
 }
 
-// ── O7 · empreinte de déploiement : le servi correspond au scellé (TF-0288) ─────────
+// ── O7 · empreinte de déploiement : le servi correspond au scellé (TF-0288, étendu TF-0298) ─
 // Compare les fichiers de la release COURANTE, maintenant, à l'empreinte scellée par
-// `ops.mjs deployer` au moment du déploiement (`empreintes/<release>.json`, sha256 par
-// fichier). Comble le volet PRÉVENTION resté ouvert par O-6 (qui juge le journal, jamais
-// le CONTENU d'une release déjà journalisée) : un fichier édité en place dans
+// `ops.mjs deployer` OU `ops.mjs canary` au moment de la promotion (`empreintes/<release>.json`,
+// sha256 par fichier). Comble le volet PRÉVENTION resté ouvert par O-6 (qui juge le journal,
+// jamais le CONTENU d'une release déjà journalisée) : un fichier édité en place dans
 // releases/<release>/ après coup — sans nouveau déploiement, sans trace au journal — est
 // invisible à O1-O4 et à O-6, visible ici. SKIP (jamais FAIL rétroactif) si la release
-// n'a pas d'empreinte : déploiement antérieur au contrôle, ou passé hors `ops.mjs deployer`
-// (canary compris, TF-0288 : hors périmètre de ce volet, cf. non_juge).
+// n'a pas d'empreinte : déploiement antérieur au contrôle, ou passé hors `ops.mjs` (les deux
+// voies de promotion scellent désormais — TF-0298 a fermé le trou canary déclaré par TF-0288).
 if (args.includes("--empreinte")) {
   const DOM7 = "Exploitation : empreinte de déploiement — servi conforme au scellé (O-7)";
   const NJ7 = [
-    "déploiement passé hors `ops.mjs deployer` (canary compris) — aucune empreinte n'y est scellée",
+    "déploiement passé hors `ops.mjs` (deployer et canary scellent tous deux — TF-0298) — aucune empreinte n'y est scellée",
     "cause de la modification en place (accès disque direct, script tiers...) — hors périmètre",
     "correction de l'écart — un constat, jamais un geste automatique",
   ];
@@ -161,7 +161,7 @@ if (args.includes("--empreinte")) {
   if (!fs.existsSync(releaseDir7)) { add("bloquant", "O7", `COURANT pointe une release inexistante : ${courant7}`, "COURANT"); fin7("FAIL", 1); }
   const empreintePath = path.join(cible, "empreintes", `${courant7}.json`);
   if (!fs.existsSync(empreintePath)) {
-    add("info", "O7", `aucune empreinte scellée pour la release ${courant7} — déploiement antérieur au contrôle ou passé hors ops.mjs deployer`, empreintePath);
+    add("info", "O7", `aucune empreinte scellée pour la release ${courant7} — déploiement antérieur au contrôle ou passé hors ops.mjs (deployer/canary)`, empreintePath);
     fin7("SKIP", 2);
   }
   let empreinte = null;
