@@ -10,6 +10,10 @@
 //   O5  --plan <fichier>       : plan cloud complet (TF-0081, cf. plus bas).
 //   O6  --drift <fichier> <cible> : état déclaré (`ops.mjs etat --sortie`) vs constaté
 //       maintenant — troncature/réécriture du journal, déploiement furtif (TF-0107).
+//   O7  --empreinte <cible> : fichiers de la release COURANTE vs empreinte scellée par
+//       `ops.mjs deployer` (sha256 par fichier) — fichier modifié/supprimé/ajouté en place
+//       après déploiement ; SKIP motivé si aucune empreinte (déploiement antérieur au
+//       contrôle ou hors ops.mjs deployer) (TF-0288).
 //   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
 //       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
@@ -127,6 +131,61 @@ if (driftPath) {
 
   const durs6 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin6(durs6.length ? "FAIL" : "PASS", durs6.length ? 1 : 0);
+}
+
+// ── O7 · empreinte de déploiement : le servi correspond au scellé (TF-0288) ─────────
+// Compare les fichiers de la release COURANTE, maintenant, à l'empreinte scellée par
+// `ops.mjs deployer` au moment du déploiement (`empreintes/<release>.json`, sha256 par
+// fichier). Comble le volet PRÉVENTION resté ouvert par O-6 (qui juge le journal, jamais
+// le CONTENU d'une release déjà journalisée) : un fichier édité en place dans
+// releases/<release>/ après coup — sans nouveau déploiement, sans trace au journal — est
+// invisible à O1-O4 et à O-6, visible ici. SKIP (jamais FAIL rétroactif) si la release
+// n'a pas d'empreinte : déploiement antérieur au contrôle, ou passé hors `ops.mjs deployer`
+// (canary compris, TF-0288 : hors périmètre de ce volet, cf. non_juge).
+if (args.includes("--empreinte")) {
+  const DOM7 = "Exploitation : empreinte de déploiement — servi conforme au scellé (O-7)";
+  const NJ7 = [
+    "déploiement passé hors `ops.mjs deployer` (canary compris) — aucune empreinte n'y est scellée",
+    "cause de la modification en place (accès disque direct, script tiers...) — hors périmètre",
+    "correction de l'écart — un constat, jamais un geste automatique",
+  ];
+  const fin7 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM7, artefact: cible || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O7", msg: "aucune dérive : fichiers de la release conformes à l'empreinte scellée", where: cible }], non_juge: NJ7 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!cible || !fs.existsSync(cible)) { add("info", "O7", "cible introuvable", String(cible)); fin7("SKIP", 2); }
+  const cp7 = path.join(cible, "COURANT");
+  const courant7 = fs.existsSync(cp7) ? fs.readFileSync(cp7, "utf8").trim() : null;
+  if (!courant7) { add("info", "O7", "aucun COURANT — rien à comparer", "COURANT"); fin7("SKIP", 2); }
+  const releaseDir7 = path.join(cible, "releases", courant7);
+  if (!fs.existsSync(releaseDir7)) { add("bloquant", "O7", `COURANT pointe une release inexistante : ${courant7}`, "COURANT"); fin7("FAIL", 1); }
+  const empreintePath = path.join(cible, "empreintes", `${courant7}.json`);
+  if (!fs.existsSync(empreintePath)) {
+    add("info", "O7", `aucune empreinte scellée pour la release ${courant7} — déploiement antérieur au contrôle ou passé hors ops.mjs deployer`, empreintePath);
+    fin7("SKIP", 2);
+  }
+  let empreinte = null;
+  try { empreinte = JSON.parse(fs.readFileSync(empreintePath, "utf8")); }
+  catch { add("bloquant", "O7", "empreinte illisible (JSON invalide)", empreintePath); fin7("FAIL", 1); }
+  const attendus = empreinte.fichiers || {};
+  const surDisque = new Set();
+  (function lister(dir, base) {
+    for (const nom of fs.readdirSync(dir)) {
+      const p = path.join(dir, nom);
+      if (fs.statSync(p).isDirectory()) lister(p, base);
+      else surDisque.add(path.relative(base, p).split(path.sep).join("/"));
+    }
+  })(releaseDir7, releaseDir7);
+  for (const [rel, hachAttendu] of Object.entries(attendus)) {
+    const p = path.join(releaseDir7, rel);
+    if (!fs.existsSync(p)) { add("bloquant", "O7", `fichier supprimé après scellement : ${rel}`, rel); continue; }
+    const hachActuel = createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+    if (hachActuel !== hachAttendu) add("bloquant", "O7", `fichier modifié après scellement : ${rel} (haché actuel ≠ empreinte)`, rel);
+  }
+  for (const rel of surDisque)
+    if (!(rel in attendus)) add("majeur", "O7", `fichier présent mais absent de l'empreinte scellée : ${rel}`, rel);
+  const durs7 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin7(durs7.length ? "FAIL" : "PASS", durs7.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

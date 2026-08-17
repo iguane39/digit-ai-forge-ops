@@ -18,6 +18,7 @@ vérité de l'étape. Née de TF-0040 (trou prouvé : MEP sans forge, déploieme
 | **Plans cloud plan-first** | préparer un déploiement cloud sans exposer de credential | `node scripts\ops.mjs plan <cible> + oracle O-5` | prouvé (experimental) |
 | **Canary local simulé** | basculer progressivement avec critère de promotion explicite | `node scripts\ops.mjs canary <build> <cible> [--seuils f.json]` | prouvé (experimental) |
 | **Drift O-6 et verdict rollback SLO** | détecter la dérive déclaré↔constaté et savoir quand recommander un retour arrière | `node oracles\oracle-ops.mjs --drift <f> <cible> · --verdict-rollback <mesures> --seuils <f>` | prouvé (experimental) |
+| **Empreinte de déploiement O-7** | savoir si un déploiement passé par ops a dérivé après coup (fichier modifié/ajouté/supprimé en place) | `node oracles\oracle-ops.mjs <cible> --empreinte` | prouvé (experimental) |
 
 Le catalogue consolidé des dix forges vit chez le pilot :
 [digit-ai-forge-pilot/catalogues/CATALOGUES.md](https://github.com/iguane39/digit-ai-forge-pilot/blob/main/catalogues/CATALOGUES.md).
@@ -48,6 +49,10 @@ node scripts/ops.mjs canary <dossier-build> <cible> [--seuils seuils-canary.json
 node scripts/ops.mjs etat <cible> --sortie declare.json   # à un instant T
 node oracles/oracle-ops.mjs <cible> --drift declare.json  # plus tard : dérive ?
 
+# Oracle O-7 : empreinte de déploiement — le déployé a-t-il dérivé après coup ?
+# scellée automatiquement par deployer, comparée à la demande sur la release COURANTE
+node oracles/oracle-ops.mjs <cible> --empreinte
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -59,9 +64,10 @@ node oracles/self-test.mjs
 
 ```
 <cible>/
-├── releases/<AAAAMMJJTHHMMSS>/   # une release = un déploiement immuable
-├── COURANT                       # pointeur texte (portable Windows, pas de symlink)
-└── journal.jsonl                 # append-only, contrat ledger (seq croissant depuis 1)
+├── releases/<AAAAMMJJTHHMMSS>/    # une release = un déploiement immuable
+├── empreintes/<AAAAMMJJTHHMMSS>.json  # manifeste scellé au déploiement (chemins + sha256, TF-0288)
+├── COURANT                        # pointeur texte (portable Windows, pas de symlink)
+└── journal.jsonl                  # append-only, contrat ledger (seq croissant depuis 1)
 ```
 
 - Une release sans `sante.mjs` (contrat de santé, exit 0 = sain) est **refusée**.
@@ -79,6 +85,7 @@ node oracles/self-test.mjs
 | O4 | rollback prouvable : aucune release citée au journal n'est purgée ; pointeur ↔ histoire cohérents |
 | O5 | `--plan <fichier>` : plan cloud complet (4 phases, rollback réel, zéro credential) |
 | O6 | `--drift <fichier> <cible>` : état déclaré (`etat --sortie`) vs constaté — journal tronqué/réécrit, déploiement furtif |
+| O7 | `<cible> --empreinte` : fichiers de la release courante vs empreinte scellée au déploiement — fichier modifié/supprimé/ajouté en place ; SKIP motivé sans empreinte (TF-0288) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.

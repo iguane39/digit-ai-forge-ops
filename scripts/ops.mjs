@@ -61,6 +61,34 @@ function releasesTriees(cible) {
   return fs.readdirSync(rd).filter(n => fs.statSync(path.join(rd, n)).isDirectory()).sort();
 }
 
+// ── EMPREINTE DE DÉPLOIEMENT (TF-0288, volet prévention) ────────────────────
+// Scellée par deployer juste après le healthcheck vert : manifeste des fichiers du build
+// livré (chemin relatif + sha256), horodaté, VERSIONNÉ À CÔTÉ de releases/ (jamais mêlé au
+// contenu déployé — même logique que journal.jsonl : un artefact de la cible, pas du build).
+// Comparée ensuite par oracle-ops.mjs --empreinte (O-7) : un fichier modifié/supprimé/ajouté
+// dans releases/<release>/ après scellement est une dérive de déploiement détectable.
+function listerFichiers(dir, base = dir, acc = []) {
+  for (const nom of fs.readdirSync(dir)) {
+    const p = path.join(dir, nom);
+    if (fs.statSync(p).isDirectory()) listerFichiers(p, base, acc);
+    else acc.push(path.relative(base, p).split(path.sep).join("/"));
+  }
+  return acc;
+}
+
+function hacherFichier(p) {
+  return createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+}
+
+function scellerEmpreinte(cible, release, releaseDir) {
+  const fichiers = {};
+  for (const rel of listerFichiers(releaseDir).sort()) fichiers[rel] = hacherFichier(path.join(releaseDir, rel));
+  const dir = path.join(cible, "empreintes");
+  fs.mkdirSync(dir, { recursive: true });
+  const doc = { format: "forge-ops/empreinte@1", release, ts: new Date().toISOString(), fichiers };
+  fs.writeFileSync(path.join(dir, `${release}.json`), JSON.stringify(doc, null, 2) + "\n", "utf8");
+}
+
 function deployer(build, cible) {
   if (!build || !fs.existsSync(build)) fail(`build introuvable : ${build}`);
   fs.mkdirSync(path.join(cible, "releases"), { recursive: true });
@@ -78,6 +106,7 @@ function deployer(build, cible) {
     fs.rmSync(dest, { recursive: true, force: true });
     fail(`healthcheck en échec — COURANT inchangé : ${santé.raison}`);
   }
+  scellerEmpreinte(cible, release, dest);
   const precedent = lireCourant(cible);
   ecrireCourant(cible, release);
   journalAppend(cible, "deploiement", { release, precedent });

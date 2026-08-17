@@ -265,6 +265,56 @@ fs.cpSync(fx("app-verte"), path.join(cibleFurtif, "releases", "20200101T000000-f
 ok(verdict(cibleFurtif) === "PASS", "déploiement furtif : O1-O4 ne voient rien (release non citée par le journal)");
 ok(verdictDrift(declareFurtif, cibleFurtif) === "FAIL", "O-6 : release furtive hors journal → dérive détectée");
 
+// ── ORACLE O-7 · EMPREINTE DE DÉPLOIEMENT (TF-0288, volet prévention) ──────────────
+// O-6 juge le journal ; O-7 juge le CONTENU d'une release déjà journalisée, comparé à
+// l'empreinte scellée par `deployer` — un fichier édité en place sans nouveau déploiement
+// est invisible à O1-O4 comme à O-6, visible ici.
+console.log("");
+const verdictEmpreinte = c => { try { return JSON.parse(run(oracle, [c, "--empreinte", "--json-only"])); }
+  catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+
+// VERTE · déployé = scellé → PASS
+const cibleEmpreinte = path.join(base, "cible-empreinte");
+run(ops, ["deployer", fx("app-verte"), cibleEmpreinte]);
+const releaseEmpreinte = courant(cibleEmpreinte);
+const empreintePath = path.join(cibleEmpreinte, "empreintes", `${releaseEmpreinte}.json`);
+ok(fs.existsSync(empreintePath), `deployer scelle une empreinte : ${path.relative(base, empreintePath)}`);
+const docEmpreinte = JSON.parse(fs.readFileSync(empreintePath, "utf8"));
+ok(docEmpreinte.format === "forge-ops/empreinte@1" && !!docEmpreinte.fichiers["index.html"] && !!docEmpreinte.fichiers["sante.mjs"],
+  "empreinte : manifeste horodaté avec hachés sha256 par fichier (index.html, sante.mjs)");
+const rEmpreintePass = verdictEmpreinte(cibleEmpreinte);
+ok(rEmpreintePass.verdict === "PASS", `O-7 : déployé = scellé → PASS (obtenu ${rEmpreintePass.verdict})`);
+
+// ROUGE · fichier modifié après scellement → FAIL nommant le fichier
+const cibleEmpreinteAltere = path.join(base, "cible-empreinte-alteree");
+fs.cpSync(cibleEmpreinte, cibleEmpreinteAltere, { recursive: true });
+const releaseAlteree = courant(cibleEmpreinteAltere);
+const fichierAltere = path.join(cibleEmpreinteAltere, "releases", releaseAlteree, "index.html");
+fs.writeFileSync(fichierAltere, fs.readFileSync(fichierAltere, "utf8") + "\n<!-- édité en place -->", "utf8");
+const rEmpreinteFail = verdictEmpreinte(cibleEmpreinteAltere);
+ok(rEmpreinteFail.verdict === "FAIL", `O-7 : fichier modifié après scellement → FAIL (obtenu ${rEmpreinteFail.verdict})`);
+ok((rEmpreinteFail.findings || []).some(f => f.regle === "O7" && f.where === "index.html" && /modifié/.test(f.msg)),
+  "O-7 : le fichier divergent est NOMMÉ (index.html), pas un total anonyme");
+
+// ROUGE · fichier ajouté après scellement, absent de l'empreinte → FAIL nommant le fichier
+const cibleEmpreinteAjout = path.join(base, "cible-empreinte-ajout");
+fs.cpSync(cibleEmpreinte, cibleEmpreinteAjout, { recursive: true });
+const releaseAjout = courant(cibleEmpreinteAjout);
+fs.writeFileSync(path.join(cibleEmpreinteAjout, "releases", releaseAjout, "intrus.txt"), "ajouté hors ops", "utf8");
+const rEmpreinteAjout = verdictEmpreinte(cibleEmpreinteAjout);
+ok(rEmpreinteAjout.verdict === "FAIL", `O-7 : fichier ajouté après scellement → FAIL (obtenu ${rEmpreinteAjout.verdict})`);
+ok((rEmpreinteAjout.findings || []).some(f => f.regle === "O7" && f.where === "intrus.txt"),
+  "O-7 : le fichier ajouté est NOMMÉ (intrus.txt)");
+
+// SKIP · aucune empreinte scellée (déploiement antérieur au contrôle) → jamais un FAIL rétroactif
+const cibleEmpreinteAbsente = path.join(base, "cible-empreinte-absente");
+run(ops, ["deployer", fx("app-verte"), cibleEmpreinteAbsente]);
+fs.rmSync(path.join(cibleEmpreinteAbsente, "empreintes"), { recursive: true, force: true });
+const rEmpreinteSkip = verdictEmpreinte(cibleEmpreinteAbsente);
+ok(rEmpreinteSkip.verdict === "SKIP", `O-7 : aucune empreinte scellée → SKIP motivé, jamais un FAIL rétroactif (obtenu ${rEmpreinteSkip.verdict})`);
+ok((rEmpreinteSkip.findings || []).some(f => /antérieur au contrôle|hors ops\.mjs deployer/.test(f.msg)),
+  "O-7 : motif du SKIP explicite (déploiement antérieur au contrôle ou hors ops.mjs)");
+
 // ── VERDICT « ROLLBACK RECOMMANDÉ » · seuils SLO humains (TF-0107 · 3) ─────────────
 // Recommandation SEULE : jamais d'exécution automatique — juste un verdict consommable.
 console.log("");

@@ -20,7 +20,7 @@ pilot — elle ne la remplace pas.
 
 | Verbe | Commande | Effet |
 |---|---|---|
-| **déployer** | `node scripts/ops.mjs deployer <build> <cible>` | copie le build en release datée, exécute le healthcheck **avant** toute bascule, repointe `COURANT`, journalise |
+| **déployer** | `node scripts/ops.mjs deployer <build> <cible>` | copie le build en release datée, exécute le healthcheck **avant** toute bascule, **scelle une empreinte** (chemins + sha256, TF-0288), repointe `COURANT`, journalise |
 | **restaurer** | `node scripts/ops.mjs restaurer <cible>` | re-healthcheck de la release précédente puis bascule arrière, journalisée — le rollback n'est pas un écrit, c'est un geste prouvé |
 | **exploiter** | `node scripts/ops.mjs etat <cible> [--sortie fichier.json]` + `journal.jsonl` | état machine-lisible (option : instantané déclaré pour O-6) et journal append-only au contrat ledger (seq croissant depuis 1) |
 
@@ -61,9 +61,10 @@ transforme le plan prouvé en geste prouvé.
 
 ```
 <cible>/
-├── releases/<AAAAMMJJTHHMMSS>/   # une release = un déploiement immuable
-├── COURANT                       # pointeur texte (pas de symlink : portable Windows)
-└── journal.jsonl                 # append-only, contrat ledger forge-agents (seq, ts, type)
+├── releases/<AAAAMMJJTHHMMSS>/    # une release = un déploiement immuable
+├── empreintes/<AAAAMMJJTHHMMSS>.json  # manifeste scellé au déploiement (sha256, TF-0288)
+├── COURANT                        # pointeur texte (pas de symlink : portable Windows)
+└── journal.jsonl                  # append-only, contrat ledger forge-agents (seq, ts, type)
 ```
 
 Healthcheck : si la release contient `sante.mjs`, il est exécuté (`node sante.mjs`,
@@ -84,6 +85,12 @@ findings,non_juge}`, exit 0/1/2 :
   maintenant — comble un angle mort d'O1-O4 (self-cohérence interne seulement, jamais
   vérifiée contre un témoin extérieur) : journal tronqué/réécrit après coup, déploiement
   furtif (release sur disque, absente du journal). Toujours un constat, jamais un geste.
+- **O7** `<cible> --empreinte` (TF-0288, volet prévention) : fichiers de la release
+  COURANTE vs empreinte scellée par `deployer` au moment du déploiement (sha256 par
+  fichier) — comble l'angle mort laissé par O-6 (qui juge le journal, jamais le CONTENU
+  d'une release déjà journalisée) : fichier modifié/supprimé/ajouté en place, nommé au
+  verdict. SKIP motivé (jamais un FAIL rétroactif) si la release n'a pas d'empreinte
+  (déploiement antérieur au contrôle, ou passé hors `ops.mjs deployer` — canary compris).
 
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge).
@@ -103,8 +110,8 @@ la recommandation ne déclenche rien ; le rollback reste un geste humain via
 `node oracles/self-test.mjs` rejoue un **déploiement réel local** : app témoin déployée,
 mise à jour, restaurée — chaque état validé par l'oracle (fixture verte), et chaque défaut
 type prouvé refusé (fixtures rouges : healthcheck en échec, journal corrompu, pointeur
-fantôme, restauration sans précédent, canary dégradé, dérive O-6, mesures hors seuils SLO).
-À rejouer après toute modification.
+fantôme, restauration sans précédent, canary dégradé, dérive O-6, écart d'empreinte O-7,
+mesures hors seuils SLO). À rejouer après toute modification.
 
 ## Langue
 
