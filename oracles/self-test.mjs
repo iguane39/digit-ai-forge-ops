@@ -374,6 +374,105 @@ ok(rPeu.verdict === "donnees_insuffisantes", `fenêtre sous le minimum requis �
 ok(mustFail(oracle, ["--verdict-rollback", mesuresStables, "--json-only"], "seuils SLO introuvable"),
   "sans fichier de seuils humain → refus (aucun défaut implicite)");
 
+// ── O8 · UN TRAVAIL PLANIFIÉ S'EXERCE À LA DEMANDE (TF-0527, 23/08) ────────────────
+// Le défaut rejoué est celui qui a été MESURÉ : une définition mensuelle enregistrée, déclarée
+// « en place », dont le premier passage a rendu « rien à faire » EN SUCCÈS — donc dont pas une
+// ligne n'avait tourné sur un agent. Trois états à prouver, et le troisième est le plus
+// instructif : le paramètre DÉCLARÉ MAIS JAMAIS LU, qui donne l'impression d'un bouton.
+const planifie = (nom, contenu) => {
+  const d = path.join(base, "depot-" + nom);
+  fs.mkdirSync(d, { recursive: true });
+  fs.writeFileSync(path.join(d, "azure-pipelines-veille.yml"), contenu, "utf8");
+  return d;
+};
+const o8 = (racine) => {
+  try { return JSON.parse(run(oracle, [racine, "--planifie", "--json-only"])); }
+  catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE" }; } }
+};
+const CADENCE = [
+  "trigger: none",
+  "schedules:",
+  '  - cron: "7 7 1-7 * 1"',
+  "    displayName: Premier lundi du mois",
+  "    branches:",
+  "      include:",
+  "        - main",
+  "    always: true",
+  "steps:",
+  "  - script: |",
+  "      set -e",
+].join("\n");
+
+// (a) ROUGE — la cadence seule. C'est l'état exact du 23/08 avant correction.
+const rSansExercice = o8(planifie("sans-exercice", CADENCE + "\n" +
+  '      if [ "$(date -u +%d)" -gt 7 ]; then echo "Pas le premier lundi — rien a faire."; exit 0; fi\n' +
+  "      node scripts/veille.mjs\n"));
+ok(rSansExercice.verdict === "FAIL", `définition planifiée sans mode d'exercice → FAIL (obtenu ${rSansExercice.verdict})`);
+ok(rSansExercice.findings.some(f => f.sev === "bloquant" && /SANS mode d'exercice/.test(f.msg) && /prochaine cadence/.test(f.msg)),
+  "le constat dit POURQUOI c'est un défaut : le mécanisme ne peut être éprouvé qu'à sa prochaine échéance");
+ok(rSansExercice.findings.some(f => f.where === "azure-pipelines-veille.yml"),
+  "le constat localise le fichier fautif (jamais un total anonyme)");
+
+// (b) ROUGE — le piège : un paramètre DÉCLARÉ, jamais LU. L'écran montre une case à cocher, la
+// cocher ne change rien. Une affordance est câblée ou elle n'existe pas (loi n° 1).
+const rNonLu = o8(planifie("param-non-lu", [
+  "parameters:",
+  "  - name: forcer",
+  '    displayName: "Executer maintenant"',
+  "    type: boolean",
+  "    default: false",
+  CADENCE,
+  '      if [ "$(date -u +%d)" -gt 7 ]; then echo "Pas le premier lundi — rien a faire."; exit 0; fi',
+  "      node scripts/veille.mjs",
+].join("\n") + "\n"));
+ok(rNonLu.verdict === "FAIL", `paramètre déclaré mais jamais lu → FAIL (obtenu ${rNonLu.verdict})`);
+ok(rNonLu.findings.some(f => f.sev === "bloquant" && /JAMAIS LU/.test(f.msg) && /forcer/.test(f.msg)),
+  "le constat NOMME le paramètre inerte — sans son nom, l'auteur cherche dans tout le fichier");
+
+// (c) VERTE — le même fichier, paramètre LU dans la garde de cadence, et l'exercice DÉCLARÉ.
+const vExercee = planifie("exercee", [
+  "# exerce_le: 2026-08-23",
+  "parameters:",
+  "  - name: forcer",
+  '    displayName: "Executer maintenant, hors du premier lundi"',
+  "    type: boolean",
+  "    default: false",
+  CADENCE,
+  '      if [ "${{ parameters.forcer }}" = "True" ]; then echo "Execution FORCEE."; ',
+  '      elif [ "$(date -u +%d)" -gt 7 ]; then echo "Pas le premier lundi — rien a faire."; exit 0; fi',
+  "      node scripts/veille.mjs",
+].join("\n") + "\n");
+const rVerte = o8(vExercee);
+ok(rVerte.verdict === "PASS", `mode d'exercice câblé et exercice déclaré → PASS (obtenu ${rVerte.verdict})`);
+ok(rVerte.findings.some(f => /exercé le 2026-08-23/.test(f.msg)),
+  "le PASS DIT quand le mécanisme a réellement tourné — c'est le fait qui manquait au relevé du 23/08");
+
+// (d) La MÊME verte sans sa déclaration d'exercice : le mode est câblé, donc pas un défaut, mais
+// l'oracle le DIT. Un mécanisme jamais éprouvé n'est pas un mécanisme, c'est une intention.
+const rPasExercee = o8(planifie("cablee-non-exercee", fs.readFileSync(path.join(vExercee, "azure-pipelines-veille.yml"), "utf8").replace("# exerce_le: 2026-08-23\n", "")));
+ok(rPasExercee.verdict === "PASS", `mode câblé sans exercice déclaré → PASS, jamais un FAIL rétroactif (obtenu ${rPasExercee.verdict})`);
+ok(rPasExercee.findings.some(f => f.sev === "info" && /AUCUN exercice déclaré/.test(f.msg)),
+  "l'exercice manquant est DIT en avertissement (le fichier n'a rien fait de mal — c'est le contrôle qui naît)");
+
+// (e) Ce qui n'a AUCUNE planification n'est jamais jugé : zéro faux positif sur un dépôt normal.
+const rSansCron = o8(planifie("sans-cron", ["trigger:", "  - main", "steps:", "  - script: npm test"].join("\n") + "\n"));
+ok(rSansCron.verdict === "SKIP" && rSansCron.findings.some(f => /aucune définition planifiée/.test(f.msg)),
+  `un dépôt sans cron n'est pas jugé et le DIT (obtenu ${rSansCron.verdict})`);
+
+// (f) La déclaration GitHub, autre dialecte du même parc : `workflow_dispatch` est un mode
+// d'exercice de plein droit — il n'y a pas de garde de cadence à câbler.
+const dGh = path.join(base, "depot-github");
+fs.mkdirSync(path.join(dGh, ".github", "workflows"), { recursive: true });
+fs.writeFileSync(path.join(dGh, ".github", "workflows", "veille.yml"),
+  ["# exerce_le: 2026-08-23", "on:", "  schedule:", '    - cron: "7 7 1-7 * 1"', "  workflow_dispatch:", "jobs:", "  veille:", "    runs-on: ubuntu-latest"].join("\n") + "\n", "utf8");
+const rGh = o8(dGh);
+ok(rGh.verdict === "PASS", `déclencheur manuel GitHub reconnu comme mode d'exercice → PASS (obtenu ${rGh.verdict})`);
+const rGhSans = path.join(base, "depot-github-sans");
+fs.mkdirSync(path.join(rGhSans, ".github", "workflows"), { recursive: true });
+fs.writeFileSync(path.join(rGhSans, ".github", "workflows", "veille.yml"),
+  ["on:", "  schedule:", '    - cron: "7 7 1-7 * 1"', "jobs:", "  veille:", "    runs-on: ubuntu-latest"].join("\n") + "\n", "utf8");
+ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur manuel → FAIL (le sens rouge du même dialecte)");
+
 fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

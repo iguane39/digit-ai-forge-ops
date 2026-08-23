@@ -14,6 +14,9 @@
 //       `ops.mjs deployer` OU `ops.mjs canary` (TF-0298, sha256 par fichier) — fichier
 //       modifié/supprimé/ajouté en place après coup ; SKIP motivé si aucune empreinte
 //       (déploiement antérieur au contrôle ou passé hors ops.mjs) (TF-0288).
+//   O8  --planifie <racine>   : toute définition PLANIFIÉE du dépôt porte un mode d'exercice à
+//       la demande, CÂBLÉ et distinct de sa cadence (TF-0527) — un travail qu'on ne peut
+//       déclencher qu'à sa prochaine échéance se découvre cassé au moment où l'on compte dessus.
 //   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
 //       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
@@ -186,6 +189,100 @@ if (args.includes("--empreinte")) {
     if (!(rel in attendus)) add("majeur", "O7", `fichier présent mais absent de l'empreinte scellée : ${rel}`, rel);
   const durs7 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin7(durs7.length ? "FAIL" : "PASS", durs7.length ? 1 : 0);
+}
+
+// ── O8 · un travail PLANIFIÉ porte un MODE D'EXERCICE à la demande (TF-0527, 23/08/2026) ──
+//
+// MESURE QUI A FAIT NAÎTRE LE CONTRÔLE. Une définition de veille mensuelle venait d'être créée et
+// enregistrée ; le relevé remis à l'humain annonçait « la veille est en place ». Son premier
+// passage a rendu « Pas le premier lundi du mois — rien à faire » et s'est terminé EN SUCCÈS. Le
+// script n'avait donc JAMAIS tourné sur un agent : ni ses dépendances, ni son accès réseau, ni la
+// présence de son interpréteur n'avaient été éprouvés. Le premier passage réel aurait eu lieu
+// QUINZE JOURS plus tard — au moment précis où l'on compte dessus. Après ajout d'un paramètre
+// d'exécution forcée, distinct de la cadence, le script a tourné pour de vrai : trois contrôles
+// rendus, tous verts, en 40 secondes, dont un qui a réellement interrogé le registre de paquets.
+//
+// C'est le pendant exact de « un ✓ sans oracle exécuté n'est pas un ✓ », appliqué aux traitements
+// différés : UN MÉCANISME QUI N'A JAMAIS TOURNÉ N'EST PAS UN MÉCANISME, c'est une intention
+// planifiée. Et la première loi transverse le dit déjà d'une autre manière — une affordance est
+// câblée ou elle n'existe pas : c'est pourquoi un paramètre DÉCLARÉ MAIS JAMAIS LU est jugé ici
+// aussi durement qu'un paramètre absent. Il donne la même impression et ne fait rien.
+//
+// Ce que l'oracle voit, et ce qu'il ne verra jamais : il lit des DÉFINITIONS, pas un historique
+// de passages. Il peut donc prouver que le mode d'exercice EXISTE et qu'il est CÂBLÉ ; il ne peut
+// pas prouver qu'on s'en est servi. La déclaration `# exerce_le: AAAA-MM-JJ` comble cette moitié
+// par un fait daté dans le fichier (loi n° 4 : une donnée volatile est une donnée, datée, sourcée)
+// et reste un AVERTISSEMENT — un fichier antérieur au contrôle n'a rien fait de mal.
+if (args.includes("--planifie")) {
+  const DOM8 = "Exploitation : un travail planifié est exerçable à la demande (O-8)";
+  const NJ8 = [
+    "l'EXERCICE lui-même — l'oracle lit des définitions, jamais un historique de passages ; la déclaration `# exerce_le:` est un fait déclaré, pas un fait mesuré (l'historique du système d'intégration reste la source)",
+    "la JUSTESSE de la cadence (le bon jour, la bonne heure) — un choix humain, jamais un verdict",
+    "les définitions hors des emplacements connus (.github/workflows/, azure-pipelines*.yml, pipelines/) — une définition rangée ailleurs reste invisible",
+    "les planifications posées HORS dépôt (interface web du système d'intégration, tâche planifiée d'un serveur, cron d'une machine) : elles ne laissent aucun fichier à lire",
+  ];
+  const fin8 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM8, artefact: cible || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O8", msg: "aucune définition planifiée trouvée aux emplacements connus — rien à juger", where: cible }], non_juge: NJ8 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!cible || !fs.existsSync(cible)) { add("info", "O8", "racine introuvable", String(cible)); fin8("SKIP", 2); }
+
+  // Emplacements connus. Bornés par choix : une descente libre sur un dépôt produit lirait des
+  // milliers de fichiers pour trouver ce qui vit toujours aux deux ou trois mêmes endroits.
+  const candidats = [];
+  const ajouterDossier = (dir, prof = 0) => {
+    if (prof > 2 || !fs.existsSync(dir)) return;
+    for (const nom of fs.readdirSync(dir)) {
+      const q = path.join(dir, nom);
+      if (fs.statSync(q).isDirectory()) ajouterDossier(q, prof + 1);
+      else if (/\.ya?ml$/i.test(nom)) candidats.push(q);
+    }
+  };
+  ajouterDossier(path.join(cible, ".github", "workflows"));
+  ajouterDossier(path.join(cible, "pipelines"));
+  ajouterDossier(path.join(cible, ".azuredevops"));
+  if (fs.statSync(cible).isDirectory()) {
+    for (const nom of fs.readdirSync(cible)) {
+      // Les deux graphies de racine rencontrées dans le parc : la convention du système
+      // d'intégration (`azure-pipelines*.yml`) et le fichier nommé d'après son travail
+      // (`…veille.yml`, `…planifie.yml`). Ce qui est rangé ailleurs est déclaré au non_juge.
+      if (/^azure-pipelines.*\.ya?ml$/i.test(nom)
+        || /^[a-z0-9._-]*(veille|planifie|scheduled|cron)[a-z0-9._-]*\.ya?ml$/i.test(nom))
+        candidats.push(path.join(cible, nom));
+    }
+  }
+
+  let planifiees = 0;
+  for (const f of candidats) {
+    const texte = fs.readFileSync(f, "utf8");
+    const ou = path.relative(cible, f).split(path.sep).join("/");
+    // Une planification se reconnaît à son cron. Les deux dialectes du parc l'écrivent pareil :
+    // `- cron: "..."` sous `schedules:` (Azure) ou sous `on: schedule:` (GitHub).
+    if (!/^\s*-?\s*cron\s*:/m.test(texte)) continue;
+    planifiees++;
+    const dispatch = /^\s*workflow_dispatch\s*:/m.test(texte);
+    // Un paramètre n'est un mode d'exercice que s'il est LU. Déclaré et jamais lu, il donne la
+    // même impression qu'un vrai bouton et ne fait rien : c'est la première loi transverse.
+    const declares = [...texte.matchAll(/^\s*-\s*name\s*:\s*([A-Za-z0-9_]+)\s*$/gm)].map((m) => m[1]);
+    const lus = declares.filter((n) => new RegExp("parameters\\." + n + "\\b").test(texte));
+    if (dispatch || lus.length) {
+      // La cadence reste la cadence : un mode d'exercice qui la REMPLACE n'exerce pas le même
+      // travail. On ne le juge pas — on ne saurait pas le lire — mais on le dit au non_juge.
+      const exerce = /^\s*#\s*exerce_le\s*:\s*(\d{4}-\d{2}-\d{2})/m.exec(texte);
+      if (!exerce)
+        add("info", "O8", `mode d'exercice câblé, mais AUCUN exercice déclaré : ajouter « # exerce_le: AAAA-MM-JJ » le jour où le passage forcé a réellement tourné. Sans lui, « en place » reste une intention — le premier passage réel aura lieu à la prochaine cadence, au moment précis où l'on compte dessus`, ou);
+      else
+        add("info", "O8", `mode d'exercice câblé et exercé le ${exerce[1]}`, ou);
+      continue;
+    }
+    if (declares.length && !lus.length)
+      add("bloquant", "O8", `définition planifiée dont le seul paramètre déclaré n'est JAMAIS LU (${declares.join(", ")}) : l'affordance existe à l'écran et ne fait rien — une affordance est câblée ou elle n'existe pas (loi n° 1). Lire le paramètre dans la garde de cadence, sinon le passage forcé ne fera rien de plus que le passage hors cadence`, ou);
+    else
+      add("bloquant", "O8", `définition planifiée SANS mode d'exercice à la demande : elle ne peut être éprouvée qu'à sa prochaine cadence, donc elle se découvrira cassée au moment où l'on compte dessus. Ajouter un déclencheur manuel (workflow_dispatch) ou un paramètre d'exécution forcée LU dans la garde de cadence — distinct de la cadence, qui ne change pas`, ou);
+  }
+  if (!planifiees) { add("info", "O8", `aucune définition planifiée parmi ${candidats.length} fichier(s) aux emplacements connus — rien à juger`, path.basename(String(cible))); fin8("SKIP", 2); }
+  const durs8 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin8(durs8.length ? "FAIL" : "PASS", durs8.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

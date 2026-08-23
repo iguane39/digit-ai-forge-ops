@@ -111,6 +111,18 @@ obligatoire, aucun défaut implicite). Verdicts : `stable` (exit 0) ·
 `rollback_recommande` (exit 1) · `donnees_insuffisantes` (exit 2). **Ne déclenche jamais de
 rollback** — la bascule arrière reste un geste humain via `ops.mjs restaurer`.
 
+## Un travail planifié s'exerce (O-8, TF-0527)
+
+`node oracles/oracle-ops.mjs <racine> --planifie` — toute définition planifiée du dépôt
+(`.github/workflows/`, `azure-pipelines*.yml`, `pipelines/`) doit porter un **mode d'exercice à la
+demande**, distinct de sa cadence : un déclencheur manuel, ou un paramètre d'exécution forcée
+**lu** dans la garde de cadence. Sans lui, le mécanisme ne peut être éprouvé qu'à sa prochaine
+échéance — donc il se découvre cassé au moment précis où l'on compte dessus. Un paramètre déclaré
+et jamais lu affiche une case à cocher qui ne fait rien : même verdict qu'un paramètre absent.
+
+Les faits d'exploitation constatés (comportements d'outils tiers qu'aucune documentation n'énonce)
+vivent dans `references/GESTES-EXPLOITATION.md`, datés et sourcés.
+
 ## Frontières
 
 Voir [CLAUDE.md](CLAUDE.md) — la forge outille, le pilot orchestre, l'humain donne le GO.

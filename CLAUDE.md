@@ -95,8 +95,29 @@ findings,non_juge}`, exit 0/1/2 :
   d'empreinte (déploiement antérieur au contrôle, ou passé hors `ops.mjs` — le seul trou
   qui reste : un déploiement fait hors ops, pas via `deployer`/`canary`).
 
+- **O8** `<racine> --planifie` (TF-0527) : toute définition **planifiée** du dépôt porte un
+  **mode d'exercice à la demande**, câblé et distinct de sa cadence. Mesure fondatrice : une
+  veille mensuelle déclarée « en place » dont le premier passage a rendu « rien à faire » **en
+  succès** — pas une ligne n'avait tourné sur un agent, et le premier passage réel aurait eu lieu
+  quinze jours plus tard, au moment où l'on compte dessus. Un paramètre **déclaré mais jamais lu**
+  est jugé aussi durement qu'un paramètre absent : une affordance est câblée ou elle n'existe pas.
+  L'oracle lit des définitions, jamais un historique — `# exerce_le: AAAA-MM-JJ` déclare l'exercice
+  et reste un avertissement, jamais un FAIL rétroactif.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
-supervision continue · secrets/config d'environnement (jamais transportés par la forge).
+supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
+l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les
+planifications posées hors dépôt (interface web, tâche planifiée d'un serveur).
+
+## Gestes d'exploitation constatés — `references/GESTES-EXPLOITATION.md`
+
+Les **faits du monde** rencontrés en exploitation, qu'aucune documentation d'éditeur n'énonce et
+qui se re-paient à chaque redécouverte : datés, sourcés, mesurés (loi n° 4). À LIRE avant de
+conclure qu'un geste est impossible — conclure trop vite renvoie le sujet à l'humain sans raison.
+Deux entrées au 23/08/2026 : une instance d'approbation **fige** la contrainte de séparation des
+rôles à sa création (relâcher le réglage ne débloque que les instances futures : annuler puis
+relancer, et remettre le réglage), et un travail planifié s'**exerce** avant d'être déclaré en
+place. Une entrée non mesurée n'y entre pas.
 
 ## Verdict « rollback recommandé » (v0 — TF-0107, recommandation seule)
 
