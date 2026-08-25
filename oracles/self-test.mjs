@@ -513,6 +513,26 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
     "cible introuvable : l'oracle rend quand meme un verdict, le scellement ne le bloque pas");
 }
 
+
+// ── O9 (TF-0607, 25/08) : UNE SOURCE DE VERITE DIT COMMENT ON S'Y AUTHENTIFIE ──────────────
+// Le fait : un document donnait « deploiement via <commande> » et rien d'autre — ni variable,
+// ni emplacement du justificatif, ni voie de repli. Et il declarait des `sources_de_verite`
+// dont une commande d'etat qui, non authentifiee, rend « Unauthorized » : une sortie qu'un
+// lecteur prend pour un fait sur l'infrastructure alors qu'elle parle de SA PROPRE SESSION.
+// Les deux fixtures portent LES MEMES sources : seul le champ `authentification` les separe.
+{
+  const o9 = f => { const r = (() => { try { return JSON.parse(run(oracle, [f, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { findings: [] }; } } })();
+    return (r.findings || []).some(x => x.regle === "O9"); };
+  const dir = path.join(ici, "..", "fixtures", "o9-sources-de-verite");
+  ok(o9(path.join(dir, "sans-authentification.md")),
+    "O9 : des sources de verite sans mode d'authentification -> constat");
+  ok(!o9(path.join(dir, "avec-authentification.md")),
+    "O9 : memes sources AVEC le champ authentification -> aucun constat (seul le champ les separe)");
+  ok(!o9(path.join(ici, "self-test.mjs")),
+    "O9 borne : un fichier sans frontmatter `sources_de_verite` n'est pas concerne");
+}
+
 fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);
