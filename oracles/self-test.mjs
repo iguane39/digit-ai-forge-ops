@@ -533,6 +533,20 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
     "O9 borne : un fichier sans frontmatter `sources_de_verite` n'est pas concerne");
 }
 
+// G-03 (TF-0611/0613/0610, 25/08) — LES DEUX JUGES DE LA MIGRATION DNS. Leur recette vit dans
+// l'outil lui-meme (`--self-test`, 17 cas, les deux sens sur les trois regles) ; elle est REJOUEE
+// ici pour que l'invariant du depot la couvre — un controle que la recette du depot ne joue pas
+// est un controle qu'on peut oublier de brancher, et c'est exactement la classe que TF-0583 nomme.
+{
+  const outil = path.join(ici, '..', 'scripts', 'verifier-migration-dns.mjs');
+  let sortie = '';
+  // `run` ajoute deja l'interpreteur : le passer une seconde fois lancait node sur node.
+  try { sortie = run(outil, ['--self-test']); }
+  catch (e) { sortie = String(e.stdout || '') + String(e.stderr || ''); }
+  const m = sortie.match(/Recette verifier-migration-dns : (\d+)\/(\d+)/);
+  ok(!!m && m[1] === m[2], `verifier-migration-dns : recette entierement verte (${m ? m[0] : 'sortie illisible'})`);
+}
+
 fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);
