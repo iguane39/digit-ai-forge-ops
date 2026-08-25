@@ -473,6 +473,46 @@ fs.writeFileSync(path.join(rGhSans, ".github", "workflows", "veille.yml"),
   ["on:", "  schedule:", '    - cron: "7 7 1-7 * 1"', "jobs:", "  veille:", "    runs-on: ubuntu-latest"].join("\n") + "\n", "utf8");
 ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur manuel → FAIL (le sens rouge du même dialecte)");
 
+
+// ── TF-0579 (25/08) : LE VERDICT S'ARCHIVE ET DIT SON REGIME ───────────────────────────────
+// Le fait : un gate de MEP est reste ROUGE SIX JOURS pendant que le deploiement avait lieu.
+// `git log -S` sur la ligne fautive ne rend AUCUN COMMIT — personne ne l'a ajustee et personne
+// n'a ete arrete. Sans verdict horodate et archive, « les gates sont passes » est une
+// affirmation invérifiable ; sans regime declare, un gate dont l'echec n'empeche rien n'est
+// pas un gate, c'est un avis.
+{
+  const dJ = fs.mkdtempSync(path.join(base, "scel-"));
+  fs.writeFileSync(path.join(dJ, "app.txt"), "release");
+  const lire = () => { try { return JSON.parse(run(oracle, [dJ, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return null; } } };
+  const v1 = lire();
+  ok(!!(v1 && v1.scellement && v1.scellement.archive === true),
+    "le verdict est ARCHIVE — sans trace, « les gates sont passes » est invérifiable");
+  const journal = path.join(dJ, ".ops-journal.jsonl");
+  const lignesJ = fs.existsSync(journal)
+    ? fs.readFileSync(journal, "utf8").split(/\r?\n/).filter(Boolean).map(JSON.parse) : [];
+  ok(lignesJ.length === 1, `une ligne de journal par execution (obtenu ${lignesJ.length})`);
+  const e = lignesJ[0] || {};
+  ok(typeof e.ts === "string" && /^\d{4}-/.test(e.ts), "le verdict archive est HORODATE");
+  ok(!!(e.empreinte && e.empreinte.fichiers && Object.keys(e.empreinte.fichiers).length),
+    "le verdict dit SUR QUOI il a ete rendu — sans empreinte, il vieillit en silence");
+  ok(Array.isArray(e.regles) && e.regles.every(r => r.regime === "bloque" || r.regime === "consultatif"),
+    "CHAQUE regle dit son regime — bloque ou consultatif, jamais implicite");
+  lire();
+  const apres = fs.readFileSync(journal, "utf8").split(/\r?\n/).filter(Boolean).length;
+  ok(apres === 2, `le journal S'AJOUTE, il n'ecrase pas (obtenu ${apres} ligne(s))`);
+}
+
+// BORNE — un journal qu'on ne peut pas ecrire ne doit JAMAIS empecher un deploiement : il se
+// declare et l'oracle rend quand meme son verdict. Un scellement qui bloque serait un gate de
+// plus, non decide, et exactement le contraire de ce que TF-0579 demande.
+{
+  const v = (() => { try { return JSON.parse(run(oracle, [path.join(base, "absent-xyz"), "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return null; } } })();
+  ok(!!v && typeof v.verdict === "string",
+    "cible introuvable : l'oracle rend quand meme un verdict, le scellement ne le bloque pas");
+}
+
 fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

@@ -335,10 +335,80 @@ if (mesuresPath) {
   });
 }
 
+// ── TF-0579 (lot AuxPortesDeLaBaie 20260824) : LE VERDICT S'ARCHIVE ET DIT SON REGIME ──────
+//
+// LE FAIT, verifie a l'historique git. Un smoke de MEP controlait la presence d'un chemin de
+// feuille de style par egalite stricte. Un correctif de cache a versionne les feuilles par
+// empreinte : le chemin nu n'existe plus. `git log -S` sur cette ligne ne rend AUCUN COMMIT —
+// personne ne l'a ajustee, et personne n'a ete arrete. Le gate est donc reste ROUGE SIX JOURS
+// pendant que le deploiement avait lieu : soit il n'a pas ete rejoue, soit son echec a ete
+// ignore. Dans les deux cas, un gate dont l'echec n'empeche rien n'est pas un gate, c'est un avis.
+//
+// DEUX MANQUES, et le second explique le premier :
+//  (a) AUCUNE TRACE. Sans verdict horodate et archive, « les gates sont passes » est une
+//      affirmation invérifiable — exactement ce qu'un audit reproche a un fournisseur.
+//  (b) LE REGIME N'ETAIT PAS DIT. Les severites existaient dans le code (bloquant / majeur /
+//      info) mais le verdict ne disait pas QUELLES regles bloquent. C'est le melange des deux
+//      regimes sans le dire qui a permis de passer outre sans qu'aucune decision soit prise.
+//
+// Ce qui suit archive chaque verdict avec son horodatage, l'empreinte de ce qu'il a juge, et le
+// regime de chaque regle. L'archivage ne bloque JAMAIS : un journal qu'on ne peut pas ecrire
+// (disque plein, droits) ne doit pas empecher un deploiement — il se declare et on continue.
+const REGIME = { bloquant: "bloque", majeur: "bloque", info: "consultatif" };
+
+function empreinteCible(chemin) {
+  try {
+    const st = fs.statSync(chemin);
+    if (st.isFile()) {
+      return { [path.basename(chemin)]: createHash("sha256").update(fs.readFileSync(chemin)).digest("hex") };
+    }
+    const out = {};
+    for (const f of fs.readdirSync(chemin)) {
+      const p = path.join(chemin, f);
+      try {
+        if (fs.statSync(p).isFile()) out[f] = createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+      } catch { /* illisible : absent de l'empreinte plutot que faux */ }
+    }
+    return out;
+  } catch { return null; }
+}
+
+function archiver(verdict, code) {
+  if (!cible) return { archive: false, motif: "aucune cible — rien a sceller" };
+  let dossier;
+  try { dossier = fs.statSync(cible).isDirectory() ? cible : path.dirname(cible); }
+  catch { return { archive: false, motif: "cible illisible" }; }
+  const journal = path.join(dossier, ".ops-journal.jsonl");
+  const empreinte = empreinteCible(cible);
+  const ligne = {
+    format: "forge-ops/verdict@1",
+    ts: new Date().toISOString(),
+    cible: String(cible),
+    verdict,
+    exit: code,
+    // (b) : le regime de CHAQUE regle qui a parle. « bloque » ou « consultatif », jamais implicite.
+    regles: F.map(f => ({ regle: f.regle, sev: f.sev, regime: REGIME[f.sev] || "consultatif" })),
+    bloquants: F.filter(f => REGIME[f.sev] === "bloque").length,
+    consultatifs: F.filter(f => REGIME[f.sev] !== "bloque").length,
+    // (a) : sur QUOI le verdict a ete rendu — sans quoi il vieillit en silence (meme motif que TF-0478).
+    empreinte: empreinte ? { format: "forge-ops/empreinte@1", release: String(cible), fichiers: empreinte } : null,
+  };
+  try {
+    fs.appendFileSync(journal, JSON.stringify(ligne) + "\n", "utf8");
+    return { archive: true, journal, bloquants: ligne.bloquants, consultatifs: ligne.consultatifs };
+  } catch (e) {
+    // Un journal qu'on ne peut pas ecrire ne doit pas empecher un deploiement — il se DIT.
+    return { archive: false, motif: `journal non ecrit : ${String(e.message).slice(0, 80)}` };
+  }
+}
+
 function sortir(verdict, code) {
   process.stdout.write(JSON.stringify({
     oracle: "oracle-ops", domaine: DOM, artefact: cible || null,
     verdict, findings: F.length ? F : [{ sev: "info", regle: "—", msg: "O1–O4 sans écart", where: cible }],
+    // TF-0579 : le verdict DIT desormais son regime et OU il est archive. Un gate dont on ne
+    // sait pas s'il bloque est un avis ; un verdict sans trace est invérifiable.
+    scellement: archiver(verdict, code),
     non_juge: NON_JUGE,
   }, null, jsonOnly ? 0 : 2));
   process.exit(code);
