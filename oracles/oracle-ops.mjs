@@ -335,6 +335,35 @@ if (mesuresPath) {
   });
 }
 
+// ── O9 · TF-0607 (lot AuxPortesDeLaBaie 20260824) : UNE SOURCE DE VERITE DIT COMMENT ON S'Y
+// AUTHENTIFIE ──────────────────────────────────────────────────────────────────────────────────
+//
+// LE FAIT, verifie sur tout un depot. Un document d'exploitation donnait pour la production
+// « deploiement via <commande> » — et rien d'autre : ni la variable d'environnement attendue, ni
+// OU vit le justificatif, ni la voie de repli quand la session expire. Recherche exhaustive :
+// AUCUN fichier du depot ne nommait le jeton d'API ni le point d'entree alternatif. La procedure
+// documentee se reduisait donc a une commande qui echoue, avec rien derriere.
+//
+// PIRE, ET C'EST LE PIEGE : le meme document declarait en frontmatter ses `sources_de_verite`,
+// dont une commande d'etat. Non authentifiee, cette commande rend « Unauthorized » — une sortie
+// qu'un lecteur prend pour UN FAIT SUR L'INFRASTRUCTURE alors qu'elle est un fait sur SA PROPRE
+// SESSION. Une source de verite dont le document ne dit pas comment l'authentifier n'est pas
+// opposable, et sa sortie d'erreur se lit comme un constat.
+//
+// CE QUI EST JUGE : la PRESENCE du champ, jamais sa justesse — « un oracle peut dire que le champ
+// manque, jamais qu'il est juste », comme les six champs du cadrage design. Declarer
+// `authentification: aucune` est GRATUIT et suffit : meme patron que R-45 et R-49, l'omission ne
+// vaut pas decision mais l'aveu, lui, est honnete et se date.
+function jugerSourcesDeVerite(chemin) {
+  let texte;
+  try { texte = fs.readFileSync(chemin, "utf8"); } catch { return null; }
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(texte);
+  if (!fm) return null;
+  if (!/^sources_de_verite\s*:/m.test(fm[1])) return null;
+  const declare = /^authentification\s*:\s*\S/m.test(fm[1]);
+  return { declare, fm: fm[1] };
+}
+
 // ── TF-0579 (lot AuxPortesDeLaBaie 20260824) : LE VERDICT S'ARCHIVE ET DIT SON REGIME ──────
 //
 // LE FAIT, verifie a l'historique git. Un smoke de MEP controlait la presence d'un chemin de
@@ -412,6 +441,23 @@ function sortir(verdict, code) {
     non_juge: NON_JUGE,
   }, null, jsonOnly ? 0 : 2));
   process.exit(code);
+}
+
+// O9 — si la cible est un document portant des `sources_de_verite`, elles disent comment on s'y
+// authentifie. Un document sans ce frontmatter n'est pas concerne : la regle ne s'invente pas
+// une cible.
+if (cible && fs.existsSync(cible)) {
+  try {
+    if (fs.statSync(cible).isFile() && /\.md$/i.test(cible)) {
+      const sv = jugerSourcesDeVerite(cible);
+      if (sv && !sv.declare) {
+        add("majeur", "O9", "des `sources_de_verite` sont declarees sans dire COMMENT on s'y authentifie — "
+          + "une commande non authentifiee rend une erreur qu'un lecteur prend pour un fait sur l'infrastructure, "
+          + "alors qu'elle est un fait sur sa propre session. Ajouter `authentification:` au frontmatter — "
+          + "`authentification: aucune` suffit et est gratuit (TF-0607)", cible);
+      }
+    }
+  } catch { /* cible illisible : O9 se tait plutot que d'accuser */ }
 }
 
 if (!cible || !fs.existsSync(cible)) { add("info", "—", "cible introuvable", String(cible)); sortir("SKIP", 2); }
