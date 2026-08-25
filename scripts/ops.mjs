@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { hacherFichier } from "./lib-empreinte.mjs";
 
 const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation"];
 
@@ -79,9 +80,9 @@ function listerFichiers(dir, base = dir, acc = []) {
   return acc;
 }
 
-function hacherFichier(p) {
-  return createHash("sha256").update(fs.readFileSync(p)).digest("hex");
-}
+// TF-0615 : le hachage vit dans `scripts/lib-empreinte.mjs` — normalise un fichier TEXTE, laisse
+// un BINAIRE brut. Un repertoire de release contient les deux, et normaliser un binaire serait un
+// defaut : deux binaires ne differant que par une paire CR-LF deviendraient indiscernables.
 
 function scellerEmpreinte(cible, release, releaseDir) {
   const fichiers = {};
