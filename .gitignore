@@ -8,3 +8,8 @@
 *.oracles-historique.jsonl
 !forge/**/*.oracles.json
 !forge/**/*.oracles-historique.jsonl
+
+# TF-0579 : journaux de verdicts ops, ecrits a cote de la cible jugee. Ce sont des traces
+# locales de mesure, pas des preuves versionnees — les versionner salirait le depot a chaque
+# execution de l oracle sur un de ses propres fichiers (constate le 25/08, sur ce commit meme).
+.ops-journal.jsonl
