@@ -25,6 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { correspond, hacherFichier } from "../scripts/lib-empreinte.mjs";
 
 const DOM = "Exploitation : cible déployée saine et restaurable";
 const NON_JUGE = [
@@ -182,8 +183,11 @@ if (args.includes("--empreinte")) {
   for (const [rel, hachAttendu] of Object.entries(attendus)) {
     const p = path.join(releaseDir7, rel);
     if (!fs.existsSync(p)) { add("bloquant", "O7", `fichier supprimé après scellement : ${rel}`, rel); continue; }
-    const hachActuel = createHash("sha256").update(fs.readFileSync(p)).digest("hex");
-    if (hachActuel !== hachAttendu) add("bloquant", "O7", `fichier modifié après scellement : ${rel} (haché actuel ≠ empreinte)`, rel);
+    // TF-0615 : `correspond` accepte la forme NORMALISEE (celle ecrite depuis le 25/08) ET la
+    // forme BRUTE (releases scellees avant). Sans cette tolerance, la correction ferait echouer
+    // d'un coup toutes les releases deja scellees : un faux rouge echange contre un autre. Une
+    // VRAIE modification ne correspond ni a l'une ni a l'autre, donc O7 garde ses dents.
+    if (!correspond(p, hachAttendu)) add("bloquant", "O7", `fichier modifié après scellement : ${rel} (haché actuel ≠ empreinte)`, rel);
   }
   for (const rel of surDisque)
     if (!(rel in attendus)) add("majeur", "O7", `fichier présent mais absent de l'empreinte scellée : ${rel}`, rel);
@@ -389,13 +393,13 @@ function empreinteCible(chemin) {
   try {
     const st = fs.statSync(chemin);
     if (st.isFile()) {
-      return { [path.basename(chemin)]: createHash("sha256").update(fs.readFileSync(chemin)).digest("hex") };
+      return { [path.basename(chemin)]: hacherFichier(chemin) };   // TF-0615 : fonction partagee
     }
     const out = {};
     for (const f of fs.readdirSync(chemin)) {
       const p = path.join(chemin, f);
       try {
-        if (fs.statSync(p).isFile()) out[f] = createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+        if (fs.statSync(p).isFile()) out[f] = hacherFichier(p);   // TF-0615 : fonction partagee
       } catch { /* illisible : absent de l'empreinte plutot que faux */ }
     }
     return out;
