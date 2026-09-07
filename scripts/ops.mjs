@@ -347,6 +347,63 @@ const PLANS = {
   },
 };
 
+// ── PRODUITS DATA (TF-0865, lot L8 de l'étude d'opportunité du pilot du 07/09/2026) ──
+// Deux cibles de plan pour un produit data : un bundle déclaratif Databricks (Databricks
+// Asset Bundles, disponibilité générale 2024-04 — le déploiement est un fichier de
+// configuration validable HORS LIGNE) et un espace de travail Power BI alimenté par un projet
+// PBIP versionné (promotion développement → test → production). Même doctrine que les cibles
+// cloud : plan-first, quatre phases, retour arrière réel, zéro credential ; et une règle de
+// plus, R-38 du pilot : la PUBLICATION sur le service est conditionnée au GO humain, le plan
+// le dit dans sa phase de déploiement au lieu de le supposer.
+PLANS["databricks-bundle"] = {
+  service: "Databricks — bundle déclaratif (jobs, pipelines, notebooks, en tant qu'unité versionnée)",
+  fiche: "experts-forge/fiches/expert-data-platform-cloud.md",
+  placeholders: ["<CIBLE_BUNDLE>", "<PROFIL_CLI>", "<HOTE_WORKSPACE>", "<CATALOGUE>", "<JOB_SMOKE>", "<REF_GIT_PRECEDENTE>"],
+  provision: [
+    "databricks auth profiles   # identite de deploiement lue depuis le profil <PROFIL_CLI> du CLI — jamais un jeton dans le plan",
+    "verifier databricks.yml : une cible par environnement (<CIBLE_BUNDLE> = dev | qualif | prod), workspace.host=<HOTE_WORKSPACE> et catalogue <CATALOGUE> DISTINCTS par cible — deux workspaces d'un meme groupe portent les memes noms de catalogues par construction (REX X13, T7 de forge-data) : le OU se declare dans la cible, jamais deduit du nom",
+    "databricks bundle validate -t <CIBLE_BUNDLE> --profile <PROFIL_CLI>   # validation HORS LIGNE du bundle : schema, variables, references — exit 0 exige avant tout deploiement",
+  ],
+  deploiement: [
+    "databricks bundle deploy -t <CIBLE_BUNDLE> --profile <PROFIL_CLI>   # applique jobs/pipelines/notebooks comme une unite versionnee (git rev enregistre par le bundle)",
+    "databricks bundle summary -t <CIBLE_BUNDLE> --profile <PROFIL_CLI>   # ressources deployees, avec leurs identifiants — a archiver au dossier de MEP",
+  ],
+  healthcheck: [
+    "databricks bundle run <JOB_SMOKE> -t <CIBLE_BUNDLE> --profile <PROFIL_CLI>   # health : le job de fumee (lecture Gold + oracle-reconcilier sur un lot archive) termine SUCCESS",
+    "python mesurer_base.py sante-gold \"SELECT COUNT(*) FROM <CATALOGUE>.gold.fct_ventes\"   # sante de la couche servie : compte non nul, cible archivee (forge-data cat-dat-08)",
+  ],
+  rollback: [
+    "git checkout <REF_GIT_PRECEDENTE> -- databricks.yml resources/   # le bundle precedent est une reference git, pas un souvenir",
+    "databricks bundle deploy -t <CIBLE_BUNDLE> --profile <PROFIL_CLI>   # redeploie l'unite precedente a l'identique (retour arriere reel, jamais `bundle destroy` sur une cible partagee)",
+    "databricks bundle run <JOB_SMOKE> -t <CIBLE_BUNDLE> --profile <PROFIL_CLI>   # re-verification apres retour",
+  ],
+};
+PLANS["powerbi-workspace"] = {
+  service: "Power BI — espace de travail alimente par un projet PBIP versionne (modele semantique TMDL + rapports PBIR)",
+  fiche: "digit-ai-forge-audit/profiles/powerbi/README.md (profil Power BI, 10 controles) — aucune fiche expert dediee au 07/09/2026",
+  placeholders: ["<ESPACE_DEV>", "<ESPACE_TEST>", "<ESPACE_PROD>", "<PROJET_PBIP>", "<MODELE>", "<RAPPORT>", "<COMMIT_PRECEDENT>"],
+  provision: [
+    "fab auth login   # identite de publication : compte de service Fabric/Power BI, jamais un jeton dans le plan",
+    "verifier que le projet <PROJET_PBIP> est en formats texte (dossiers <MODELE>.SemanticModel/definition en TMDL et <RAPPORT>.Report en PBIR) et versionne — un PBIX binaire ne se juge ni ne se promeut",
+    "node verifier-modele-semantique.mjs --modele <PROJET_PBIP>/<MODELE>.SemanticModel/definition   # forge-audit MS1-MS6 : exit 0 exige avant toute publication",
+    "fab ls <ESPACE_DEV>.Workspace   # les trois espaces (dev, test, prod) existent et sont DISTINCTS : la promotion est un mouvement entre espaces, jamais une publication directe en prod",
+  ],
+  deploiement: [
+    "fab import <ESPACE_DEV>.Workspace/<MODELE>.SemanticModel -i <PROJET_PBIP>/<MODELE>.SemanticModel   # publication du modele dans l'espace de developpement",
+    "fab import <ESPACE_DEV>.Workspace/<RAPPORT>.Report -i <PROJET_PBIP>/<RAPPORT>.Report   # publication du rapport, lie au modele",
+    "promotion <ESPACE_DEV> -> <ESPACE_TEST> -> <ESPACE_PROD> par pipeline de deploiement du service, chaque etape apres son healthcheck ; l'etape vers <ESPACE_PROD> exige le GO humain consigne au dossier de MEP (R-38 : aucune publication sur un service heberge sans GO)",
+  ],
+  healthcheck: [
+    "fab job run <ESPACE_DEV>.Workspace/<MODELE>.SemanticModel --type Refresh   # health : le rafraichissement du modele termine sans erreur",
+    "node oracle-reconcilier.mjs <lot-reconciliation.json>   # sante des chiffres : mesures du modele publie reconciliees avec Gold sous tolerance (forge-data RC1-RC6)",
+  ],
+  rollback: [
+    "git checkout <COMMIT_PRECEDENT> -- <PROJET_PBIP>/   # le projet precedent est un commit, pas un PBIX conserve quelque part",
+    "fab import <ESPACE_PROD>.Workspace/<MODELE>.SemanticModel -i <PROJET_PBIP>/<MODELE>.SemanticModel   # re-publication a l'identique de la version precedente (retour arriere reel)",
+    "fab job run <ESPACE_PROD>.Workspace/<MODELE>.SemanticModel --type Refresh   # re-verification apres retour",
+  ],
+};
+
 function plan(cible, build, sortie) {
   const p = PLANS[cible];
   if (!p) fail(`cible inconnue « ${cible} » — cibles connues : ${Object.keys(PLANS).join(", ")}`);

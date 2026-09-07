@@ -39,6 +39,7 @@ node scripts/ops.mjs etat <cible>
 node oracles/oracle-ops.mjs <cible> [--json-only]
 
 # Plan cloud déterministe (railway | gcp | azure | aws) — génère, n'exécute jamais
+# Plan d'un PRODUIT DATA (databricks-bundle | powerbi-workspace) — même doctrine, publication sur GO humain (TF-0865)
 node scripts/ops.mjs plan <cible> <build> --sortie plan.json
 node oracles/oracle-ops.mjs --plan plan.json   # O-5 : 4 phases, rollback réel, zéro credential
 

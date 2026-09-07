@@ -69,7 +69,9 @@ if (planPath) {
   if (!fs.existsSync(planPath)) { add("info", "O5", "plan introuvable", String(planPath)); fin5("SKIP", 2); }
   let p = null;
   try { p = JSON.parse(fs.readFileSync(planPath, "utf8")); } catch { add("bloquant", "O5", "JSON invalide", planPath); fin5("FAIL", 1); }
-  const CLI = { railway: "railway", gcp: "gcloud", azure: "az ", aws: "aws " };
+  // TF-0865 : deux cibles de produit data — bundle déclaratif Databricks (CLI `databricks bundle`)
+  // et espace de travail Power BI alimenté par un projet PBIP (CLI Fabric `fab`).
+  const CLI = { railway: "railway", gcp: "gcloud", azure: "az ", aws: "aws ", "databricks-bundle": "databricks bundle", "powerbi-workspace": "fab " };
   if (p.format !== "forge-ops/plan@1") add("bloquant", "O5", `format inconnu « ${p.format} » (attendu forge-ops/plan@1)`, planPath);
   if (!CLI[p.cible]) add("bloquant", "O5", `cible inconnue « ${p.cible} »`, planPath);
   for (const ph of ["provision", "deploiement", "healthcheck", "rollback"]) {

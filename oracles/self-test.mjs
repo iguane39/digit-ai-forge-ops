@@ -123,7 +123,9 @@ const verdictPlan = (fichier) => {
   try { return JSON.parse(run(oracle, ["--plan", fichier, "--json-only"])).verdict; }
   catch (e) { try { return JSON.parse(String(e.stdout)).verdict; } catch { return "ILLISIBLE"; } }
 };
-for (const cible of ["railway", "gcp", "azure", "aws"]) {
+// TF-0865 (lot L8, 07/09/2026) : deux cibles de produit data rejoignent la boucle — bundle
+// déclaratif Databricks et espace de travail Power BI — mêmes exigences O-5 que les cibles cloud.
+for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace"]) {
   const pf = path.join(base, `plan-${cible}.json`);
   run(ops, ["plan", cible, fx("app-verte"), "--sortie", pf]);
   const p = JSON.parse(fs.readFileSync(pf, "utf8"));
