@@ -76,14 +76,20 @@ node oracles/self-test.mjs
 - Un healthcheck en échec laisse `COURANT` intact : **jamais de bascule sur release malade**.
 - Types d'événements du journal : `deploiement` · `deploiement_refuse` · `restauration` ·
   `canary_etape` · `canary_promotion` · `canary_annulation`.
+- **Cible tenue par une plateforme externe (TF-0844)** : une cible déployée par `plan`
+  (railway, gcp, azure, aws...) ne porte NI `COURANT` NI `journal.jsonl` — la plateforme les
+  tient elle-même. Déclarer un fichier `<cible>/PLATEFORME` (texte, ex. `railway`) pour que
+  `oracle-ops.mjs` rende O1/O3 **SANS_OBJET** au lieu d'un FAIL à tort ; sans ce fichier,
+  l'absence de `COURANT`/`journal.jsonl` reste jugée comme avant (l'oubli n'existe pas — la
+  déclaration est explicite, jamais déduite du nom du dossier).
 
 ## Oracles
 
 | Règle | Contrôle |
 |---|---|
-| O1 | `COURANT` pointe une release existante |
+| O1 | `COURANT` pointe une release existante (SANS_OBJET si la cible porte `PLATEFORME` — pointeur tenu par une plateforme externe, ex. railway, TF-0844) |
 | O2 | la release courante repasse son healthcheck (exécution réelle) |
-| O3 | journal intègre : JSON valide, seq strictement croissant depuis 1, types connus |
+| O3 | journal intègre : JSON valide, seq strictement croissant depuis 1, types connus (même SANS_OBJET que O1 si `PLATEFORME` est déclaré, TF-0844) |
 | O4 | rollback prouvable : aucune release citée au journal n'est purgée ; pointeur ↔ histoire cohérents |
 | O5 | `--plan <fichier>` : plan cloud complet (4 phases, rollback réel, zéro credential) |
 | O6 | `--drift <fichier> <cible>` : état déclaré (`etat --sortie`) vs constaté — journal tronqué/réécrit, déploiement furtif |

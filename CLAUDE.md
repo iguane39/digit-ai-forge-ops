@@ -73,13 +73,20 @@ Healthcheck : si la release contient `sante.mjs`, il est exécuté (`node sante.
 exit 0 = sain). Sans `sante.mjs`, le déploiement est refusé — une app sans contrat de
 santé n'est pas exploitable (l'oubli n'existe pas).
 
+**Cible tenue par une plateforme externe (TF-0844).** Une cible déployée via `plan`
+(railway, gcp, azure, aws...) ne porte ni `COURANT` ni `journal.jsonl` : la plateforme les
+tient elle-même. Déclarer `<cible>/PLATEFORME` (texte, ex. `railway`) rend O1/O3
+**SANS_OBJET** au lieu d'un FAIL à tort sur un déploiement sain et restauré — déclaration
+explicite seulement, jamais déduite du nom du dossier (l'oubli n'existe pas).
+
 ## Oracles (verdicts consommés par la MEP)
 
 `node oracles/oracle-ops.mjs <cible>` — contrat JSON `{oracle,domaine,artefact,verdict,
 findings,non_juge}`, exit 0/1/2 :
-- **O1** `COURANT` pointe une release existante ;
+- **O1** `COURANT` pointe une release existante (SANS_OBJET si `PLATEFORME` est déclaré, TF-0844) ;
 - **O2** la release courante repasse son healthcheck (exécution réelle) ;
-- **O3** journal intègre (seq strictement croissant depuis 1, types connus) ;
+- **O3** journal intègre (seq strictement croissant depuis 1, types connus ; même SANS_OBJET
+  que O1 si `PLATEFORME` est déclaré, TF-0844) ;
 - **O4** rollback prouvable : la release précédente existe encore et le journal est
   cohérent avec `COURANT`.
 - **O5** `--plan <fichier>` : plan cloud complet (4 phases, rollback réel, zéro credential).

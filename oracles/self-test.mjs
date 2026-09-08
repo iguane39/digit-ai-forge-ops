@@ -83,6 +83,30 @@ fs.cpSync(cible, c3, { recursive: true });
 fs.writeFileSync(path.join(c3, "COURANT"), "release-inexistante", "utf8");
 ok(verdict(c3) === "FAIL", "COURANT fantôme → oracle FAIL");
 
+// ── O1/O3 · CIBLE PLATEFORME (TF-0844, lot Produit-61 20260905a) ───────────────────────
+// FAIT : une cible railway (ou tout plan cloud) ne porte ni COURANT ni journal.jsonl — la
+// plateforme les tient. Sans déclaration explicite, O1/O3 FAILaient à tort sur un
+// déploiement RÉEL et SAIN (M-4 PASS côté pilot). Avec le marqueur PLATEFORME : SANS_OBJET.
+const verdictJSON = c => { try { return JSON.parse(run(oracle, [c, "--json-only"])); }
+  catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+
+// VERTE · cible avec PLATEFORME déclarée → SKIP, jamais un FAIL sur un contrat qu'elle ne porte pas
+const ciblePlateforme = path.join(base, "cible-railway-qualif");
+fs.mkdirSync(ciblePlateforme, { recursive: true });
+fs.writeFileSync(path.join(ciblePlateforme, "PLATEFORME"), "railway", "utf8");
+const rPlateforme = verdictJSON(ciblePlateforme);
+ok(rPlateforme.verdict === "SKIP", `cible PLATEFORME déclarée (railway) → SKIP, jamais un FAIL sur un contrat que la cible ne porte pas (obtenu ${rPlateforme.verdict})`);
+ok((rPlateforme.findings || []).some(f => f.regle === "O1" && /plateforme/.test(f.msg))
+  && (rPlateforme.findings || []).some(f => f.regle === "O3" && /plateforme/.test(f.msg)),
+  "O1 et O3 déclarent SANS_OBJET en NOMMANT la plateforme (railway), pas un total anonyme");
+
+// ROUGE (double sens) : LA MÊME cible vide, SANS le marqueur → FAIL inchangé — c'est le
+// marqueur qui fait la différence, pas un dossier vide qui SKIPperait tout seul.
+const cibleSansPlateforme = path.join(base, "cible-sans-plateforme");
+fs.mkdirSync(cibleSansPlateforme, { recursive: true });
+const rSansPlateforme = verdictJSON(cibleSansPlateforme);
+ok(rSansPlateforme.verdict === "FAIL", `même cible vide SANS le marqueur PLATEFORME → FAIL inchangé (obtenu ${rSansPlateforme.verdict}) — le marqueur, pas le hasard d'un dossier vide, fait la différence`);
+
 // ── VERTE · CHEMINS RELATIFS (TF-0245) ─────────────────────────────────────
 // Le healthcheck s'exécute avec cwd=releaseDir : un chemin resté relatif serait résolu
 // par node contre ce nouveau cwd — refus à tort journalisé deploiement_refuse (et, dès

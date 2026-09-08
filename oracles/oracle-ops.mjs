@@ -2,8 +2,12 @@
 // oracle-ops — Domaine « Exploitation : cible déployée saine et restaurable » (déterministe).
 // Quatre règles O1-O4 sur une CIBLE d'exploitation réelle (jamais sur le code générateur) :
 //   O1  COURANT existe et pointe une release présente sur disque ;
+//       (SANS_OBJET si la cible porte un fichier PLATEFORME — pointeur tenu par une
+//       plateforme externe, ex. railway ; jamais déduit du nom du dossier, TF-0844) ;
 //   O2  la release courante repasse son healthcheck (exécution réelle de sante.mjs) ;
 //   O3  journal.jsonl intègre : JSON valide, seq strictement croissant depuis 1, types connus ;
+//       (même SANS_OBJET que O1 si PLATEFORME est déclaré — l'historique aussi est tenu
+//       par la plateforme, TF-0844) ;
 //   O4  rollback prouvable : s'il existe une release antérieure à la courante, elle est
 //       toujours présente (capacité de restauration réelle) ET le dernier événement du
 //       journal désigne la release courante (cohérence pointeur ↔ histoire).
@@ -33,6 +37,7 @@ const NON_JUGE = [
   "GO de mise en production — décision humaine, jamais un verdict d'oracle",
   "supervision continue / alerting (hors périmètre v0)",
   "secrets et configuration d'environnement — jamais transportés par la forge",
+  "cible dont pointeur/historique sont tenus par une plateforme externe (fichier PLATEFORME) : preuve d'exécution laissée à O-5 (plan) et aux verdicts propres de la plateforme (TF-0844)",
 ];
 const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation"];
 
@@ -467,6 +472,28 @@ if (cible && fs.existsSync(cible)) {
 }
 
 if (!cible || !fs.existsSync(cible)) { add("info", "—", "cible introuvable", String(cible)); sortir("SKIP", 2); }
+
+// ── O1/O3 · cible dont pointeur ET historique sont tenus par une PLATEFORME (TF-0844,
+// lot Produit-61 20260905a + seq 74) ─────────────────────────────────────────────────
+// FAIT CONSTATÉ : sur une cible déployée via un plan cloud (railway, gcp, azure, aws...),
+// c'est la PLATEFORME qui tient le pointeur de déploiement actif et son historique — jamais
+// `ops.mjs deployer/canary`, qui n'écrit COURANT et journal.jsonl que pour les cibles servies
+// EN LOCAL par cette forge. O1 (« COURANT absent ») et O3 (« journal.jsonl absent ») FAILaient
+// donc à tort sur un déploiement RÉEL, SAIN et RESTAURÉ (oracle M-4 du pilot PASS) : l'oracle
+// jugeait un contrat de fichiers que la cible ne porte pas PAR CONSTRUCTION, pas un défaut.
+// Piste retenue : SANS_OBJET déclaré, jamais un adaptateur qui appellerait l'API de la
+// plateforme (hors périmètre forge-ops — zéro credential, zéro appel réseau, TF-0844).
+// EXPLICITE, jamais déduit du nom du dossier (loi n° 3 : l'oubli n'existe pas, une cible
+// nommée « railway » par coïncidence resterait jugée normalement) : le SKIP n'existe que si
+// la cible porte elle-même un fichier PLATEFORME, écrit par le run qui l'exploite (même geste
+// que `plan` désigne déjà sa cible par ce même nom : railway | gcp | azure | aws | ...).
+const platPath = path.join(cible, "PLATEFORME");
+const plateforme = fs.existsSync(platPath) ? fs.readFileSync(platPath, "utf8").trim() : null;
+if (plateforme) {
+  add("info", "O1", `pointeur de déploiement tenu par la plateforme « ${plateforme} », hors du contrat de fichiers forge-ops (COURANT) — SANS_OBJET, pas un défaut (TF-0844)`, "PLATEFORME");
+  add("info", "O3", `historique de déploiement tenu par la plateforme « ${plateforme} » — journal.jsonl n'est pas la source de vérité de cette cible, SANS_OBJET (TF-0844)`, "PLATEFORME");
+  sortir("SKIP", 2);
+}
 
 // ── O1 · pointeur ──────────────────────────────────────────────────────────
 const cp = path.join(cible, "COURANT");
