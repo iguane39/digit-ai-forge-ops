@@ -239,6 +239,13 @@ const PLANS = {
     placeholders: ["<PROJET>", "<ENVIRONNEMENT>", "<URL_SERVICE>", "<ID_DEPLOIEMENT_PRECEDENT>", "<SERVICE>", "<PRODUIT>"],
     provision: [
       "railway link <PROJET> --environment <ENVIRONNEMENT>",
+      // TF-0845 (lot Produit-61 20260905a + seq 75) : `railway up -p <id>` (ou --project) NE
+      // REMPLACE PAS cette liaison — sans dossier lie par `railway link`, `up` echoue
+      // « Indexing... prefix not found » exit 1 (un televersement perdu), un message qui ne
+      // nomme ni link ni la cause reelle (dossier non lie). `railway link` puis `railway up
+      // --ci` (sans -p) reussit du premier coup : l'ordre ci-dessus est le correctif, pas une
+      // option.
+      "ne jamais substituer cette liaison par `railway up -p <id_projet>` : sans dossier deja lie, `up` echoue « prefix not found » (exit 1, message qui ne nomme ni link ni la cause reelle) — toujours `railway link` AVANT `railway up`, jamais `-p` a la place de `link` (TF-0845)",
       // TF-0269 (1/3) : le domaine genere est <nom-service>-<nom-environnement>.up.railway.app.
       // Un service nomme pour son usage (<appli>-recette) dans l'environnement par defaut
       // « production » donne <appli>-recette-production : doublon contradictoire, URL publique

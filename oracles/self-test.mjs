@@ -201,6 +201,17 @@ for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "pow
       : `plan railway : constats TF-0269 absents : ${absents.join(", ")}`);
   ok(verdictPlan(pf) === "PASS", "oracle O-5 toujours PASS sur le plan railway enrichi TF-0269");
 }
+// TF-0845 (lot Produit-61 20260905a) : `railway up -p <id>` ne remplace pas `railway link`
+// (« prefix not found », un téléversement perdu) — le plan porte désormais l'avertissement
+// explicite dans sa phase provision, avant même la commande `up`.
+{
+  const pf = path.join(base, "plan-railway-tf0845.json");
+  run(ops, ["plan", "railway", fx("app-verte"), "--sortie", pf]);
+  const brut = JSON.stringify(JSON.parse(fs.readFileSync(pf, "utf8")).phases.provision);
+  ok(/railway up -p/.test(brut) && /prefix not found/.test(brut),
+    "plan railway : l'avertissement TF-0845 (`up -p` ne remplace pas `link`, « prefix not found ») est présent en phase provision");
+  ok(verdictPlan(pf) === "PASS", "oracle O-5 toujours PASS sur le plan railway enrichi TF-0845");
+}
 // rouge : cible inconnue refusée
 ok(mustFail(ops, ["plan", "heroku", fx("app-verte")], "cible inconnue"), "plan heroku → refus explicite");
 // rouge : plan amputé du rollback → FAIL O-5 localisant
