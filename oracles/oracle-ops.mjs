@@ -21,6 +21,9 @@
 //   O8  --planifie <racine>   : toute définition PLANIFIÉE du dépôt porte un mode d'exercice à
 //       la demande, CÂBLÉ et distinct de sa cadence (TF-0527) — un travail qu'on ne peut
 //       déclencher qu'à sa prochaine échéance se découvre cassé au moment où l'on compte dessus.
+//   O10 --manifeste-servi <fichier> : chaque paquet épinglé par version (`==`) dans un
+//       requirements.txt SERVI (image finale) porte au moins une empreinte `--hash=` (TF-1042) —
+//       une version republiée sous le même numéro entre sinon sans être vue.
 //   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
 //       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
@@ -294,6 +297,49 @@ if (args.includes("--planifie")) {
   if (!planifiees) { add("info", "O8", `aucune définition planifiée parmi ${candidats.length} fichier(s) aux emplacements connus — rien à juger`, path.basename(String(cible))); fin8("SKIP", 2); }
   const durs8 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin8(durs8.length ? "FAIL" : "PASS", durs8.length ? 1 : 0);
+}
+
+// ── O10 · manifeste de dépendances SERVI épinglé à l'EMPREINTE (TF-1042, mesure Produit-11
+// du 11/09/2026) ─────────────────────────────────────────────────────────────────────────
+//
+// LE FAIT. Le manifeste qui composait l'image SERVIE (requirements.txt copié par le
+// Dockerfile) épinglait chaque paquet à une VERSION (`paquet==x.y.z`) mais AUCUN à une
+// EMPREINTE de contenu (`--hash=sha256:...`) — 37 paquets, zéro hash. Un numéro de version
+// ne verrouille rien sur un registre qui permet la republication sous le même numéro : seule
+// l'empreinte du contenu le fait. C'est le même principe qu'O-7 (déployé = scellé),
+// appliqué un cran plus tôt — au manifeste qui construit l'image, avant même le déploiement.
+//
+// CE QUI EST JUGÉ : la PRÉSENCE d'au moins une empreinte `--hash=` sur chaque ligne déjà
+// épinglée par version exacte (`==`). Une ligne sans `==` (URL, plage, `-r`, `-e`,
+// commentaire, vide) n'épingle rien : hors périmètre, rien à verrouiller. Périmètre v0
+// borné au format `requirements.txt` (pip) — c'est le format de la mesure fondatrice ;
+// poetry.lock/uv.lock/package-lock.json ont leurs propres mécanismes de verrou, non jugés ici.
+if (args.includes("--manifeste-servi")) {
+  const manifestePath = args[args.indexOf("--manifeste-servi") + 1];
+  const DOM10 = "Exploitation : manifeste de dépendances SERVI épinglé à l'empreinte (O-10)";
+  const NJ10 = [
+    "l'intégrité réelle contre le registre de paquets (PyPI...) — l'oracle vérifie la PRÉSENCE d'une empreinte dans le manifeste, jamais sa validité cryptographique face au paquet publié",
+    "les formats de verrou hors requirements.txt (poetry.lock, uv.lock, package-lock.json...) — périmètre v0 borné au format de la mesure fondatrice (Produit-11)",
+  ];
+  const fin10 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM10, artefact: manifestePath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O10", msg: "tous les paquets épinglés par version portent une empreinte", where: manifestePath }], non_juge: NJ10 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!manifestePath || !fs.existsSync(manifestePath)) { add("bloquant", "O10", "manifeste introuvable", String(manifestePath)); fin10("donnees_insuffisantes", 2); }
+  const lignes = fs.readFileSync(manifestePath, "utf8").split(/\r?\n/);
+  let paquetsEpingles = 0;
+  for (const ligneBrute of lignes) {
+    const ligne = ligneBrute.trim();
+    if (!ligne || ligne.startsWith("#") || ligne.startsWith("-")) continue; // commentaire, -r/-e/--index-url...
+    const m = /^([A-Za-z0-9._-]+)\s*==\s*[^\s;]+/.exec(ligne);
+    if (!m) continue; // pas un épinglage de version exacte : hors périmètre (URL, plage, extra sans version...)
+    paquetsEpingles++;
+    if (!/--hash=(sha256|sha512):[0-9a-f]{16,}/i.test(ligne))
+      add("bloquant", "O10", `paquet épinglé par version SANS empreinte : '${m[1]}' — une version republiée sous le même numéro entrerait sans être vue`, m[1]);
+  }
+  if (!paquetsEpingles) { add("info", "O10", "aucun paquet épinglé par version (==) dans ce manifeste — rien à contrôler", path.basename(String(manifestePath))); fin10("SKIP", 2); }
+  const durs10 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin10(durs10.length ? "FAIL" : "PASS", durs10.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

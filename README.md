@@ -94,6 +94,7 @@ node oracles/self-test.mjs
 | O5 | `--plan <fichier>` : plan cloud complet (4 phases, rollback réel, zéro credential) |
 | O6 | `--drift <fichier> <cible>` : état déclaré (`etat --sortie`) vs constaté — journal tronqué/réécrit, déploiement furtif |
 | O7 | `<cible> --empreinte` : fichiers de la release courante vs empreinte scellée au déploiement ou à la promotion canary — fichier modifié/supprimé/ajouté en place ; SKIP motivé sans empreinte, ex. déploiement fait hors ops (TF-0288, TF-0298) |
+| O10 | `--manifeste-servi <fichier>` : chaque paquet épinglé par version (`==`) dans un `requirements.txt` SERVI porte au moins une empreinte `--hash=` — une version republiée sous le même numéro entrerait sinon sans être vue (TF-1042) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.
@@ -129,6 +130,17 @@ et jamais lu affiche une case à cocher qui ne fait rien : même verdict qu'un p
 
 Les faits d'exploitation constatés (comportements d'outils tiers qu'aucune documentation n'énonce)
 vivent dans `references/GESTES-EXPLOITATION.md`, datés et sourcés.
+
+## Manifeste servi épinglé à l'empreinte (O-10, TF-1042)
+
+`node oracles/oracle-ops.mjs --manifeste-servi <requirements.txt>` — mesure fondatrice
+(Produit-11, 11/09/2026) : un `requirements.txt` copié dans l'image servie épinglait 37
+paquets par **version** (`paquet==x.y.z`), aucun par **empreinte** (`--hash=sha256:...`).
+Un numéro de version ne verrouille rien sur un registre qui admet la republication sous le
+même numéro ; seule l'empreinte du contenu le fait — même principe qu'O-7 (déployé = scellé),
+appliqué un cran plus tôt, au manifeste qui construit l'image. Périmètre v0 : format
+`requirements.txt` (pip) uniquement, borné à la mesure fondatrice ; une ligne sans `==` (URL,
+plage, `-r`/`-e`) n'épingle rien et n'est pas jugée.
 
 ## Frontières
 

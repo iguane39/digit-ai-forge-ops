@@ -584,6 +584,40 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
   ok(!!m && m[1] === m[2], `verifier-migration-dns : recette entierement verte (${m ? m[0] : 'sortie illisible'})`);
 }
 
+// ── O10 · manifeste de dépendances SERVI épinglé à l'empreinte (TF-1042, mesure Produit-11) ──
+// Le fait rejoué : un requirements.txt épinglait 37 paquets par version, aucun par empreinte
+// — une version republiée sous le même numéro serait entrée sans être vue.
+console.log("");
+const o10 = (fichier) => { try { return JSON.parse(run(oracle, ["--manifeste-servi", fichier, "--json-only"])); }
+  catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+
+// ROUGE — l'état exact mesuré : épinglé par version, aucune empreinte.
+const manifesteSansHash = path.join(base, "requirements-sans-hash.txt");
+fs.writeFileSync(manifesteSansHash, "fastapi==0.111.0\nuvicorn==0.30.1\n# commentaire\npydantic==2.7.4\n", "utf8");
+const rO10Rouge = o10(manifesteSansHash);
+ok(rO10Rouge.verdict === "FAIL", `manifeste épinglé par version sans empreinte → FAIL (obtenu ${rO10Rouge.verdict})`);
+ok(rO10Rouge.findings.filter(f => f.regle === "O10").length === 3,
+  `les 3 paquets sans empreinte sont NOMMÉS (obtenu ${rO10Rouge.findings.filter(f => f.regle === "O10").length})`);
+ok(rO10Rouge.findings.some(f => f.where === "fastapi"), "le constat nomme le paquet fautif (fastapi), pas un total anonyme");
+
+// VERTE — même manifeste, chaque ligne épinglée porte désormais une empreinte.
+const manifesteAvecHash = path.join(base, "requirements-avec-hash.txt");
+fs.writeFileSync(manifesteAvecHash,
+  "fastapi==0.111.0 --hash=sha256:" + "a".repeat(64) + "\n"
+  + "uvicorn==0.30.1 --hash=sha256:" + "b".repeat(64) + "\n"
+  + "pydantic==2.7.4 --hash=sha256:" + "c".repeat(64) + "\n",
+  "utf8");
+ok(o10(manifesteAvecHash).verdict === "PASS", "même manifeste, empreinte posée sur chaque ligne → PASS");
+
+// SKIP — rien d'épinglé par version exacte (URL, plage) : rien à contrôler, jamais un faux positif.
+const manifesteSansPin = path.join(base, "requirements-sans-pin.txt");
+fs.writeFileSync(manifesteSansPin, "requests>=2.31\n-e git+https://example.com/pkg.git#egg=pkg\n", "utf8");
+ok(o10(manifesteSansPin).verdict === "SKIP", "manifeste sans épinglage de version exacte → SKIP, jamais un faux positif");
+
+// BORNE — manifeste introuvable : donnees_insuffisantes, jamais un FAIL par défaut implicite.
+ok(o10(path.join(base, "absent.txt")).verdict === "donnees_insuffisantes",
+  "manifeste introuvable → donnees_insuffisantes (aucun défaut implicite)");
+
 fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);
