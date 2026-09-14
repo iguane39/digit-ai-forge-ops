@@ -131,6 +131,19 @@ et jamais lu affiche une case à cocher qui ne fait rien : même verdict qu'un p
 Les faits d'exploitation constatés (comportements d'outils tiers qu'aucune documentation n'énonce)
 vivent dans `references/GESTES-EXPLOITATION.md`, datés et sourcés.
 
+## M-8 (fraîcheur de MEP) est tenu par O-7, pas par une page unique (TF-1075)
+
+La porte de fraîcheur post-déploiement (règle M-8 de l'étape MEP du pilot) ne doit jamais se
+fonder sur l'empreinte d'une seule page (banc défauts-échappés, livrable E-05 : comparer
+uniquement `site/index.html` déclare « PRODUCTION CONFORME » quand une AUTRE page a changé
+— faux vert mesuré le 26/08/2026, récidive le lendemain sur 70 pages). **O-7 (`--empreinte`)
+tient déjà cette exigence** : il compare l'empreinte de TOUS les fichiers de la release, pas
+seulement l'accueil. La preuve par perturbation (`self-test.mjs`, section M-8) modifie une
+page hors accueil sans toucher l'accueil et vérifie qu'O-7 la voit et la NOMME, quand une
+porte reproduisant le critère d'E-05 (une seule empreinte, une seule page) ne voit rien.
+Reste côté pilot : citer O-7 comme le contrôle exécutable de M-8 dans `ETAPE-MEP.md`
+(document hors périmètre de ce dépôt).
+
 ## Manifeste servi épinglé à l'empreinte (O-10, TF-1042)
 
 `node oracles/oracle-ops.mjs --manifeste-servi <requirements.txt>` — mesure fondatrice

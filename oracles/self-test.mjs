@@ -10,6 +10,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -379,6 +380,46 @@ const rEmpreinteCanaryFail = verdictEmpreinte(cibleEmpreinteCanaryAlteree);
 ok(rEmpreinteCanaryFail.verdict === "FAIL", `O-7 : dérive après promotion canary → FAIL (obtenu ${rEmpreinteCanaryFail.verdict})`);
 ok((rEmpreinteCanaryFail.findings || []).some(f => f.regle === "O7" && f.where === "index.html" && /modifié/.test(f.msg)),
   "O-7 : le fichier divergent après promotion canary est NOMMÉ (index.html), pas un total anonyme");
+
+// ── M-8 · TF-1075 (D-4 (a) du 14/09/2026) : LA PORTE DE FRAÎCHEUR DOIT VOIR TOUT LE
+// DÉPLOIEMENT, PAS SEULEMENT L'ACCUEIL — banc défauts-échappés E-05, preuve par perturbation ─
+// LE FAIT (registre TF-0666/TF-0672, récidive E-05 le 26/08 puis le lendemain sur 70 pages) :
+// la porte de fraîcheur du livrable E-05 (build/ci/verif-prod.mjs, Produit-02) ne compare que
+// l'empreinte de site/index.html. Un déploiement qui modifie une AUTRE page sans toucher
+// l'accueil est déclaré « PRODUCTION CONFORME » — faux vert. O-7 (empreinte de déploiement)
+// compare déjà l'ENSEMBLE des fichiers de la release. Preuve par perturbation : on modifie une
+// page HORS accueil après scellement, SANS toucher l'accueil, et on vérifie que les deux
+// portes divergent — l'une aveugle au changement, l'autre le voit et le nomme.
+console.log("");
+const cibleM8 = path.join(base, "cible-m8-fraicheur");
+const buildM8 = path.join(base, "build-m8");
+fs.cpSync(fx("app-verte"), buildM8, { recursive: true });
+fs.writeFileSync(path.join(buildM8, "mentions-legales.html"), "<html><body>v1</body></html>", "utf8");
+run(ops, ["deployer", buildM8, cibleM8]);
+const releaseM8 = courant(cibleM8);
+const indexAvantM8 = fs.readFileSync(path.join(cibleM8, "releases", releaseM8, "index.html"), "utf8");
+
+// Perturbation : SEULE la page hors accueil change après scellement — l'accueil, lui, est intact.
+fs.writeFileSync(path.join(cibleM8, "releases", releaseM8, "mentions-legales.html"),
+  "<html><body>v2 — deploiement reel non vu par une porte a une seule page</body></html>", "utf8");
+const indexApresM8 = fs.readFileSync(path.join(cibleM8, "releases", releaseM8, "index.html"), "utf8");
+ok(indexApresM8 === indexAvantM8, "perturbation M-8 : l'accueil n'a PAS changé (condition exacte du défaut E-05)");
+
+// ROUGE — reproduction fidèle du CRITÈRE limitant du livrable E-05 : une empreinte, une seule
+// page (site/index.html). Même fonction d'empreinte que verif-prod.mjs (sha256, 16 hex).
+const empreinteE05 = (texte) => createHash("sha256").update(texte.replace(/\r\n/g, "\n")).digest("hex").slice(0, 16);
+const porteE05VoitLeChangement = empreinteE05(indexApresM8) !== empreinteE05(indexAvantM8);
+ok(porteE05VoitLeChangement === false,
+  "fixture ROUGE (E-05) : porte fondée sur la seule empreinte de l'accueil → ne voit RIEN, faux vert reproduit fidèlement");
+
+// VERTE — O-7 : porte fondée sur l'empreinte de L'ENSEMBLE déployé (déjà la doctrine forge-ops).
+const rM8 = verdictEmpreinte(cibleM8);
+ok(rM8.verdict === "FAIL",
+  `fixture VERTE (O-7) : porte fondée sur l'empreinte de l'ensemble déployé → voit le changement hors accueil (obtenu ${rM8.verdict})`);
+ok((rM8.findings || []).some(f => f.regle === "O7" && f.where === "mentions-legales.html" && /modifié/.test(f.msg)),
+  "O-7 nomme la page hors accueil modifiée (mentions-legales.html) — l'accueil, qui n'a pas bougé, n'est jamais accusé");
+ok(!(rM8.findings || []).some(f => f.where === "index.html" && /modifié/.test(f.msg)),
+  "O-7 n'accuse pas l'accueil à tort : seule la page réellement modifiée est nommée");
 
 // ── VERDICT « ROLLBACK RECOMMANDÉ » · seuils SLO humains (TF-0107 · 3) ─────────────
 // Recommandation SEULE : jamais d'exécution automatique — juste un verdict consommable.
