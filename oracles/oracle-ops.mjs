@@ -24,6 +24,12 @@
 //   O10 --manifeste-servi <fichier> : chaque paquet épinglé par version (`==`) dans un
 //       requirements.txt SERVI (image finale) porte au moins une empreinte `--hash=` (TF-1042) —
 //       une version republiée sous le même numéro entre sinon sans être vue.
+//   O11 --sonde-disponibilite <racine> : une sonde de disponibilité Terraform (web_test/
+//       availability) ne vise jamais l'origine (`.ingress[0].fqdn`) sans variable de repli
+//       (TF-1121) — sinon elle mesure une adresse que l'utilisateur n'ouvre jamais.
+//   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
+//       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
+//       de son périmètre réel.
 //   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
 //       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
@@ -342,6 +348,75 @@ if (args.includes("--manifeste-servi")) {
   fin10(durs10.length ? "FAIL" : "PASS", durs10.length ? 1 : 0);
 }
 
+// ── O11 · une sonde de disponibilité vise l'adresse SERVIE, jamais l'origine (TF-1121,
+// mesure Produit-11 du 14/09/2026) ──────────────────────────────────────────────────────
+//
+// LE FAIT. `infra-tf/monitoring.tf` posait `url = "https://${azurerm_container_app.front.
+// ingress[0].fqdn}/"` — le nom de domaine de l'ORIGINE. En qualification, l'environnement
+// d'exécution porte `publicNetworkAccess=Disabled` : cette adresse n'est joignable par
+// personne, la sonde était pourtant `Enabled` et son alerte (sévérité 1) s'est déclenchée
+// dans la semaine. En production, seul le préfixe AzureFrontDoor.Backend est autorisé en
+// entrée : la même sonde y serait refusée pour la même raison. Le défaut produit du BRUIT DE
+// SÉVÉRITÉ 1 sur deux environnements sur trois — il désensibilise au lieu d'informer.
+//
+// CE QUI EST JUGÉ, contrôle STATIQUE (coïncidence de motif Terraform, aucune exécution) :
+// dans un bloc de ressource dont le type évoque une sonde de disponibilité (`web_test`,
+// `availability`), l'attribut `url` ne référence jamais directement l'origine
+// (`.ingress[0].fqdn`, `.default_hostname`) SANS passer par une variable (`var.*`) — la
+// variable est le point où une adresse SERVIE (front door, domaine public) peut remplacer
+// l'origine quand un frontal existe. Même doctrine que le paramètre O-8 : une sonde qui vise
+// l'origine sans variable de repli est câblée sur ce qui n'est jamais ouvert à l'utilisateur.
+if (args.includes("--sonde-disponibilite")) {
+  const racineSonde = args[args.indexOf("--sonde-disponibilite") + 1];
+  const DOM11 = "Exploitation : une sonde de disponibilité vise l'adresse SERVIE, jamais l'origine (O-11)";
+  const NJ11 = [
+    "la joignabilité RÉELLE de l'adresse — l'oracle lit du texte Terraform, jamais un appel réseau",
+    "les formats de sonde hors azurerm_*web_test*/azurerm_*availability* — périmètre v0 borné aux types de la mesure fondatrice",
+    "la justesse de la variable substituée (nom, valeur) — l'oracle juge sa PRÉSENCE dans l'expression, jamais son contenu",
+  ];
+  const fin11 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM11, artefact: racineSonde || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O11", msg: "aucune sonde ne vise l'origine sans variable de repli", where: racineSonde }], non_juge: NJ11 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!racineSonde || !fs.existsSync(racineSonde)) { add("info", "O11", "racine introuvable", String(racineSonde)); fin11("SKIP", 2); }
+  const fichiersTf = [];
+  (function lister(dir, prof = 0) {
+    if (prof > 3 || !fs.existsSync(dir)) return;
+    for (const nom of fs.readdirSync(dir)) {
+      if (nom === ".terraform" || nom === "node_modules" || nom === ".git") continue;
+      const p = path.join(dir, nom);
+      let st; try { st = fs.statSync(p); } catch { continue; }
+      if (st.isDirectory()) lister(p, prof + 1);
+      else if (/\.tf$/i.test(nom)) fichiersTf.push(p);
+    }
+  })(racineSonde);
+  const BLOC_SONDE = /resource\s+"(\w*(?:web_test|availability)\w*)"\s+"([^"]+)"\s*\{([\s\S]*?)\n\}/gi;
+  let sondesTrouvees = 0;
+  for (const f of fichiersTf) {
+    const texte = fs.readFileSync(f, "utf8");
+    const ou = path.relative(racineSonde, f).split(path.sep).join("/");
+    let m;
+    BLOC_SONDE.lastIndex = 0;
+    while ((m = BLOC_SONDE.exec(texte))) {
+      const [, typeRes, nomRes, corps] = m;
+      // Capture le reste de la ligne après `url =` telle quelle (jamais seulement une chaîne
+      // simple entre guillemets) : une adresse SERVIE s'écrit souvent en ternaire
+      // (`var.x != "" ? "..." : "..."`), et la variable de repli doit rester visible.
+      const urlM = /^[ \t]*url\s*=\s*(.+)$/m.exec(corps);
+      if (!urlM) continue;
+      sondesTrouvees++;
+      const urlExpr = urlM[1];
+      const viseOrigine = /\.ingress\[0\]\.fqdn|\.default_hostname/.test(urlExpr);
+      const passeParVariable = /var\./.test(urlExpr);
+      if (viseOrigine && !passeParVariable)
+        add("bloquant", "O11", `sonde ${typeRes}.${nomRes} : url vise l'origine (${urlExpr}) sans variable de repli — mesure une adresse que l'utilisateur n'ouvre jamais, refusée par le même pare-feu que le vrai trafic`, ou);
+    }
+  }
+  if (!sondesTrouvees) { add("info", "O11", `aucune sonde de disponibilité (web_test/availability) parmi ${fichiersTf.length} fichier(s) .tf — rien à juger`, racineSonde); fin11("SKIP", 2); }
+  const durs11 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin11(durs11.length ? "FAIL" : "PASS", durs11.length ? 1 : 0);
+}
+
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
 // RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a
 // figés dans un fichier de config (latence, taux d'erreur, fenêtre minimale) — aucun défaut
@@ -418,6 +493,31 @@ function jugerSourcesDeVerite(chemin) {
   if (!fm) return null;
   if (!/^sources_de_verite\s*:/m.test(fm[1])) return null;
   const declare = /^authentification\s*:\s*\S/m.test(fm[1]);
+  return { declare, fm: fm[1] };
+}
+
+// ── O12 · TF-1115 (mesure Produit-11 du 14/09/2026) : UNE REMEDIATION DE SECURITE DIT SUR
+// QUELS ENVIRONNEMENTS ELLE A ETE REJOUEE ───────────────────────────────────────────────────
+//
+// LE FAIT. La règle de pare-feu `AllowAllAzureServicesAndResources` (0.0.0.0) a été retirée
+// d'un environnement le 25/08 ; `MATRICE-DE-FLUX.md` déclare depuis « ce document est appliqué »
+// — SANS dire DE QUEL environnement il parle. Vingt jours plus tard, la même règle était
+// toujours présente sur l'environnement suivant, devenue la SEULE voie d'accès de son API à sa
+// base — la supprimer sans remplacement aurait coupé le service. Rien ne confrontait la matrice
+// à un périmètre déclaré, parce que la matrice ne DÉCLARAIT aucun périmètre.
+//
+// CE QUI EST JUGÉ, même doctrine qu'O-9 (la PRÉSENCE du champ, jamais sa justesse) : un document
+// dont le frontmatter déclare `remediation_securite: <intitulé>` porte aussi une liste
+// `environnements:` — un environnement par ligne, le statut (rejouée/à rejouer) restant à la
+// plume humaine. Une remédiation sans cette liste ne dit rien de son périmètre : « appliquée »
+// devient une affirmation qu'aucun environnement ne peut réclamer ni exclure.
+function jugerRemediationParEnvironnement(chemin) {
+  let texte;
+  try { texte = fs.readFileSync(chemin, "utf8"); } catch { return null; }
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(texte);
+  if (!fm) return null;
+  if (!/^remediation_securite\s*:/m.test(fm[1])) return null;
+  const declare = /^environnements\s*:/m.test(fm[1]);
   return { declare, fm: fm[1] };
 }
 
@@ -513,8 +613,16 @@ if (cible && fs.existsSync(cible)) {
           + "alors qu'elle est un fait sur sa propre session. Ajouter `authentification:` au frontmatter — "
           + "`authentification: aucune` suffit et est gratuit (TF-0607)", cible);
       }
+      // O12 (TF-1115) — meme posture : une remediation de securite declaree sans lister les
+      // environnements ou elle a ete rejouee ne dit rien de son perimetre.
+      const rem = jugerRemediationParEnvironnement(cible);
+      if (rem && !rem.declare) {
+        add("majeur", "O12", "une `remediation_securite` est declaree sans lister les ENVIRONNEMENTS "
+          + "ou elle a ete rejouee — « appliquee » sans perimetre laisse un environnement suivant "
+          + "hors de portee du controle, potentiellement encore expose (TF-1115)", cible);
+      }
     }
-  } catch { /* cible illisible : O9 se tait plutot que d'accuser */ }
+  } catch { /* cible illisible : O9/O12 se taisent plutot que d'accuser */ }
 }
 
 if (!cible || !fs.existsSync(cible)) { add("info", "—", "cible introuvable", String(cible)); sortir("SKIP", 2); }

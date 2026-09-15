@@ -611,6 +611,52 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
     "O9 borne : un fichier sans frontmatter `sources_de_verite` n'est pas concerne");
 }
 
+// ── O12 (TF-1115, mesure Produit-11 du 14/09/2026) : UNE REMEDIATION DE SECURITE DIT SUR
+// QUELS ENVIRONNEMENTS ELLE A ETE REJOUEE ──────────────────────────────────────────────────
+// Le fait : une regle de pare-feu ouverte a tout Azure, retiree d'un environnement et
+// documentee « appliquee » par une matrice qui ne connait qu'UN environnement — vingt jours
+// plus tard la meme regle etait toujours presente sur l'environnement suivant, devenue sa
+// SEULE voie d'acces. Meme doctrine qu'O-9 : seul le champ `environnements:` separe les deux
+// fixtures, la meme remediation dans les deux cas.
+{
+  const o12 = f => { const r = (() => { try { return JSON.parse(run(oracle, [f, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { findings: [] }; } } })();
+    return (r.findings || []).some(x => x.regle === "O12"); };
+  const dir12 = path.join(ici, "..", "fixtures", "o12-remediation-securite");
+  ok(o12(path.join(dir12, "sans-environnements.md")),
+    "O12 : remediation de securite sans liste d'environnements -> constat");
+  ok(!o12(path.join(dir12, "avec-environnements.md")),
+    "O12 : meme remediation AVEC la liste d'environnements -> aucun constat (seul le champ les separe)");
+  ok(!o12(path.join(ici, "self-test.mjs")),
+    "O12 borne : un fichier sans frontmatter `remediation_securite` n'est pas concerne");
+}
+
+// ── O11 (TF-1121, mesure Produit-11 du 14/09/2026) : UNE SONDE DE DISPONIBILITE VISE
+// L'ADRESSE SERVIE, JAMAIS L'ORIGINE ───────────────────────────────────────────────────────
+// Le fait : `infra-tf/monitoring.tf:181` posait `url = "https://${...ingress[0].fqdn}/"` — le
+// nom de domaine de l'ORIGINE, injoignable derriere `publicNetworkAccess=Disabled` en
+// qualification. La sonde etait Enabled, son alerte (severite 1) s'est declenchee dans la
+// semaine — du bruit de severite 1 sans cause reelle.
+{
+  const o11 = (racine) => { try { return JSON.parse(run(oracle, ["--sonde-disponibilite", racine, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const dirRouge11 = path.join(ici, "..", "fixtures", "o11-sonde-disponibilite", "rouge");
+  const rO11Rouge = o11(dirRouge11);
+  ok(rO11Rouge.verdict === "FAIL", `O11 : sonde qui vise l'origine sans variable de repli -> FAIL (obtenu ${rO11Rouge.verdict})`);
+  ok((rO11Rouge.findings || []).some(f => f.regle === "O11" && /ingress\[0\]\.fqdn/.test(f.msg)),
+    "O11 : le constat nomme l'expression fautive (ingress[0].fqdn), pas un total anonyme");
+
+  const dirVerte11 = path.join(ici, "..", "fixtures", "o11-sonde-disponibilite", "verte");
+  const rO11Verte = o11(dirVerte11);
+  ok(rO11Verte.verdict === "PASS", `O11 : meme sonde, adresse servie substituee via variable -> PASS (obtenu ${rO11Verte.verdict})`);
+
+  // Bornage sur le code REEL du depot (scripts/), pas sur fixtures/ qui porte volontairement
+  // une sonde rouge : ce depot ne produit ni ne consomme de Terraform, SKIP attendu.
+  const rO11Skip = o11(path.join(ici, "..", "scripts"));
+  ok(rO11Skip.verdict === "SKIP",
+    `O11 borne : le code reel de ce depot (scripts/, aucun .tf) ne remonte aucun FAIL (obtenu ${rO11Skip.verdict})`);
+}
+
 // G-03 (TF-0611/0613/0610, 25/08) — LES DEUX JUGES DE LA MIGRATION DNS. Leur recette vit dans
 // l'outil lui-meme (`--self-test`, 17 cas, les deux sens sur les trois regles) ; elle est REJOUEE
 // ici pour que l'invariant du depot la couvre — un controle que la recette du depot ne joue pas
