@@ -36,6 +36,10 @@
 //   O14 --inventaire-composants <export.json> <doc.md> : chaque nom d'un export machine du
 //       parc figure LITTÉRALEMENT dans le document d'inventaire (TF-1114) — un « idem » ou
 //       une accolade {a,b} n'est jamais un nom.
+//   O15 --statut-composants <export.json> <doc.md> : sens inverse d'O14 (TF-1113 + TF-1117) —
+//       un composant de Statut « actif » ou « partagé » figure dans l'export ; tout Statut est
+//       pris au vocabulaire fermé ; une ligne « supprimable » de la section « Composants
+//       inutilisés » dit ce qui cesse de fonctionner si on la supprime (« rien » exige une mesure).
 //   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
 //       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
@@ -445,8 +449,6 @@ if (args.includes("--inventaire-composants")) {
   const DOM14 = "Exploitation : l'inventaire documenté contient chaque nom de l'export réel (O-14)";
   const NJ14 = [
     "la fraîcheur de l'EXPORT lui-même — l'oracle confronte deux fichiers, jamais le parc cloud en direct",
-    "le sens inverse (un nom cité comme ACTIF dans le document existe dans l'export) — dépend d'un "
-      + "vocabulaire de statut fermé (colonne « Statut ») que le gabarit pilot ne porte pas encore (TF-1113)",
     "la nature de la correspondance — une coïncidence de sous-chaîne stricte, jamais une correspondance structurelle (tableau, section)",
   ];
   const fin14 = (verdict, code) => {
@@ -466,6 +468,151 @@ if (args.includes("--inventaire-composants")) {
   }
   const durs14 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin14(durs14.length ? "FAIL" : "PASS", durs14.length ? 1 : 0);
+}
+
+// ── Lecture partagée O15-O17 : tables markdown, graphies accentuées OU non ─────────────────
+// Les documents des produits s'écrivent souvent sans accents (« partage », « inutilises ») :
+// toute comparaison de vocabulaire ou d'en-tête passe par `_norm`, qui retire les accents, la
+// casse, les marques de code et de gras, et unifie l'apostrophe. Un NOM de composant, lui, ne
+// se normalise jamais au-delà des marques markdown : `_valeurCellule`.
+const _valeurCellule = s => String(s ?? "").replace(/`/g, "").replace(/\*\*/g, "").trim().replace(/\.$/, "").trim();
+const _sansAccents = s => String(s ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[’‘]/g, "'").toLowerCase().replace(/\s+/g, " ").trim();
+const _norm = s => _sansAccents(_valeurCellule(s));
+// Une cellule VIDE au sens du contrôle : rien, un tiret, un point d'interrogation, « n/a »,
+// « à compléter » ou un marqueur de gabarit `{…}` non instancié.
+const _vide = s => { const n = _norm(s); return !n || /^[-—–?]+$/.test(n) || n === "n/a" || n === "a completer" || /^\{.*\}$/.test(n); };
+// Tables markdown d'un texte, chacune avec la pile des titres sous lesquels elle vit. Les blocs
+// de code (```) sont sautés : un exemple de table n'est pas une table.
+function _tablesMarkdown(texte) {
+  const lignes = String(texte).split(/\r?\n/);
+  const tables = [];
+  const pile = [];
+  let dansCode = false;
+  const cellules = l => l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  for (let i = 0; i < lignes.length; i++) {
+    const l = lignes[i];
+    if (/^\s*```/.test(l)) { dansCode = !dansCode; continue; }
+    if (dansCode) continue;
+    const h = /^(#{1,6})\s+(.*)$/.exec(l);
+    if (h) {
+      while (pile.length && pile[pile.length - 1].niveau >= h[1].length) pile.pop();
+      pile.push({ niveau: h[1].length, titre: h[2] });
+      continue;
+    }
+    if (/^\s*\|/.test(l) && i + 1 < lignes.length && /^\s*\|?\s*:?-{2,}/.test(lignes[i + 1])) {
+      const t = { ligne: i + 1, entetes: cellules(l), lignes: [], titres: pile.map(p => p.titre) };
+      i += 2;
+      while (i < lignes.length && /^\s*\|/.test(lignes[i])) { t.lignes.push(cellules(lignes[i])); i++; }
+      i--;
+      tables.push(t);
+    }
+  }
+  return tables;
+}
+const _colonne = (t, ...noms) => t.entetes.findIndex(e => noms.includes(_norm(e)));
+
+// ── O15 · le Statut déclaré d'un composant est confronté à l'export RÉEL, et un « supprimable »
+// dit ce qu'il casse (TF-1113 + TF-1117, mesures Produit-11 du 14/09/2026) ───────────────────
+//
+// LE FAIT (TF-1113). Dix éléments sans consommateur coexistaient avec un document d'inventaire
+// CONFORME : aucune colonne ne distinguait ce qui sert de ce qui ne sert plus, et deux
+// suppressions « évidentes d'après le nom » auraient tué le produit. O-14 confrontait déjà
+// l'export au document dans UN sens (tout nom du parc est écrit) ; le sens inverse — ce qu'on
+// DÉCLARE en service existe dans le parc — attendait un Statut à vocabulaire fermé.
+//
+// LE FAIT (TF-1117). Sur dix lignes « inutilisées » avec preuve d'absence de consommateur, CINQ
+// n'étaient pas supprimables : l'adresse d'une règle de pare-feu était celle du poste en
+// service, deux connexions de service étaient les seules identités capables d'appliquer la pile.
+// L'absence de consommateur ouvre une question, elle ne rend pas un verdict : la colonne qui
+// protège est « ce qui cesse de fonctionner si on le supprime ».
+//
+// CE QUI EST JUGÉ (deux fichiers, aucun appel réseau, même posture qu'O-14) :
+//   (1) toute table portant une colonne « Statut » : chaque valeur appartient au vocabulaire
+//       fermé (actif / partagé / déclaré / inutilisé / hors périmètre), et un composant « actif »
+//       ou « partagé » figure dans l'export (`noms`) — nom lu dans la colonne Composant/Nom/
+//       Ressource, sinon la première ;
+//   (2) toute table sous le titre « Composants inutilisés… » : le statut de supprimabilité
+//       appartient au vocabulaire fermé (supprimable / non supprimable, droit absent / non
+//       supprimable, décision / non supprimable, tiers propriétaire), et une ligne « supprimable »
+//       renseigne « ce qui cesse de fonctionner si on le supprime » — ni vide, ni « rien »/
+//       « aucun » sans mesure citée (une commande entre accents graves, ou « mesuré… » suivi
+//       d'une date AAAA-MM-JJ ou de deux-points).
+// Graphies accentuées et non accentuées acceptées, pour les valeurs comme pour les en-têtes.
+const _STATUTS_O15 = ["actif", "partage", "declare", "inutilise", "hors perimetre"];
+const _SUPPRIMABILITE_O15 = ["supprimable", "non supprimable, droit absent", "non supprimable, decision", "non supprimable, tiers proprietaire"];
+const _MESURE_CITEE_O15 = /`[^`]+`|\bmesur\w*\b[^|]*?(\d{4}-\d{2}-\d{2}|:\s*\S)/;
+if (args.includes("--statut-composants")) {
+  const iSt = args.indexOf("--statut-composants");
+  const exportPath = args[iSt + 1];
+  const docPath = args[iSt + 2];
+  const DOM15 = "Exploitation : le Statut déclaré d'un composant tient face à l'export réel, un « supprimable » dit ce qu'il casse (O-15)";
+  const NJ15 = [
+    "la fraîcheur et le PÉRIMÈTRE de l'export — un composant « partagé » vit souvent dans un groupe de ressources d'une autre application : si l'export ne couvre pas ce groupe, l'oracle le dit absent ; élargir l'export, jamais le Statut",
+    "la JUSTESSE d'un Statut — « actif » présent dans l'export peut être inutile ; seul le consommateur résolu (image, secretRef, identité, appel) le prouve, et il ne se lit dans aucun des deux fichiers",
+    "la vérité de « ce qui cesse de fonctionner » — l'oracle juge que la colonne est renseignée et qu'un « rien » cite sa mesure, jamais que la mesure est juste",
+    "la présence des colonnes preuve d'inutilité, créé par quoi, geste et titulaire du droit, et de la section « Composants inutilisés » elle-même — jugée par R-20 côté pilot ; O-15 exige seulement les deux colonnes qu'il lit",
+    "un nom écrit avec sa description dans la même cellule — la cellule entière, marques markdown retirées, est lue comme le nom",
+  ];
+  const fin15 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM15, artefact: docPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O15", msg: "chaque Statut est au vocabulaire fermé, chaque composant actif ou partagé est dans l'export, chaque « supprimable » dit ce qu'il casse", where: docPath }], non_juge: NJ15 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!exportPath || !fs.existsSync(exportPath)) { add("bloquant", "O15", "export introuvable", String(exportPath)); fin15("donnees_insuffisantes", 2); }
+  if (!docPath || !fs.existsSync(docPath)) { add("bloquant", "O15", "document d'inventaire introuvable", String(docPath)); fin15("donnees_insuffisantes", 2); }
+  let exportData = null;
+  try { exportData = JSON.parse(fs.readFileSync(exportPath, "utf8")); } catch { add("bloquant", "O15", "export illisible (JSON invalide)", exportPath); fin15("FAIL", 1); }
+  const noms = new Set((Array.isArray(exportData?.noms) ? exportData.noms : []).map(String));
+  const tables = _tablesMarkdown(fs.readFileSync(docPath, "utf8"));
+  const tablesStatut = tables.filter(t => _colonne(t, "statut") >= 0);
+  const tablesInutiles = tables.filter(t => t.titres.some(h => _norm(h).startsWith("composants inutilises")));
+  if (!tablesStatut.length && !tablesInutiles.length) {
+    add("info", "O15", "aucune colonne « Statut » ni table sous « Composants inutilisés » — document antérieur au gabarit : rien à confronter (leur présence relève de R-20, côté pilot)", docPath);
+    fin15("SKIP", 2);
+  }
+  if (!noms.size && tablesStatut.length)
+    add("info", "O15", "export sans aucun nom — la présence des composants actifs ou partagés n'est pas confrontée", exportPath);
+  for (const t of tablesStatut) {
+    const iStatut = _colonne(t, "statut");
+    const iNom = Math.max(0, _colonne(t, "composant", "nom", "ressource"));
+    for (const l of t.lignes) {
+      const nom = _valeurCellule(l[iNom]);
+      const statut = _norm(l[iStatut]);
+      if (!_STATUTS_O15.includes(statut))
+        add("bloquant", "O15", `Statut « ${_valeurCellule(l[iStatut])} » de « ${nom} » hors du vocabulaire fermé (actif / partagé / déclaré / inutilisé / hors périmètre) — un statut libre ne distingue plus ce qui sert de ce qui peut partir (TF-1113)`, nom);
+      else if ((statut === "actif" || statut === "partage") && noms.size && !noms.has(nom))
+        add("bloquant", "O15", `composant « ${nom} » déclaré « ${_valeurCellule(l[iStatut])} » mais ABSENT de l'export réel — un composant dit en service que le parc ne connaît pas est un nom mort, une faute de frappe ou un export trop étroit (TF-1113)`, nom);
+    }
+  }
+  const COL_CESSE = "ce qui cesse de fonctionner si on le supprime";
+  const COL_SUPP = "statut de supprimabilite";
+  for (const t of tablesInutiles) {
+    const iCesse = _colonne(t, COL_CESSE);
+    const iSupp = _colonne(t, COL_SUPP);
+    const manquantes = [iCesse < 0 ? "ce qui cesse de fonctionner si on le supprime" : null, iSupp < 0 ? "statut de supprimabilité" : null].filter(Boolean);
+    if (manquantes.length) {
+      add("bloquant", "O15", `table de la section « Composants inutilisés » (ligne ${t.ligne}) sans colonne ${manquantes.map(c => `« ${c} »`).join(" ni ")} — la colonne qui protège d'une suppression dangereuse n'a rien à lire (TF-1117)`, `${path.basename(docPath)}:${t.ligne}`);
+      continue;
+    }
+    const iNom = Math.max(0, _colonne(t, "composant", "nom", "ressource"));
+    for (const l of t.lignes) {
+      const nom = _valeurCellule(l[iNom]);
+      // Une ligne qui déclare la section vide (« aucun composant inutilisé ») n'est pas un composant.
+      if (_vide(l[iSupp]) && _vide(l[iCesse]) && /^aucun/.test(_norm(nom))) continue;
+      const supp = _norm(l[iSupp]);
+      if (!_SUPPRIMABILITE_O15.includes(supp)) {
+        add("bloquant", "O15", `statut de supprimabilité « ${_valeurCellule(l[iSupp])} » de « ${nom} » hors du vocabulaire fermé (supprimable / non supprimable, droit absent / non supprimable, décision / non supprimable, tiers propriétaire) — sans consommateur n'est pas supprimable (TF-1117)`, nom);
+        continue;
+      }
+      if (supp !== "supprimable") continue;
+      const cesse = l[iCesse];
+      if (_vide(cesse))
+        add("bloquant", "O15", `« ${nom} » déclaré supprimable avec « ce qui cesse de fonctionner si on le supprime » VIDE — l'absence de consommateur ouvre une question, elle ne rend pas un verdict (TF-1117)`, nom);
+      else if (/^(rien|aucun|aucune|neant)\b/.test(_norm(cesse)) && !_MESURE_CITEE_O15.test(_sansAccents(cesse)))
+        add("bloquant", "O15", `« ${nom} » déclaré supprimable avec « ${_valeurCellule(cesse)} » comme effet, sans mesure citée — « rien » se prouve par une commande ou une mesure datée, jamais par l'absence de consommateur connu (TF-1117)`, nom);
+    }
+  }
+  const durs15 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin15(durs15.length ? "FAIL" : "PASS", durs15.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

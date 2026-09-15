@@ -1,0 +1,5 @@
+{
+  "format": "forge-ops/export-parc@1",
+  "date": "2026-09-15",
+  "noms": ["ca-exemple-api", "kv-exemple-01", "psql-exemple-01", "acr-exemple-ancien", "fw-exemple-poste", "sc-exemple-deploiement"]
+}

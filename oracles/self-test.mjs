@@ -699,6 +699,45 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
     "O14 borne : export introuvable -> donnees_insuffisantes (aucun defaut implicite)");
 }
 
+// ── O15 (TF-1113 + TF-1117, mesures Produit-11 du 14/09/2026) : LE STATUT DECLARE TIENT FACE A
+// L'EXPORT REEL, ET UN « SUPPRIMABLE » DIT CE QU'IL CASSE ─────────────────────────────────────
+// Le fait TF-1113 : dix elements sans consommateur dans un document CONFORME, aucun statut pour
+// distinguer ce qui sert de ce qui peut partir. Le fait TF-1117 : sur dix lignes « inutilisees »,
+// cinq n'etaient pas supprimables — dont une regle de pare-feu qui portait l'adresse du poste en
+// service. La rouge est ecrite SANS accents, la verte avec des graphies melees : les deux formes
+// sont lues pareil. Messages rouges attendus (un par ligne fautive, cinq au total) :
+//   - « ca-exemple-worker » declare « actif » mais ABSENT de l'export reel ;
+//   - Statut « en service » hors du vocabulaire ferme ;
+//   - « acr-exemple-ancien » supprimable avec « ce qui cesse de fonctionner » VIDE ;
+//   - « fw-exemple-poste » supprimable avec « rien » sans mesure citee ;
+//   - statut de supprimabilite « supprimable apres verification » hors du vocabulaire ferme.
+{
+  const o15 = (exp, doc) => { try { return JSON.parse(run(oracle, ["--statut-composants", exp, doc, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const dir15 = path.join(ici, "..", "fixtures", "o15-statut-composants");
+  const exp15 = path.join(dir15, "export.json");
+  const rRouge15 = o15(exp15, path.join(dir15, "doc-rouge.md"));
+  const f15 = (rRouge15.findings || []).filter(f => f.regle === "O15");
+  ok(rRouge15.verdict === "FAIL", `O15 : inventaire au statut faux ou au supprimable muet -> FAIL (obtenu ${rRouge15.verdict})`);
+  ok(f15.some(f => f.where === "ca-exemple-worker" && /ABSENT de l'export/.test(f.msg)),
+    "O15 : un composant « actif » absent de l'export est NOMME (ca-exemple-worker)");
+  ok(f15.some(f => f.where === "st-exemple-archives" && /« en service ».*hors du vocabulaire fermé/.test(f.msg)),
+    "O15 : un Statut hors vocabulaire (« en service ») -> constat");
+  ok(f15.some(f => f.where === "acr-exemple-ancien" && /VIDE/.test(f.msg)),
+    "O15 : un « supprimable » sans « ce qui cesse de fonctionner » -> constat");
+  ok(f15.some(f => f.where === "fw-exemple-poste" && /« rien ».*sans mesure citée/.test(f.msg)),
+    "O15 : un « supprimable » qui dit « rien » sans mesure -> constat");
+  ok(f15.some(f => f.where === "sc-exemple-deploiement" && /supprimabilité.*hors du vocabulaire fermé/.test(f.msg)),
+    "O15 : un statut de supprimabilite hors vocabulaire -> constat");
+  ok(f15.length === 5, `O15 : cinq lignes fautives, cinq constats (obtenu ${f15.length})`);
+  const rVerte15 = o15(exp15, path.join(dir15, "doc-vert.md"));
+  ok(rVerte15.verdict === "PASS", `O15 : meme parc, statuts au vocabulaire (accentues ou non), « rien » mesure -> PASS (obtenu ${rVerte15.verdict})`);
+  ok(o15(exp15, path.join(ici, "..", "fixtures", "o14-inventaire-composants", "doc-complet.md")).verdict === "SKIP",
+    "O15 borne : un document sans colonne Statut ni section Inutilises -> SKIP (sa presence releve de R-20)");
+  ok(o15(path.join(dir15, "absent.json"), path.join(dir15, "doc-vert.md")).verdict === "donnees_insuffisantes",
+    "O15 borne : export introuvable -> donnees_insuffisantes (aucun defaut implicite)");
+}
+
 // G-03 (TF-0611/0613/0610, 25/08) — LES DEUX JUGES DE LA MIGRATION DNS. Leur recette vit dans
 // l'outil lui-meme (`--self-test`, 17 cas, les deux sens sur les trois regles) ; elle est REJOUEE
 // ici pour que l'invariant du depot la couvre — un controle que la recette du depot ne joue pas
