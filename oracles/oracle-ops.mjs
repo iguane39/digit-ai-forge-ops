@@ -27,6 +27,12 @@
 //   O11 --sonde-disponibilite <racine> : une sonde de disponibilité Terraform (web_test/
 //       availability) ne vise jamais l'origine (`.ingress[0].fqdn`) sans variable de repli
 //       (TF-1121) — sinon elle mesure une adresse que l'utilisateur n'ouvre jamais.
+//   O17 --prerequis-environnement <racine> : chaque bloc `data "<type>" "<nom>"` des fichiers .tf
+//       sous <racine> (même parcours qu'O11) figure dans l'artefact de la pile
+//       <racine>/PREREQUIS-ENVIRONNEMENT.md, table markdown aux colonnes « Ressource » (adresse
+//       Terraform `data.<type>.<nom>`), « Propriétaire » et « Commande de vérification », les deux
+//       dernières renseignées (TF-1122). Pile sans bloc data : SANS_OBJET (SKIP). Blocs data sans
+//       artefact : FAIL qui nomme les blocs.
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -395,17 +401,7 @@ if (args.includes("--sonde-disponibilite")) {
     process.exit(code);
   };
   if (!racineSonde || !fs.existsSync(racineSonde)) { add("info", "O11", "racine introuvable", String(racineSonde)); fin11("SKIP", 2); }
-  const fichiersTf = [];
-  (function lister(dir, prof = 0) {
-    if (prof > 3 || !fs.existsSync(dir)) return;
-    for (const nom of fs.readdirSync(dir)) {
-      if (nom === ".terraform" || nom === "node_modules" || nom === ".git") continue;
-      const p = path.join(dir, nom);
-      let st; try { st = fs.statSync(p); } catch { continue; }
-      if (st.isDirectory()) lister(p, prof + 1);
-      else if (/\.tf$/i.test(nom)) fichiersTf.push(p);
-    }
-  })(racineSonde);
+  const fichiersTf = listerTf(racineSonde);
   const BLOC_SONDE = /resource\s+"(\w*(?:web_test|availability)\w*)"\s+"([^"]+)"\s*\{([\s\S]*?)\n\}/gi;
   let sondesTrouvees = 0;
   for (const f of fichiersTf) {
@@ -431,6 +427,23 @@ if (args.includes("--sonde-disponibilite")) {
   if (!sondesTrouvees) { add("info", "O11", `aucune sonde de disponibilité (web_test/availability) parmi ${fichiersTf.length} fichier(s) .tf — rien à juger`, racineSonde); fin11("SKIP", 2); }
   const durs11 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin11(durs11.length ? "FAIL" : "PASS", durs11.length ? 1 : 0);
+}
+
+// Parcours des fichiers .tf d'une pile, partagé par O11 et O17 : profondeur 3, sans descendre
+// dans .terraform, node_modules ni .git (déclaration hissée, appelable depuis O11 plus haut).
+function listerTf(racine) {
+  const fichiers = [];
+  (function lister(dir, prof = 0) {
+    if (prof > 3 || !fs.existsSync(dir)) return;
+    for (const nom of fs.readdirSync(dir)) {
+      if (nom === ".terraform" || nom === "node_modules" || nom === ".git") continue;
+      const p = path.join(dir, nom);
+      let st; try { st = fs.statSync(p); } catch { continue; }
+      if (st.isDirectory()) lister(p, prof + 1);
+      else if (/\.tf$/i.test(nom)) fichiers.push(p);
+    }
+  })(racine);
+  return fichiers;
 }
 
 // ── O14 · l'inventaire documenté contient chaque nom de l'export RÉEL (TF-1114, mesure
@@ -619,6 +632,89 @@ if (args.includes("--statut-composants")) {
   }
   const durs15 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin15(durs15.length ? "FAIL" : "PASS", durs15.length ? 1 : 0);
+}
+
+// ── O17 · une ressource LUE par la pile est un prérequis d'environnement DÉCLARÉ (TF-1122,
+// mesure Produit-11 du 14/09/2026) ───────────────────────────────────────────────────────
+//
+// LE FAIT. `infra-tf/*.tf` portait SEPT blocs `data` (groupe de ressources, environnement
+// d'exécution, registre d'images, coffre, serveur de base, espace de journaux, télémétrie) que
+// la pile lit et ne crée jamais : c'est la pile d'une AUTRE application qui les a créés sur les
+// deux environnements existants. Aucun document opposable ni aucune garde de pipeline ne le
+// disait. En production, le groupe n'existait pas : le premier déploiement aurait échoué sur la
+// résolution des sources de données, sans message qui nomme ce qui manque. La garde de cible du
+// pipeline vérifiait le GROUPE et s'arrêtait à la coquille.
+//
+// CE QUI EST JUGÉ, contrôle STATIQUE (coïncidence de motif Terraform, aucune exécution) : chaque
+// bloc `data "<type>" "<nom>"` d'un fichier .tf sous la racine (ligne qui commence par `data`,
+// une ligne commentée n'en est pas un) a sa ligne dans l'artefact de la pile.
+//
+// L'ARTEFACT, référentiel versionné (loi n° 4) : `<racine>/PREREQUIS-ENVIRONNEMENT.md`, à côté
+// des fichiers .tf, portant une table markdown dont l'en-tête a les colonnes « Ressource »,
+// « Propriétaire » et « Commande de vérification » (accents facultatifs, autres colonnes libres,
+// plusieurs tables admises). Une ligne par bloc lu : la cellule Ressource porte l'adresse
+// Terraform `data.<type>.<nom>` ; Propriétaire et Commande de vérification sont renseignées —
+// c'est la commande que la garde de cible du pipeline joue pour chaque prérequis.
+// Placée après la lecture partagée O15-O17 : ses constantes doivent être initialisées quand
+// O17 s'exécute (le parcours `listerTf`, déclaration hissée, reste à côté d'O11).
+const PREREQUIS_O17 = "PREREQUIS-ENVIRONNEMENT.md";
+if (args.includes("--prerequis-environnement")) {
+  const racinePre = args[args.indexOf("--prerequis-environnement") + 1];
+  const DOM17 = "Exploitation : chaque ressource LUE par la pile est un prérequis d'environnement déclaré (O-17)";
+  const NJ17 = [
+    "la PRÉSENCE réelle des ressources sur un environnement — l'oracle lit du texte, jamais un appel réseau ; la commande de vérification déclarée est celle que la garde de cible du pipeline doit jouer",
+    "la justesse du propriétaire et de la commande — l'oracle juge qu'ils sont renseignés, jamais qu'ils sont vrais",
+    "le sens inverse : une ligne de l'artefact qui ne correspond plus à aucun bloc data (prérequis périmé) n'est pas jugée",
+    "les blocs data d'un module rangé hors de la racine (source ../, registre, git) ou placés dans un commentaire bloc /* */ — seul le texte .tf sous la racine est lu, profondeur 3, comme O-11",
+  ];
+  const fin17 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM17, artefact: racinePre || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O17", msg: "chaque bloc data de la pile est déclaré en prérequis d'environnement, avec propriétaire et commande de vérification", where: racinePre }], non_juge: NJ17 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!racinePre || !fs.existsSync(racinePre)) { add("info", "O17", "racine introuvable", String(racinePre)); fin17("SKIP", 2); }
+  const fichiersTf = listerTf(racinePre);
+  const BLOC_DATA = /^[ \t]*data\s+"([^"]+)"\s+"([^"]+)"\s*\{/gm;
+  const blocs = new Map();
+  for (const f of fichiersTf) {
+    const texte = fs.readFileSync(f, "utf8");
+    const ou = path.relative(racinePre, f).split(path.sep).join("/");
+    let m;
+    BLOC_DATA.lastIndex = 0;
+    while ((m = BLOC_DATA.exec(texte))) {
+      const adresse = `data.${m[1]}.${m[2]}`;
+      if (!blocs.has(adresse)) blocs.set(adresse, ou);
+    }
+  }
+  if (!blocs.size) { add("info", "O17", `SANS_OBJET : aucun bloc data parmi ${fichiersTf.length} fichier(s) .tf — la pile ne lit rien qu'elle ne crée`, racinePre); fin17("SKIP", 2); }
+  const liste = [...blocs.keys()].join(", ");
+  const artefact = path.join(racinePre, PREREQUIS_O17);
+  if (!fs.existsSync(artefact)) {
+    add("bloquant", "O17", `la pile LIT ${blocs.size} ressource(s) sans les créer et ne porte aucun artefact ${PREREQUIS_O17} à sa racine : ${liste} — sur un environnement neuf qui en manque, le premier déploiement échoue à la résolution des sources de données, sans message qui nomme ce qui manque (TF-1122)`, PREREQUIS_O17);
+    fin17("FAIL", 1);
+  }
+  const tablesPre = _tablesMarkdown(fs.readFileSync(artefact, "utf8"))
+    .filter(t => _colonne(t, "ressource") >= 0 && _colonne(t, "proprietaire") >= 0 && _colonne(t, "commande de verification") >= 0);
+  if (!tablesPre.length) {
+    add("bloquant", "O17", `${PREREQUIS_O17} ne porte aucune table aux colonnes « Ressource », « Propriétaire », « Commande de vérification » — blocs lus non déclarés : ${liste} (TF-1122)`, PREREQUIS_O17);
+    fin17("FAIL", 1);
+  }
+  const declarees = tablesPre.flatMap(t => {
+    const iR = _colonne(t, "ressource"), iP = _colonne(t, "proprietaire"), iC = _colonne(t, "commande de verification");
+    return t.lignes.map(l => ({ ressource: _valeurCellule(l[iR]).split(/[\s,;]+/), proprietaire: l[iP], commande: l[iC] }));
+  });
+  for (const [adresse, ou] of blocs) {
+    const d = declarees.find(x => x.ressource.includes(adresse));
+    if (!d) {
+      add("bloquant", "O17", `bloc ${adresse} (${ou}) lu par la pile, ABSENT de ${PREREQUIS_O17} — une dépendance contractuelle non écrite se découvre le jour de la mise en production (TF-1122)`, adresse);
+      continue;
+    }
+    if (_vide(d.proprietaire))
+      add("bloquant", "O17", `prérequis ${adresse} sans PROPRIÉTAIRE — personne n'est désigné pour le créer sur un environnement neuf (TF-1122)`, adresse);
+    if (_vide(d.commande))
+      add("bloquant", "O17", `prérequis ${adresse} sans COMMANDE DE VÉRIFICATION — la garde de cible n'a rien à jouer pour lui (TF-1122)`, adresse);
+  }
+  const durs17 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin17(durs17.length ? "FAIL" : "PASS", durs17.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

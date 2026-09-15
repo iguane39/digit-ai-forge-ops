@@ -772,6 +772,42 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
     `O16 borne : documents reels du depot et carnet d'ecarts sans nettoyage declare -> aucun constat (obtenu ${reels16.join("/")})`);
 }
 
+// ── O17 (TF-1122, mesure Produit-11 du 14/09/2026) : UNE RESSOURCE LUE PAR LA PILE EST UN
+// PREREQUIS D'ENVIRONNEMENT DECLARE ─────────────────────────────────────────────────────────
+// Le fait : sept blocs `data` lus et jamais crees par la pile, crees ailleurs par la pile d'une
+// autre application, ecrits nulle part ; en production le groupe n'existait pas.
+// Messages rouges attendus :
+//   rouge/ (artefact incomplet) : deux constats —
+//     bloc data.azurerm_container_app_environment.execution ABSENT de PREREQUIS-ENVIRONNEMENT.md ;
+//     prerequis data.azurerm_key_vault.coffre sans PROPRIÉTAIRE ;
+//   rouge-sans-artefact/ : un constat qui NOMME les deux blocs lus
+//     (data.azurerm_resource_group.socle, data.azurerm_log_analytics_workspace.journaux).
+{
+  const o17 = (racine) => { try { return JSON.parse(run(oracle, ["--prerequis-environnement", racine, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const dir17 = path.join(ici, "..", "fixtures", "o17-prerequis-environnement");
+  const rRouge17 = o17(path.join(dir17, "rouge"));
+  const f17 = (rRouge17.findings || []).filter(f => f.regle === "O17");
+  ok(rRouge17.verdict === "FAIL", `O17 : un bloc data lu et non declare -> FAIL (obtenu ${rRouge17.verdict})`);
+  ok(f17.some(f => f.where === "data.azurerm_container_app_environment.execution" && /ABSENT de PREREQUIS-ENVIRONNEMENT\.md/.test(f.msg)),
+    "O17 : le bloc absent de l'artefact est NOMME par son adresse Terraform");
+  ok(f17.some(f => f.where === "data.azurerm_key_vault.coffre" && /sans PROPRIÉTAIRE/.test(f.msg)),
+    "O17 : un prerequis declare sans proprietaire -> constat");
+  ok(f17.length === 2, `O17 : un bloc absent + un proprietaire vide = 2 constats (obtenu ${f17.length})`);
+  const rSans17 = o17(path.join(dir17, "rouge-sans-artefact"));
+  ok(rSans17.verdict === "FAIL" && (rSans17.findings || []).some(f => f.regle === "O17"
+      && /aucun artefact PREREQUIS-ENVIRONNEMENT\.md/.test(f.msg)
+      && /data\.azurerm_resource_group\.socle/.test(f.msg) && /data\.azurerm_log_analytics_workspace\.journaux/.test(f.msg)),
+    `O17 : blocs data sans artefact -> FAIL dont le message NOMME les deux blocs (obtenu ${rSans17.verdict})`);
+  const rVerte17 = o17(path.join(dir17, "verte"));
+  ok(rVerte17.verdict === "PASS", `O17 : memes blocs, tous declares (artefact sans accents, ligne commentee ignoree) -> PASS (obtenu ${rVerte17.verdict})`);
+  const rSo17 = o17(path.join(ici, "..", "fixtures", "o11-sonde-disponibilite", "verte"));
+  ok(rSo17.verdict === "SKIP" && (rSo17.findings || []).some(f => /SANS_OBJET/.test(f.msg)),
+    `O17 borne : une pile sans bloc data -> SKIP SANS_OBJET (obtenu ${rSo17.verdict})`);
+  ok(o17(path.join(dir17, "absente")).verdict === "SKIP",
+    "O17 borne : racine introuvable -> SKIP, jamais un FAIL par defaut implicite");
+}
+
 // G-03 (TF-0611/0613/0610, 25/08) — LES DEUX JUGES DE LA MIGRATION DNS. Leur recette vit dans
 // l'outil lui-meme (`--self-test`, 17 cas, les deux sens sur les trois regles) ; elle est REJOUEE
 // ici pour que l'invariant du depot la couvre — un controle que la recette du depot ne joue pas
