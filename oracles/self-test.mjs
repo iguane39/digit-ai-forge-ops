@@ -738,6 +738,40 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
     "O15 borne : export introuvable -> donnees_insuffisantes (aucun defaut implicite)");
 }
 
+// ── O16 (TF-1120, mesure Produit-11 du 14/09/2026) : UN NETTOYAGE D'INFRASTRUCTURE SE CLOT
+// SUR TROIS QUESTIONS ────────────────────────────────────────────────────────────────────────
+// Le fait : un nettoyage restitue et double d'un journal date, juge complet, dont deux volets sur
+// trois n'avaient jamais ete regardes ; seule une question humaine les a fait apparaitre.
+// Messages rouges attendus :
+//   rouge.md (detecte par son titre, forme liste) : deux constats —
+//     « ce qui la crée est-il traité ? » sans PREUVE ;
+//     sans la question de cloture « le prochain environnement la recréera-t-il ? » ;
+//   rouge-table.md (detecte par son frontmatter, forme table) : un constat —
+//     « le prochain environnement la recréera-t-il ? » sans PREUVE (cellule « — »).
+{
+  const o16 = f => { const r = (() => { try { return JSON.parse(run(oracle, [f, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { findings: [] }; } } })();
+    return (r.findings || []).filter(x => x.regle === "O16"); };
+  const dir16 = path.join(ici, "..", "fixtures", "o16-cloture-nettoyage");
+  const rouge16 = o16(path.join(dir16, "rouge.md"));
+  ok(rouge16.some(f => /ce qui la crée est-il traité/.test(f.msg) && /sans PREUVE/.test(f.msg)),
+    "O16 : question de cloture posee et repondue, preuve vide -> constat");
+  ok(rouge16.some(f => /sans la question de cloture « le prochain environnement la recréera-t-il \? »/.test(f.msg)),
+    "O16 : question de cloture absente (prochain environnement) -> constat qui la NOMME");
+  ok(rouge16.length === 2, `O16 : un manque de preuve + une question absente = 2 constats (obtenu ${rouge16.length})`);
+  const rougeTable16 = o16(path.join(dir16, "rouge-table.md"));
+  ok(rougeTable16.length === 1 && /prochain environnement/.test(rougeTable16[0].msg) && /sans PREUVE/.test(rougeTable16[0].msg),
+    `O16 : forme table, cellule Preuve « — » -> 1 constat nommant la question (obtenu ${rougeTable16.length})`);
+  ok(o16(path.join(dir16, "verte.md")).length === 0,
+    "O16 : trois questions, reponses et preuves posees (ecrit sans accents, forme liste) -> aucun constat");
+  ok(o16(path.join(dir16, "verte-table.md")).length === 0,
+    "O16 : meme cloture en table, detectee par le frontmatter -> aucun constat");
+  const reels16 = ["README.md", "CLAUDE.md", path.join("references", "GESTES-EXPLOITATION.md")]
+    .map(f => o16(path.join(ici, "..", f)).length);
+  ok(reels16.every(n => n === 0) && o16(path.join(ici, "..", "fixtures", "o13-gestes-destructifs", "verte.md")).length === 0,
+    `O16 borne : documents reels du depot et carnet d'ecarts sans nettoyage declare -> aucun constat (obtenu ${reels16.join("/")})`);
+}
+
 // G-03 (TF-0611/0613/0610, 25/08) — LES DEUX JUGES DE LA MIGRATION DNS. Leur recette vit dans
 // l'outil lui-meme (`--self-test`, 17 cas, les deux sens sur les trois regles) ; elle est REJOUEE
 // ici pour que l'invariant du depot la couvre — un controle que la recette du depot ne joue pas

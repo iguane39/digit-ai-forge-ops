@@ -40,6 +40,11 @@
 //       un composant de Statut « actif » ou « partagé » figure dans l'export ; tout Statut est
 //       pris au vocabulaire fermé ; une ligne « supprimable » de la section « Composants
 //       inutilisés » dit ce qui cesse de fonctionner si on la supprime (« rien » exige une mesure).
+//   O16 (implicite, toute cible .md qui DÉCLARE un nettoyage d'infrastructure : frontmatter
+//       `nettoyage_infrastructure:`, OU un titre markdown portant « nettoyage » avec
+//       « infrastructure », « composant(s) », « ressource(s) » ou « environnement(s) ») : les
+//       trois questions de clôture y figurent, chacune avec « Réponse : » et « Preuve : » non
+//       vides, ou en ligne d'une table à colonnes Réponse et Preuve (TF-1120).
 //   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
 //       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
@@ -57,6 +62,7 @@ const NON_JUGE = [
   "supervision continue / alerting (hors périmètre v0)",
   "secrets et configuration d'environnement — jamais transportés par la forge",
   "cible dont pointeur/historique sont tenus par une plateforme externe (fichier PLATEFORME) : preuve d'exécution laissée à O-5 (plan) et aux verdicts propres de la plateforme (TF-0844)",
+  "O16 : la VÉRITÉ des réponses et des preuves de clôture d'un nettoyage — l'oracle juge qu'elles sont écrites, jamais qu'elles sont justes ; et un nettoyage raconté sans frontmatter `nettoyage_infrastructure:` ni titre qui le déclare n'est pas détecté (TF-1120)",
 ];
 const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation"];
 
@@ -762,6 +768,66 @@ function jugerGestesDestructifs(texte) {
   return constats;
 }
 
+// ── O16 · TF-1120 (mesure Produit-11 du 14/09/2026) : UN NETTOYAGE D'INFRASTRUCTURE SE CLÔT
+// SUR TROIS QUESTIONS, PAS UNE ─────────────────────────────────────────────────────────────
+//
+// LE FAIT. Dix composants déclarés inutilisés, cinq supprimés, un journal daté, une restitution
+// et deux lots de retours : aucun de ces artefacts ne demandait « qu'est-ce qui crée ce
+// composant, et le recréera-t-il ailleurs ? ». Il a fallu une QUESTION HUMAINE pour qu'un audit
+// du code soit mené ; il a montré que le résultat était bon, et que personne n'était allé le
+// vérifier. Le second volet était faux : en qualification, les équivalents étaient VIVANTS.
+//
+// CE QUI EST JUGÉ, même posture qu'O-13 (coïncidence de motif, aucune exécution), sur un
+// document qui DÉCLARE un nettoyage — critère de détection explicite, et rien d'autre :
+//   - frontmatter portant la clé `nettoyage_infrastructure:` ;
+//   - OU un titre markdown (#…) portant « nettoyage » ET l'un de « infrastructure »,
+//     « composant(s) », « ressource(s) », « environnement(s) ».
+// Le document porte alors les trois questions, reconnues à leur formulation (accents ou non) :
+//   Q1 « … supprimée sur chaque environnement … » ; Q2 « ce qui la/le/les crée … » ;
+//   Q3 « le prochain environnement … la recréera … ».
+// Chacune porte sa réponse et sa preuve, non vides, sous l'une de deux formes : des lignes
+// « Réponse : … » et « Preuve : … » qui suivent la question (avant la question suivante ou le
+// titre suivant, douze lignes au plus), ou une ligne de table dont l'en-tête a les colonnes
+// « Réponse » et « Preuve ». Les trois manques sont jugés indépendamment.
+const _NETTOYAGE_FM_O16 = /^nettoyage_infrastructure\s*:/m;
+const _NETTOYAGE_TITRE_O16 = /^#{1,6} .*\bnettoyage\b.*\b(infrastructure|composants?|ressources?|environnements?)\b/;
+const _QUESTIONS_O16 = [
+  { libelle: "l'instance est-elle supprimée sur chaque environnement où elle existe ?", re: /supprim\w* sur chaque environnement/ },
+  { libelle: "ce qui la crée est-il traité ?", re: /ce qui (?:la|le|les) cree/ },
+  { libelle: "le prochain environnement la recréera-t-il ?", re: /prochain environnement\b.{0,40}recre/ },
+];
+function jugerClotureNettoyage(texte) {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(texte);
+  const lignes = String(texte).split(/\r?\n/).map(_sansAccents);
+  const declare = (fm && _NETTOYAGE_FM_O16.test(fm[1])) || lignes.some(l => _NETTOYAGE_TITRE_O16.test(l));
+  if (!declare) return null;
+  const cellules = l => l.replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  const positions = _QUESTIONS_O16.map(q => lignes.findIndex(l => q.re.test(l)));
+  return _QUESTIONS_O16.map((q, k) => {
+    const i = positions[k];
+    if (i < 0) return { libelle: q.libelle, absente: true };
+    let reponse, preuve;
+    if (lignes[i].startsWith("|")) {
+      let h = i;
+      while (h > 0 && lignes[h - 1].startsWith("|")) h--;
+      const entetes = cellules(lignes[h]).map(_norm);
+      const c = cellules(lignes[i]);
+      const iR = entetes.indexOf("reponse"), iP = entetes.indexOf("preuve");
+      reponse = iR >= 0 ? c[iR] : undefined;
+      preuve = iP >= 0 ? c[iP] : undefined;
+    } else {
+      const suivantes = positions.filter(p => p > i);
+      let fin = Math.min(i + 12, lignes.length, ...suivantes);
+      for (let j = i + 1; j < fin; j++) if (/^#{1,6} /.test(lignes[j])) { fin = j; break; }
+      for (let j = i; j < fin; j++) {
+        const r = /\breponse\s*:(.*)$/.exec(lignes[j]); if (r && reponse === undefined) reponse = r[1];
+        const p = /\bpreuve\s*:(.*)$/.exec(lignes[j]); if (p && preuve === undefined) preuve = p[1];
+      }
+    }
+    return { libelle: q.libelle, absente: false, sansReponse: _vide(reponse), sansPreuve: _vide(preuve) };
+  });
+}
+
 // ── TF-0579 (lot Produit-02 20260824) : LE VERDICT S'ARCHIVE ET DIT SON REGIME ──────
 //
 // LE FAIT, verifie a l'historique git. Un smoke de MEP controlait la presence d'un chemin de
@@ -876,8 +942,23 @@ if (cible && fs.existsSync(cible)) {
             + "sans elle, un decalage (pare-feu referme, image supprimee) ne se revele qu'a la "
             + "revision suivante, sans lien visible avec le geste (TF-1118)", cible);
       }
+      // O16 (TF-1120) — un nettoyage d'infrastructure declare se clot sur trois questions,
+      // chacune avec sa reponse et sa preuve ; les trois manques sont juges independamment.
+      for (const q of jugerClotureNettoyage(texteCible) || []) {
+        if (q.absente) {
+          add("bloquant", "O16", `nettoyage d'infrastructure declare sans la question de cloture « ${q.libelle} » — `
+            + "supprimer une instance sans traiter sa source est un nettoyage qui se defait tout seul (TF-1120)", cible);
+          continue;
+        }
+        if (q.sansReponse)
+          add("bloquant", "O16", `question de cloture « ${q.libelle} » sans REPONSE — `
+            + "« Reponse : … » sous la question, ou colonne Reponse de sa ligne de table (TF-1120)", cible);
+        if (q.sansPreuve)
+          add("bloquant", "O16", `question de cloture « ${q.libelle} » sans PREUVE — une reponse sans commande `
+            + "ni mesure citee est une affirmation ; « Preuve : … » ou colonne Preuve (TF-1120)", cible);
+      }
     }
-  } catch { /* cible illisible : O9/O12/O13 se taisent plutot que d'accuser */ }
+  } catch { /* cible illisible : O9/O12/O13/O16 se taisent plutot que d'accuser */ }
 }
 
 if (!cible || !fs.existsSync(cible)) { add("info", "—", "cible introuvable", String(cible)); sortir("SKIP", 2); }
