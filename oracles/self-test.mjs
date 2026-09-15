@@ -657,6 +657,48 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
     `O11 borne : le code reel de ce depot (scripts/, aucun .tf) ne remonte aucun FAIL (obtenu ${rO11Skip.verdict})`);
 }
 
+// ── O13 (TF-1116 + TF-1118, mesure Produit-11 du 14/09/2026) : UN GESTE DESTRUCTIF PORTE
+// SA MATURITE ET SA MESURE DE NON-REGRESSION ────────────────────────────────────────────────
+// Le fait TF-1116 : un correctif eprouve sur un environnement, transpose tel quel a un second,
+// etait INFAISABLE (161 adresses de sortie contre une seule) — rien ne distinguait le geste
+// DEDUIT du geste EPROUVE. Le fait TF-1118 : dix lignes de suppression, aucune mesure de
+// non-regression prescrite ; posee par prudence, elle a evite un retour arriere reel.
+{
+  const o13 = f => { const r = (() => { try { return JSON.parse(run(oracle, [f, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { findings: [] }; } } })();
+    return (r.findings || []).filter(x => x.regle === "O13"); };
+  const dir13 = path.join(ici, "..", "fixtures", "o13-gestes-destructifs");
+  const rouge13 = o13(path.join(dir13, "rouge.md"));
+  ok(rouge13.some(f => /MATURITE/.test(f.msg)), "O13 : geste destructif sans marque de maturite -> constat");
+  ok(rouge13.some(f => /NON-REGRESSION/.test(f.msg)), "O13 : geste destructif sans mesure de non-regression -> constat");
+  ok(rouge13.length === 4, `O13 : DEUX gestes distincts x DEUX marques manquantes = 4 constats (obtenu ${rouge13.length})`);
+  const verte13 = o13(path.join(dir13, "verte.md"));
+  ok(verte13.length === 0, `O13 : memes gestes, les deux marques posees -> aucun constat (obtenu ${verte13.length})`);
+  ok(o13(path.join(ici, "self-test.mjs")).length === 0,
+    "O13 borne : ce fichier (aucun verbe destructif en tete de liste) ne remonte aucun constat");
+}
+
+// ── O14 (TF-1114, mesure Produit-11 du 14/09/2026) : L'INVENTAIRE DOCUMENTE CONTIENT
+// CHAQUE NOM DE L'EXPORT REEL ────────────────────────────────────────────────────────────
+// Le fait : un document d'inventaire verifie_le vieux de 34 jours, juge CONFORME par un
+// oracle de presence de sections ; confronte a la main a un export du parc, 7 noms absents —
+// dont cinq alertes ecrites « idem » et un nom entre accolades, jamais lus comme des noms.
+{
+  const o14 = (exp, doc) => { try { return JSON.parse(run(oracle, ["--inventaire-composants", exp, doc, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const dir14 = path.join(ici, "..", "fixtures", "o14-inventaire-composants");
+  const exp14 = path.join(dir14, "export-reel.json");
+  const rRouge14 = o14(exp14, path.join(dir14, "doc-incomplet.md"));
+  ok(rRouge14.verdict === "FAIL", `O14 : document d'inventaire incomplet (« idem ») -> FAIL (obtenu ${rRouge14.verdict})`);
+  ok((rRouge14.findings || []).filter(f => f.regle === "O14").length === 2,
+    `O14 : les 2 noms absents (appi-exemple-qualif, id-exemple-api) sont NOMMES (obtenu ${(rRouge14.findings || []).filter(f => f.regle === "O14").length})`);
+  ok((rRouge14.findings || []).some(f => f.where === "appi-exemple-qualif"), "O14 : le constat nomme la ressource fautive, pas un total anonyme");
+  const rVerte14 = o14(exp14, path.join(dir14, "doc-complet.md"));
+  ok(rVerte14.verdict === "PASS", `O14 : meme export, document complet -> PASS (obtenu ${rVerte14.verdict})`);
+  ok(o14(path.join(dir14, "absent.json"), path.join(dir14, "doc-complet.md")).verdict === "donnees_insuffisantes",
+    "O14 borne : export introuvable -> donnees_insuffisantes (aucun defaut implicite)");
+}
+
 // G-03 (TF-0611/0613/0610, 25/08) — LES DEUX JUGES DE LA MIGRATION DNS. Leur recette vit dans
 // l'outil lui-meme (`--self-test`, 17 cas, les deux sens sur les trois regles) ; elle est REJOUEE
 // ici pour que l'invariant du depot la couvre — un controle que la recette du depot ne joue pas

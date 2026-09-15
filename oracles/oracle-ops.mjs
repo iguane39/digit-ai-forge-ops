@@ -30,6 +30,12 @@
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
+//   O13 (implicite, toute cible .md) : un item de liste portant un verbe destructif à
+//       l'infinitif (supprimer/retirer/fermer/purger/détruire) porte sa MATURITÉ (éprouvé/
+//       déduit, TF-1116) et sa MESURE DE NON-RÉGRESSION (TF-1118) — jugées indépendamment.
+//   O14 --inventaire-composants <export.json> <doc.md> : chaque nom d'un export machine du
+//       parc figure LITTÉRALEMENT dans le document d'inventaire (TF-1114) — un « idem » ou
+//       une accolade {a,b} n'est jamais un nom.
 //   R   --verdict-rollback <mesures> --seuils <fichier> : RECOMMANDATION seule (pas un
 //       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
@@ -417,6 +423,51 @@ if (args.includes("--sonde-disponibilite")) {
   fin11(durs11.length ? "FAIL" : "PASS", durs11.length ? 1 : 0);
 }
 
+// ── O14 · l'inventaire documenté contient chaque nom de l'export RÉEL (TF-1114, mesure
+// Produit-11 du 14/09/2026) ─────────────────────────────────────────────────────────────
+//
+// LE FAIT. `docs/projet/COMPOSANTS-OPS.md` portait `verifie_le: 2026-08-11` alors qu'entre
+// temps 2 comptes de stockage, 2 tâches planifiées, 16 ressources de supervision et les 35
+// ressources d'un second groupe de ressources sont nées — un oracle de présence de sections
+// (R-20, côté pilot) rendait PASS sans jamais confronter le document au parc réel. Contrôle
+// joué à la main en 40 lignes le 14/09 : export du parc, chaque nom cherché LITTÉRALEMENT
+// dans le document → 7 absents (dont cinq alertes écrites « idem », un nom entre accolades) ;
+// 0 après correction.
+//
+// CE QUI EST JUGÉ, sur le modèle d'O-6 (état déclaré vs constaté, jamais un appel réseau) :
+// chaque nom d'un EXPORT MACHINE (produit hors de cet oracle — `az graph query`, `ops.mjs
+// etat --sortie`) figure LITTÉRALEMENT dans le document d'inventaire. Un « idem » ou une
+// accolade `{a,b}` n'est jamais lu comme un nom — coïncidence de sous-chaîne stricte.
+if (args.includes("--inventaire-composants")) {
+  const iInv = args.indexOf("--inventaire-composants");
+  const exportPath = args[iInv + 1];
+  const docPath = args[iInv + 2];
+  const DOM14 = "Exploitation : l'inventaire documenté contient chaque nom de l'export réel (O-14)";
+  const NJ14 = [
+    "la fraîcheur de l'EXPORT lui-même — l'oracle confronte deux fichiers, jamais le parc cloud en direct",
+    "le sens inverse (un nom cité comme ACTIF dans le document existe dans l'export) — dépend d'un "
+      + "vocabulaire de statut fermé (colonne « Statut ») que le gabarit pilot ne porte pas encore (TF-1113)",
+    "la nature de la correspondance — une coïncidence de sous-chaîne stricte, jamais une correspondance structurelle (tableau, section)",
+  ];
+  const fin14 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM14, artefact: docPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O14", msg: "chaque nom de l'export figure dans le document d'inventaire", where: docPath }], non_juge: NJ14 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!exportPath || !fs.existsSync(exportPath)) { add("bloquant", "O14", "export introuvable", String(exportPath)); fin14("donnees_insuffisantes", 2); }
+  if (!docPath || !fs.existsSync(docPath)) { add("bloquant", "O14", "document d'inventaire introuvable", String(docPath)); fin14("donnees_insuffisantes", 2); }
+  let exportData = null;
+  try { exportData = JSON.parse(fs.readFileSync(exportPath, "utf8")); } catch { add("bloquant", "O14", "export illisible (JSON invalide)", exportPath); fin14("FAIL", 1); }
+  const noms = Array.isArray(exportData?.noms) ? exportData.noms : [];
+  if (!noms.length) { add("info", "O14", "export sans aucun nom — rien à confronter", exportPath); fin14("SKIP", 2); }
+  const docTexte = fs.readFileSync(docPath, "utf8");
+  for (const nom of noms) {
+    if (!docTexte.includes(nom))
+      add("bloquant", "O14", `ressource « ${nom} » présente dans l'export réel mais ABSENTE, littéralement, du document d'inventaire — un « idem » ou une accolade {a,b} n'est pas un nom`, nom);
+  }
+  const durs14 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin14(durs14.length ? "FAIL" : "PASS", durs14.length ? 1 : 0);
+}
+
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
 // RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a
 // figés dans un fichier de config (latence, taux d'erreur, fenêtre minimale) — aucun défaut
@@ -521,6 +572,49 @@ function jugerRemediationParEnvironnement(chemin) {
   return { declare, fm: fm[1] };
 }
 
+// ── O13 · TF-1116 + TF-1118 (mesure Produit-11 du 14/09/2026) : UN GESTE DESTRUCTIF PORTE SA
+// MATURITE ET SA MESURE DE NON-REGRESSION ───────────────────────────────────────────────────
+//
+// LE FAIT (TF-1116). Le correctif « retirer la règle AllowAllAzureServicesAndResources »
+// avait réussi sur un environnement le 25/08 ; transposé tel quel à un second, il était
+// INFAISABLE — le pool de sortie de l'environnement cible portait 161 adresses contre UNE
+// seule sur le premier, deux environnements pourtant de même type et de même région. RIEN ne
+// distinguait ce geste DÉDUIT (transposé sans mesure) d'un geste ÉPROUVÉ (rejoué et vérifié).
+//
+// LE FAIT (TF-1118). Sur dix lignes d'un inventaire de suppression, AUCUNE ne portait la
+// vérification prouvant que le geste n'avait rien rompu — posée par prudence, elle a servi
+// trois fois (dont un retour arrière réel évité). Le risque propre aux suppressions
+// d'infrastructure est le DÉCALAGE : un pare-feu refermé ne casse rien tant qu'aucune
+// connexion neuve ne s'ouvre — l'incident arrive à la révision suivante, sans lien visible.
+//
+// CE QUI EST JUGÉ, contrôle STATIQUE (coïncidence de motif, aucune exécution) : dans un
+// document d'exploitation ou un carnet d'écarts, tout item de liste portant un verbe
+// destructif à l'infinitif (supprimer/retirer/fermer/purger/détruire) porte, dans la fenêtre
+// qui suit, DEUX marques distinctes — (a) sa MATURITÉ : « éprouvé sur cette cible le
+// AAAA-MM-JJ » ou « déduit d'une autre cible, à mesurer avant exécution » ; (b) sa MESURE DE
+// NON-RÉGRESSION : une ligne « Mesure de non-régression : <commande ou vérification> ». Les
+// deux marques sont jugées indépendamment — un geste peut porter l'une sans l'autre.
+const _GESTE_DESTRUCTIF = /^[ \t]*(?:[-*]|\d+[.)])\s.*\b(?:supprimer|retirer|fermer|purger|détruire|detruire)\b/gim;
+const _MARQUE_MATURITE = /éprouvé sur cette cible le \d{4}-\d{2}-\d{2}|eprouve sur cette cible le \d{4}-\d{2}-\d{2}|déduit d'une autre cible[^.\n]{0,60}mesurer avant exécution|deduit d'une autre cible[^.\n]{0,60}mesurer avant execution/i;
+const _MARQUE_NON_REGRESSION = /mesure de non[- ]r[ée]gression\s*:\s*\S/i;
+const _GESTE_WINDOW = 500;
+
+function jugerGestesDestructifs(texte) {
+  const constats = [];
+  let m;
+  _GESTE_DESTRUCTIF.lastIndex = 0;
+  while ((m = _GESTE_DESTRUCTIF.exec(texte))) {
+    const ligne = m[0].trim();
+    const fenetre = texte.slice(m.index, m.index + _GESTE_WINDOW);
+    constats.push({
+      ligne,
+      sansMaturite: !_MARQUE_MATURITE.test(fenetre),
+      sansMesure: !_MARQUE_NON_REGRESSION.test(fenetre),
+    });
+  }
+  return constats;
+}
+
 // ── TF-0579 (lot Produit-02 20260824) : LE VERDICT S'ARCHIVE ET DIT SON REGIME ──────
 //
 // LE FAIT, verifie a l'historique git. Un smoke de MEP controlait la presence d'un chemin de
@@ -621,8 +715,22 @@ if (cible && fs.existsSync(cible)) {
           + "ou elle a ete rejouee — « appliquee » sans perimetre laisse un environnement suivant "
           + "hors de portee du controle, potentiellement encore expose (TF-1115)", cible);
       }
+      // O13 (TF-1116 + TF-1118) — tout geste destructif porte sa maturite ET sa mesure de
+      // non-regression ; les deux marques sont jugees independamment.
+      const texteCible = fs.readFileSync(cible, "utf8");
+      for (const geste of jugerGestesDestructifs(texteCible)) {
+        if (geste.sansMaturite)
+          add("bloquant", "O13", `geste destructif sans marque de MATURITE (« ${geste.ligne} ») — `
+            + "« eprouve sur cette cible le AAAA-MM-JJ » ou « deduit d'une autre cible, a mesurer "
+            + "avant execution » : un geste jamais joue sur sa cible n'est pas une procedure, "
+            + "c'est une hypothese redigee a l'imperatif (TF-1116)", cible);
+        if (geste.sansMesure)
+          add("bloquant", "O13", `geste destructif sans MESURE DE NON-REGRESSION (« ${geste.ligne} ») — `
+            + "sans elle, un decalage (pare-feu referme, image supprimee) ne se revele qu'a la "
+            + "revision suivante, sans lien visible avec le geste (TF-1118)", cible);
+      }
     }
-  } catch { /* cible illisible : O9/O12 se taisent plutot que d'accuser */ }
+  } catch { /* cible illisible : O9/O12/O13 se taisent plutot que d'accuser */ }
 }
 
 if (!cible || !fs.existsSync(cible)) { add("info", "—", "cible introuvable", String(cible)); sortir("SKIP", 2); }
