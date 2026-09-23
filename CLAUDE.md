@@ -81,6 +81,10 @@ explicite seulement, jamais déduite du nom du dossier (l'oubli n'existe pas).
 
 ## Oracles (verdicts consommés par la MEP)
 
+`node oracles/decouvrir-oracles.mjs` — la liste des oracles de la forge, LUE SUR LE DISQUE
+(contrat `digit-ai/decouverte-oracles@1` du pilot, TF-1319) : c'est elle que le juge
+d'enclenchement du pilot confronte aux verdicts consignés au ledger d'un run.
+
 `node oracles/oracle-ops.mjs <cible>` — contrat JSON `{oracle,domaine,artefact,verdict,
 findings,non_juge}`, exit 0/1/2 :
 - **O1** `COURANT` pointe une release existante (SANS_OBJET si `PLATEFORME` est déclaré, TF-0844) ;
