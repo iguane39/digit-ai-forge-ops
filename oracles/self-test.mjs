@@ -223,6 +223,25 @@ doc.phases.rollback = [];
 fs.writeFileSync(pAmpute, JSON.stringify(doc), "utf8");
 ok(verdictPlan(pAmpute) === "FAIL", "plan sans rollback → O-5 FAIL");
 
+// TF-1217 : le motif de credential (AKIA/ghp_/sk-/BEGIN PRIVATE KEY) cherche des FORMATS de
+// clé réelle — il laisse passer un secret TRIVIAL en clair dans un champ mot_de_passe/
+// password/secret/jeton (ex. "password": "azerty123", zéro entropie, aucun préfixe connu).
+const planJson = (fichier) => { try { return JSON.parse(run(oracle, ["--plan", fichier, "--json-only"])); }
+  catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+// ROUGE : plan hors zone fixture, champ password littéral → O-5 FAIL, finding nommant TF-1217.
+const pSecret = path.join(base, "plan-secret-trivial.json");
+run(ops, ["plan", "railway", fx("app-verte"), "--sortie", pSecret]);
+const docSecret = JSON.parse(fs.readFileSync(pSecret, "utf8"));
+docSecret.environnement = { password: "azerty123" };
+fs.writeFileSync(pSecret, JSON.stringify(docSecret), "utf8");
+const rSecret = planJson(pSecret);
+ok(rSecret.verdict === "FAIL", "plan avec secret trivial en clair (password) hors fixture → O-5 FAIL (TF-1217)");
+ok((rSecret.findings || []).some(f => f.regle === "O5" && /TF-1217/.test(f.msg)),
+  "plan avec secret trivial : le finding nomme TF-1217");
+// VERTE : même secret trivial, mais plan déclaré sous fixtures/ (exemption de test) → O-5 PASS.
+ok(planJson(fx("o5-secret-trivial/plan-secret-fixture.json")).verdict === "PASS",
+  "plan équivalent déclaré sous fixtures/ (exemption de test) → O-5 PASS (TF-1217)");
+
 // ── CANARY LOCAL SIMULÉ (TF-0107 · 1) · verte : promotion sur critère atteint ──────
 console.log("");
 const journalDe = f => fs.readFileSync(path.join(f, "journal.jsonl"), "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));

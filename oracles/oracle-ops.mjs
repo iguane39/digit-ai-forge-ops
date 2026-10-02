@@ -122,6 +122,18 @@ if (planPath) {
   const brut = JSON.stringify(p);
   if (/AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|sk-[a-zA-Z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY/.test(brut))
     add("bloquant", "O5", "motif de credential détecté dans le plan — un plan ne transporte jamais de secret", planPath);
+  // TF-1217 : le motif ci-dessus cherche des FORMATS de clé réelle (entropie, préfixes connus)
+  // — il laisse passer un secret TRIVIAL écrit en clair dans un champ nommé mot de passe/
+  // secret/jeton (ex. "password": "azerty123") : zéro entropie, aucun préfixe connu, mais un
+  // secret quand même. Détection par NOM DE CHAMP suivi d'une affectation à une chaîne
+  // littérale non vide (JSON `"champ":"valeur"` ou style code `champ = "valeur"`), jamais sur
+  // un placeholder `<...>` (résolu par l'environnement du run, cf. NJ5 ci-dessus).
+  // Exemption déclarée (une fixture de test n'est pas un secret réel) : plan situé sous un
+  // dossier `fixtures/` — même convention que les fixtures des autres oracles (self-test.mjs).
+  const champSecret = /\b(mot_de_passe|password|secret|jeton|token)\w*["'`]?\s*[:=]\s*["'`]([^"'`<>]{3,})["'`]/i;
+  const sousFixtures = String(planPath).split(/[\\/]/).includes("fixtures");
+  if (champSecret.test(brut) && !sousFixtures)
+    add("bloquant", "O5", "secret trivial en clair dans un champ mot de passe/secret/jeton — un plan ne transporte jamais de secret (TF-1217)", planPath);
   const durs5 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin5(durs5.length ? "FAIL" : "PASS", durs5.length ? 1 : 0);
 }
