@@ -9,9 +9,10 @@ pilot — elle ne la remplace pas.
 - **La forge outille, le pilot décide, l'humain donne le GO.** Le GO de mise en production
   est un gate humain incompressible : forge-ops ne déploie jamais en production de sa propre
   initiative et ne rend jamais ce verdict à la place de l'oracle MEP.
-- **L'oracle M-1…M-5 d'`ETAPE-MEP.md` (pilot) reste la seule vérité de l'étape MEP.**
-  forge-ops fournit les *moyens* (staging, bascule, rollback, journal) et des *preuves*
-  (verdicts O-1…O-4) que M-1…M-5 consomme — jamais un duplicata.
+- **Les portes M (`ETAPE-MEP.md` du pilot, liste à jour sur ce document) restent la seule
+  vérité de l'étape MEP.** forge-ops fournit les *moyens* (staging, bascule, rollback,
+  journal) et des *preuves* (verdicts O-1…O-4) que ces portes consomment — jamais un
+  duplicata.
 - **Invocation par le pilot uniquement.** Les projets produits, autonomes, ne l'appellent
   pas en direct : leurs besoins passent par un run piloté.
 - Les retours d'usage remontent par lots vers `input\` du pilot, comme toute forge.
@@ -55,7 +56,8 @@ verdict MATERIEL). L'oracle **O-5** juge un plan (`oracle-ops.mjs --plan plan.js
 jamais : les plans portent des **placeholders** (`<PROJET>`, `<REGION>`…) résolus par
 l'environnement du run. Les self-tests restent hors-ligne, déterministes, à coût nul.
 **L'exécution réelle d'un plan est un acte de run MEP** : environnement authentifié fourni
-par l'humain, GO humain, verdicts O-1…O-5 + M-1…M-5 au dossier. La première exécution
+par l'humain, GO humain, verdicts O-1…O-5 + les portes M de `ETAPE-MEP.md` (pilot) au
+dossier. La première exécution
 réelle par cible est consignée dans `fiches\forge-ops.md` du pilot — c'est elle qui
 transforme le plan prouvé en geste prouvé.
 

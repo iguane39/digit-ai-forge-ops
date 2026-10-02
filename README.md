@@ -2,8 +2,9 @@
 
 Forge **exploitation** de l'écosystème Digit-AI — trois verbes : **déployer, exploiter,
 restaurer**. Elle outille l'étape MEP du pilot (staging, bascule, rollback prouvé, journal) ;
-elle ne décide rien : le GO de production reste humain, l'oracle M-1…M-5 du pilot reste la
-vérité de l'étape. Née de TF-0040 (trou prouvé : MEP sans forge, déploiement artisanal).
+elle ne décide rien : le GO de production reste humain, les portes M de l'étape MEP
+(`ETAPE-MEP.md` du pilot, liste à jour sur ce document) restent la vérité de l'étape.
+Née de TF-0040 (trou prouvé : MEP sans forge, déploiement artisanal).
 
 ## Catalogue de services
 
