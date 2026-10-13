@@ -1,0 +1,11 @@
+Row Type,Action,Ad group status,Campaign ID,Campaign,Ad group ID,Ad group,Ad group type,Default max. CPC
+"# Optional.
+Supported values: Ad group","Optional.
+Supported values: Add; Edit; Remove","Optional.
+Supported values: Enabled; Paused; Removed","Optional.
+Example(s): 1234","Required.
+Example(s): Campagne factice","Optional.
+Example(s): 1234","Required.
+Example(s): Groupe factice","Optional.
+Supported values: Standard; Dynamic; Display","Optional.
+Example(s): 1.00"

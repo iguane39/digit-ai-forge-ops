@@ -841,6 +841,19 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
   ok(!!m && m[1] === m[2], `verifier-migration-dns : recette entierement verte (${m ? m[0] : 'sortie illisible'})`);
 }
 
+// TF-1364 (D-69 a, 13/10/2026) — LE KIT GOOGLE ADS. Sa recette vit dans l'outil (`--self-test`, les
+// deux sens sur chaque regle, donnees factices, aucun appel reseau) ; elle est REJOUEE ici pour la
+// meme raison que celle de la migration DNS : un controle que la recette du depot ne joue pas peut
+// etre oublie.
+{
+  const outil = path.join(ici, '..', 'scripts', 'google-ads', 'google-ads.mjs');
+  let sortie = '';
+  try { sortie = run(outil, ['--self-test']); }
+  catch (e) { sortie = String(e.stdout || '') + String(e.stderr || ''); }
+  const m = sortie.match(/Recette google-ads : (\d+)\/(\d+)/);
+  ok(!!m && m[1] === m[2], `google-ads : recette entierement verte (${m ? m[0] : 'sortie illisible'})`);
+}
+
 // ── O10 · manifeste de dépendances SERVI épinglé à l'empreinte (TF-1042, mesure Produit-11) ──
 // Le fait rejoué : un requirements.txt épinglait 37 paquets par version, aucun par empreinte
 // — une version republiée sous le même numéro serait entrée sans être vue.

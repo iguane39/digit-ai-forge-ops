@@ -1,0 +1,12 @@
+"# Modèle FACTICE de la recette du kit : même forme que le modèle de l'écran Importations (commentaires en tête, puis en-têtes, puis description), colonnes réduites à celles que le kit écrit."
+"# Les vrais modèles se téléchargent depuis le compte, par l'humain qui y est connecté."
+Row Type,Action,Ad status,Campaign ID,Campaign,Ad group ID,Ad group,Ad ID,Ad type,Headline 1,Headline 2,Headline 3,Headline 4,Headline 5,Headline 6,Headline 7,Headline 8,Headline 9,Headline 10,Headline 11,Headline 12,Headline 13,Headline 14,Headline 15,Description 1,Description 2,Description 3,Description 4,Path 1,Path 2,Final URL
+"# Optional.
+Supported values: Ad","Optional.
+Supported values: Add; Edit; Remove","Optional.
+Supported values: Enabled; Paused; Removed","Optional.","Required.
+Example(s): Campagne factice","Optional.","Required.
+Example(s): Groupe factice","Required on edit.
+Example(s): 1234","Required on create.
+Supported values: Responsive search ad","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Optional.","Required on create.
+Example(s): https://exemple.test"

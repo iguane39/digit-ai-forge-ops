@@ -1,0 +1,12 @@
+Row Type,Action,Keyword status,Campaign ID,Campaign,Ad group ID,Ad group,Keyword ID,Keyword,Type
+"# Optional.
+Supported values: Keyword","Optional.
+Supported values: Add; Edit; Remove","Optional.
+Supported values: Enabled; Removed; Paused","Optional.
+Example(s): 1234","Required.
+Example(s): Campagne factice","Optional.
+Example(s): 1234","Required.
+Example(s): Groupe factice","Optional.
+Example(s): 1234","Required on create.
+Example(s): mot factice","Optional.
+Supported values: Exact match; Phrase match; Broad match"
