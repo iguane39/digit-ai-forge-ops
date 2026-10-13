@@ -1,0 +1,50 @@
+{
+ "_note": "Relevé FACTICE, au schéma que pose collecter-compte.py : il recopie plan-factice.json, campagnes actives et diffusées. Aucun compte réel.",
+ "schema": "forge-ops/google-ads-releve@1",
+ "fenetre_diffusion": "depuis_le_depart_aujourd_hui_compris",
+ "lu_le": "2026-10-12T21:00",
+ "fuseau": "Europe/Paris",
+ "aujourdhui": "2026-10-12",
+ "prefixe": "EX ",
+ "campagnes": [
+  {
+   "nom": "EX Séjours FR", "id": "1001", "statut": "ENABLED", "service": "SERVING", "debut": "2026-10-10 09:00:00",
+   "budget_jour": 4.93, "enchere": "MANUAL_CPC", "partenaires": false, "display": false, "option_zone": "PRESENCE",
+   "lieux": 1, "langues": 1,
+   "exclusions": [
+    { "texte": "gratuit", "correspondance": "BROAD", "id": "9001" },
+    { "texte": "emploi", "correspondance": "BROAD", "id": "9002" },
+    { "texte": "camping", "correspondance": "BROAD", "id": "9003" }
+   ],
+   "groupes": [
+    { "nom": "Gîte", "id": "2001", "cpc": 0.8,
+      "mots": [ { "texte": "gîte exemple", "correspondance": "EXACT", "id": "3001" }, { "texte": "location gîte", "correspondance": "PHRASE", "id": "3002" } ],
+      "annonces": [ { "statut_examen": "REVIEWED" } ] },
+    { "nom": "Week-end", "id": "2002", "cpc": 0.6,
+      "mots": [ { "texte": "week-end exemple", "correspondance": "PHRASE", "id": "3003" }, { "texte": "court séjour", "correspondance": "BROAD", "id": "3004" } ],
+      "annonces": [ { "statut_examen": "REVIEWED" } ] }
+   ],
+   "diffusion": { "impressions": 140, "clics": 6, "cout": 3.1, "parts": { "obtenue": 0.42 } }
+  },
+  {
+   "nom": "EX Stays EN", "id": "1002", "statut": "ENABLED", "service": "SERVING", "debut": "2026-10-10 09:00:00",
+   "budget_jour": 2.5, "enchere": "MANUAL_CPC", "partenaires": false, "display": false, "option_zone": "PRESENCE",
+   "lieux": 1, "langues": 1,
+   "exclusions": [
+    { "texte": "gratuit", "correspondance": "BROAD", "id": "9101" },
+    { "texte": "emploi", "correspondance": "BROAD", "id": "9102" },
+    { "texte": "hostel", "correspondance": "BROAD", "id": "9103" }
+   ],
+   "groupes": [
+    { "nom": "Cottage", "id": "2101", "cpc": 1.0,
+      "mots": [ { "texte": "sample cottage", "correspondance": "EXACT", "id": "3101" }, { "texte": "cottage rental", "correspondance": "PHRASE", "id": "3102" } ],
+      "annonces": [ { "statut_examen": "REVIEWED" } ] }
+   ],
+   "diffusion": { "impressions": 37, "clics": 1, "cout": 0.9, "parts": { "obtenue": null } }
+  }
+ ],
+ "conversions": [
+  { "nom": "Demande de réservation", "statut": "ENABLED", "principale": true },
+  { "nom": "Appel téléphonique", "statut": "ENABLED", "principale": false }
+ ]
+}

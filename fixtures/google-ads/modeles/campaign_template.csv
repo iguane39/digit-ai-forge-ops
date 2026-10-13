@@ -1,0 +1,17 @@
+Row Type,Action,Campaign status,Campaign ID,Campaign,Campaign type,Networks,Budget,Budget type,Bid strategy type,Campaign start date,Language,Location,EU political ads
+"# Optional.
+Supported values: Campaign","Optional.
+Supported values: Add; Edit; Remove","Optional.
+Supported values: Enabled; Paused; Removed","Optional.
+Example(s): 1234","Required.
+Example(s): Campagne factice","Required on create.
+Supported values (Add): Search; Display; Video
+Supported values (Edit): Search; Display; Video","Optional.
+Supported values: Google search; Search partners; Display Network","Required on create.
+Example(s): 10.00","Optional.
+Supported values: Daily; Campaign Total; Monthly","Optional.
+Supported values (Add): Manual CPC; Maximize clicks; Target CPA","Optional.
+Start date cannot be in the past when creating a new campaign.","Optional.
+A list of values separated by semicolons.","Optional.
+A list of values separated by semicolons.","Required on create.
+Supported values: Yes; No"

@@ -1,0 +1,61 @@
+{
+  "_note": "Plan FACTICE de la recette du kit Google Ads de forge-ops : aucun client, aucun compte, aucun contenu de campagne réel. Domaine réservé exemple.test.",
+  "prefixe": "EX ",
+  "site": "https://exemple.test",
+  "eu_political_ads": "No",
+  "negatifs_communs": ["gratuit", "emploi"],
+  "conversions_principales_attendues": ["Demande de réservation"],
+  "campagnes": [
+    {
+      "code": "S-FR",
+      "nom": "EX Séjours FR",
+      "budget_mensuel_eur": 150,
+      "langue": "fr",
+      "lieu": { "nom": "France" },
+      "negatifs": ["camping"],
+      "titres": ["Séjour au calme", "Réservez en direct"],
+      "descriptions": ["Une description factice, écrite pour la recette du kit."],
+      "groupes": [
+        {
+          "nom": "Gîte",
+          "url": "/sejour",
+          "cpc_max": 0.8,
+          "chemins": ["sejour", "gite"],
+          "mots": [["gîte exemple", "Exact"], ["location gîte", "Phrase"]],
+          "titres": ["Gîte de démonstration"],
+          "descriptions": ["Description factice du groupe gîte, pour la recette."]
+        },
+        {
+          "nom": "Week-end",
+          "url": "/week-end",
+          "cpc_max": 0.6,
+          "chemins": ["week-end"],
+          "mots": [["week-end exemple", "Phrase"], ["court séjour", "Broad"]],
+          "titres": ["Week-end factice"],
+          "descriptions": ["Description factice du groupe week-end."]
+        }
+      ]
+    },
+    {
+      "code": "S-EN",
+      "nom": "EX Stays EN",
+      "budget_mensuel_eur": 76,
+      "langue": "en",
+      "lieu": { "nom": "United Kingdom" },
+      "negatifs": ["hostel"],
+      "titres": ["Quiet stay", "Book direct"],
+      "descriptions": ["A fictitious description used by the kit test."],
+      "groupes": [
+        {
+          "nom": "Cottage",
+          "url": "/en/cottage",
+          "cpc_max": 1.0,
+          "chemins": ["cottage"],
+          "mots": [["sample cottage", "Exact"], ["cottage rental", "Phrase"]],
+          "titres": ["Sample cottage"],
+          "descriptions": ["Fictitious cottage group description."]
+        }
+      ]
+    }
+  ]
+}

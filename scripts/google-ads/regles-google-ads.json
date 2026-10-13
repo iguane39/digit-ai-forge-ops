@@ -1,0 +1,60 @@
+{
+  "schema": "forge-ops/google-ads-regles@1",
+  "pourquoi": "Les règles périssables du kit Google Ads vivent ici, datées et sourcées, et non dans le code (loi n° 4 de la factory). Les colonnes, les colonnes obligatoires et les vocabulaires fermés ne sont PAS ici : ils se lisent dans les modèles de l'écran Importations, à chaque génération. Une ligne qu'on ne sait plus rejouer se retire.",
+  "date_releve": "2026-10-13",
+  "source_generale": "references/INTEGRATIONS-FOURNISSEURS.md du pilot, section Google Ads (faits mesurés du 21/09 au 29/09/2026, TF-1364, TF-1585, TF-1586, TF-1587, TF-1588)",
+  "import_web": {
+    "jours_par_mois": { "valeur": 30.4, "source": "convention de Google pour ramener un budget mensuel au jour, reprise du générateur éprouvé le 22/09/2026" },
+    "modeles_attendus": {
+      "valeur": ["campaign_template.csv", "ad_group_template.csv", "keyword_template.csv", "ad_group_negative_keyword_template.csv", "responsive_search_ad_template.csv"],
+      "source": "lien « Télécharger un exemple de modèle » de l'écran Importations, un modèle par type d'objet ; ils ne se téléchargent que depuis le compte, par l'humain qui y est connecté"
+    },
+    "exceptions_requis": {
+      "valeur": [
+        { "type_de_ligne": "Negative keyword", "colonne": "Ad group", "quand": { "Level": "Campaign" }, "motif": "une exclusion au niveau campagne n'a pas de groupe ; le modèle dit « Required. », mais 191 lignes sur 191 dont des exclusions de campagne sans groupe ont été acceptées le 22/09/2026" }
+      ],
+      "source": "dépôt du 22/09/2026, 191/191 acceptées"
+    },
+    "annonce": {
+      "titre_max": 30, "description_max": 90, "chemin_max": 15,
+      "titres_min": 3, "titres_max": 15, "descriptions_min": 2, "descriptions_max": 4,
+      "source": "règles de contenu des annonces responsives du Réseau de Recherche, appliquées par le générateur éprouvé le 22/09/2026"
+    },
+    "statut_a_la_creation": { "valeur": "Paused", "source": "l'activation reste un geste de l'exploitant, le jour convenu" }
+  },
+  "releve": {
+    "fenetre_diffusion": {
+      "valeur": "depuis_le_depart_aujourd_hui_compris",
+      "source": "documentation de l'API Google Ads : LAST_30_DAYS « not including today » ; une requête de métriques n'imprime pas les lignes à 0 impression (relevé vert sur un compte muet le 24/09/2026, TF-1585)"
+    },
+    "delai_diffusion_h": { "valeur": 24, "source": "TF-1585 : une campagne ENABLED et SERVING à 0 impression 24 h après son départ est un écart ; l'objectif de fraîcheur de Google pour les impressions est d'une heure" },
+    "option_zone_attendue": { "valeur": "PRESENCE", "source": "l'import laisse « Présence ou intérêt » (5 campagnes sur 5 le 22/09/2026) ; aucune colonne du modèle ne la règle" },
+    "prerequis_hors_api": {
+      "valeur": [
+        "validation de l'annonceur (Admin > Règlement > Compte)",
+        "noms saisis alignés au caractère près sur le registre public",
+        "mode de paiement valable",
+        "codes promotionnels saisis",
+        "notifications du compte",
+        "limite de dépenses temporaire posée par Google lors d'un examen"
+      ],
+      "source": "aucun des 110 services de l'API v25 ne les lit (24/09/2026, TF-1586) ; la limite temporaire a été nommée par écrit par l'assistance le 27/09/2026, invisible à l'écran et par l'API (TF-1587)"
+    },
+    "diagnostics_non_concluants": {
+      "valeur": [
+        "une part d'impressions absente (« — ») peut signifier un manque de données ; elle n'établit pas une absence d'enchère (aide Google, answer 2497703)",
+        "un paiement refusé ancien est un contrôle d'hygiène, jamais un diagnostic de diffusion nulle",
+        "un avis de messagerie est un événement daté, pas un état : il se confronte à l'écran qui porte l'état avant d'être dit urgent",
+        "le message de prévisualisation « aucun mot clé ne correspondait » sur une requête identique à un mot-clé éligible signale un blocage de compte : écrire à l'assistance dès le premier jour sans diffusion"
+      ],
+      "source": "TF-1587, faits du 24 au 27/09/2026"
+    }
+  },
+  "avant_depense": {
+    "elements": {
+      "valeur": ["validation_annonceur", "noms_alignes_registre", "paiement_valable", "codes_promotionnels", "notifications_lues"],
+      "source": "liste « avant la première dépense », INTEGRATIONS-FOURNISSEURS.md du pilot (TF-1586)"
+    },
+    "paiement_jours_min": { "valeur": 60, "source": "TF-1586 : mode de paiement valable au moins 60 jours" }
+  }
+}

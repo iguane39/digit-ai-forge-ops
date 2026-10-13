@@ -156,6 +156,20 @@ appliqué un cran plus tôt, au manifeste qui construit l'image. Périmètre v0 
 `requirements.txt` (pip) uniquement, borné à la mesure fondatrice ; une ligne sans `==` (URL,
 plage, `-r`/`-e`) n'épingle rien et n'est pas jugée.
 
+## Kit Google Ads — import web et relevé en lecture seule (TF-1364)
+
+`node scripts/google-ads/google-ads.mjs import-web | releve | delta | avant-depense` — le
+déploiement de campagnes du Réseau de Recherche par l'écran Importations, sans jamais écrire dans le
+compte : le kit génère le fichier que l'exploitant dépose, et juge un relevé que
+`scripts/google-ads/collecter-compte.py` pose en lecture seule. Né du kit éprouvé chez un produit
+les 21-22/09/2026 (191 lignes acceptées sur 191), rendu générique sur décision humaine D-69 (a) du
+13/10/2026. Les règles apprises y sont des contrôles : colonnes, vocabulaires et colonnes
+obligatoires lus dans les modèles de l'écran ; conformité comparée par contenu ; verdict de
+**diffusion** sur une fenêtre qui inclut aujourd'hui (un relevé lu sur `LAST_30_DAYS` est refusé) ;
+diagnostic d'une diffusion nulle borné à sa mesure ; liste « avant la première dépense ». Recette
+sans réseau : `node scripts/google-ads/google-ads.mjs --self-test`, rejouée par
+`oracles/self-test.mjs`. Mode d'emploi et non-jugé : [scripts/google-ads/README.md](scripts/google-ads/README.md).
+
 ## Frontières
 
 Voir [CLAUDE.md](CLAUDE.md) — la forge outille, le pilot orchestre, l'humain donne le GO.

@@ -1,0 +1,11 @@
+{
+ "_note": "Liste FACTICE « avant la première dépense », remplie comme l'exploitant la remplit : chaque élément constaté à l'écran du jour, daté. La recette la juge au 12/10/2026.",
+ "schema": "forge-ops/google-ads-avant-depense@1",
+ "elements": {
+  "validation_annonceur": { "fait": true, "constate_le": "2026-10-12", "vu_sur": "écran Admin > Règlement > Compte : validation terminée" },
+  "noms_alignes_registre": { "fait": true, "constate_le": "2026-10-11", "vu_sur": "nom légal et nom du dirigeant confrontés au registre public, au caractère près" },
+  "paiement_valable": { "fait": true, "constate_le": "2026-10-12", "vu_sur": "écran Facturation > Modes de paiement", "valable_jusqu_au": "2027-03-31" },
+  "codes_promotionnels": { "fait": true, "constate_le": "2026-10-12", "vu_sur": "écran Facturation > Promotions : aucun code en attente" },
+  "notifications_lues": { "fait": true, "constate_le": "2026-10-12", "vu_sur": "cloche des notifications du compte", "avis_confrontes_a_l_ecran_d_etat": true }
+ }
+}
