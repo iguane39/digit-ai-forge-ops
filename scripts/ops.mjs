@@ -316,9 +316,19 @@ const PLANS = {
   azure: {
     service: "Azure Container Apps",
     fiche: "experts-forge/fiches/expert-ops-azure.md",
-    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>", "<ENV>", "<DOMAINE_ENV>", "<BUILD>"],
+    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>", "<ENV>", "<DOMAINE_ENV>", "<BUILD>", "<BUDGET_MENSUEL>", "<SEUIL_ALERTE_PCT>", "<DESTINATAIRE_ALERTE_COUT>", "<DEBUT_MOIS>"],
     provision: [
       "az group create --name <RG> --location <REGION>",
+      // TF-1684 (volet 3 de TF-1639) : sans alerte de cout, une derive reste invisible jusqu'a la
+      // facture (34 jours chez Produit-64). `az consumption budget create` ne porte AUCUNE
+      // notification (pas de --notifications) : un budget muet ne previent personne ; c'est
+      // create-with-rg qui pose budget ET alerte sur le groupe de ressources. Cles de la
+      // notification lues dans la source du CLI (_create_with_rg.py : contact-emails, enabled,
+      // operator, threshold ; pas de thresholdType, donc seuil sur cout REEL) ; seuil en
+      // pourcentage du budget (0 a 1000, API Budgets 2024-08-01) ; debut de periode = 1er du mois.
+      // Commande de groupe « Preview » au 14/10/2026 : a reverifier si elle change de statut.
+      "az consumption budget create-with-rg --resource-group <RG> --budget-name budget-<RG> --category Cost --amount <BUDGET_MENSUEL> --time-grain Monthly --time-period \"{start-date:<DEBUT_MOIS>}\" --notifications \"{Actual_GreaterThan_<SEUIL_ALERTE_PCT>_Percent:{enabled:true,operator:GreaterThan,threshold:<SEUIL_ALERTE_PCT>,contact-emails:[<DESTINATAIRE_ALERTE_COUT>]}}\"   # ALERTE DE COUT par groupe de ressources : budget mensuel <BUDGET_MENSUEL>, courriel a <DESTINATAIRE_ALERTE_COUT> des <SEUIL_ALERTE_PCT> % consommes, <DEBUT_MOIS> = AAAA-MM-01 (TF-1684) ; source : https://learn.microsoft.com/en-us/cli/azure/consumption/budget?view=azure-cli-latest#az-consumption-budget-create-with-rg, lue le 14/10/2026",
+      "alerte d'ANOMALIE de cout en complement, a l'echelle de l'ABONNEMENT seulement (non posable par groupe de ressources ; detection quotidienne 36 h apres la fin de la journee UTC) : regle « Anomaly » de Cost Management, automatisable par l'API Scheduled Actions (kind InsightAlert) ; source : https://learn.microsoft.com/en-us/azure/cost-management-billing/understand/analyze-unexpected-charges, lue le 14/10/2026 (TF-1684)",
       "az containerapp env create --name <ENV> --resource-group <RG> --location <REGION>",
       "az containerapp revision set-mode --name <APP> --resource-group <RG> --mode multiple   # SANS multiple, aucun retour instantane possible",
       // TF-1638 (lot Produit-64 20261012c, RT-34) : le mode multiple sans borne a laisse 100

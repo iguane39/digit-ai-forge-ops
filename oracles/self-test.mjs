@@ -179,6 +179,30 @@ for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "pow
   const nd = jetonsNonDeclares(jouet);
   ok(nd.length === 1 && nd[0] === "<JETON_OUBLIE>", `plan jouet avec un jeton non déclaré → le contrôle le NOMME (obtenu ${JSON.stringify(nd)}) (TF-1685)`);
 }
+// TF-1684 (volet 3 de TF-1639) : la provision azure pose un budget AVEC alerte par groupe de
+// ressources — la commande est là, avant l'environnement, son seuil et son destinataire sont des
+// jetons déclarés, sa source officielle est citée avec sa date de lecture. Hors ligne : jamais
+// un appel à Azure.
+{
+  const az = JSON.parse(run(ops, ["plan", "azure", "<BUILD>"]));
+  const pv = az.phases.provision;
+  const alerteBudget = (l) => /^az consumption budget create-with-rg /.test(l) && /--resource-group <RG>/.test(l)
+    && /--notifications "\{\w*<SEUIL_ALERTE_PCT>\w*:\{enabled:true,/.test(l) && /contact-emails:\[<DESTINATAIRE_ALERTE_COUT>\]/.test(l);
+  const iBudget = pv.findIndex(alerteBudget);
+  const budget = pv[iBudget] || "";
+  ok(iBudget > pv.findIndex(l => /^az group create /.test(l)) && iBudget < pv.findIndex(l => /^az containerapp env create /.test(l)),
+    `plan azure : budget AVEC notification posé sur le groupe de ressources, après sa création (indice ${iBudget}) (TF-1684)`);
+  const jetons = ["<BUDGET_MENSUEL>", "<SEUIL_ALERTE_PCT>", "<DESTINATAIRE_ALERTE_COUT>", "<DEBUT_MOIS>"];
+  ok(jetons.every(j => budget.includes(j) && az.placeholders.includes(j)),
+    "plan azure : montant, seuil, destinataire et début de période de l'alerte sont des jetons déclarés (TF-1684)");
+  ok(/source : https:\/\/learn\.microsoft\.com\/\S*consumption\/budget\S*, lue le \d{2}\/\d{2}\/\d{4}/.test(budget),
+    "plan azure : la commande de budget cite sa source officielle Microsoft et la date de lecture (TF-1684)");
+  // ROUGE : la même ligne réduite à `az consumption budget create` (sans --notifications), la forme
+  // qu'un lecteur pressé prendrait, n'est PAS une alerte : le contrôle la refuse.
+  const muet = budget.replace("create-with-rg", "create").replace(/--notifications "[^"]*"/, "");
+  ok(budget !== "" && !alerteBudget(muet),
+    "plan azure : un budget sans --notifications (budget muet) ne satisfait pas le contrôle (TF-1684)");
+}
 // TF-0258 : les 4 pièges du premier déploiement réel Railway sont versés au plan et O-5
 // reste PASS dessus — un plan qui les tairait serait complet en forme (4 phases, rollback,
 // CLI) mais muet sur ce qui a fait échouer un déploiement réel.
