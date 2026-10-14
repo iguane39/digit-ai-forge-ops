@@ -7,7 +7,8 @@
  * POURQUOI. Un run consigne au ledger une entrée `oracles_verdict` par oracle qui a tourné (forme
  * canonique TF-0385). Pour dire lesquels MANQUENT, le juge du pilot doit savoir ce que chaque forge
  * mobilisée porte. Mesuré le 23/09/2026 : cette forge porte UN oracle, `oracles/oracle-ops.mjs`,
- * dont les règles (O-1 à O-17) se jouent par mode (`--plan`, `--drift`, `--empreinte`…). Un seul
+ * dont les règles (listées dans son en-tête, leur seule source : aucun compte recopié ici, TF-1689)
+ * se jouent par mode (`--plan`, `--drift`, `--empreinte`…). Un seul
  * fichier ne justifie pas un lanceur ; il justifie que la forge DISE ce qu'elle porte par le même
  * contrat que les autres, pour que le juge n'ait pas à le savoir par cœur — et qu'un second oracle
  * déposé demain soit vu sans que personne ne l'annonce.

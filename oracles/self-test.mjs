@@ -1066,6 +1066,16 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   } finally {
     fs.rmSync(tmpDec, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
+  // TF-1689 : la prose de la découverte disait « O-1 à O-17 » alors qu'O-18 existait. Le compte
+  // vit dans l'en-tête d'oracle-ops.mjs (une ligne `//   O<n> ` par règle) ; toute plage « O-1 à
+  // O-<n> » écrite dans decouvrir-oracles.mjs doit finir sur la dernière règle de cet en-tête.
+  const regles = [...fs.readFileSync(oracle, "utf8").matchAll(/^\/\/ {3}O(\d+) /gm)].map(m => Number(m[1]));
+  const derniere = Math.max(...regles);
+  const plagesPerimees = (texte) => [...texte.matchAll(/O-?1 (?:à|a) O-?(\d+)/g)].map(m => Number(m[1])).filter(n => n !== derniere);
+  ok(regles.length > 0 && plagesPerimees(fs.readFileSync(DECOUVRIR, "utf8")).length === 0,
+    `TF-1689 · aucune plage de règles périmée dans decouvrir-oracles.mjs (dernière règle d'oracle-ops : O${derniere})`);
+  ok(plagesPerimees(" * dont les règles (O-1 à O-17) se jouent par mode").length === 1,
+    "TF-1689 · ROUGE — la phrase d'origine « O-1 à O-17 » est reconnue périmée");
   const absente = decouvre(path.join(tmpdir(), "forge-ops-racine-qui-n-existe-pas"));
   ok(absente.code === 2 && absente.j?.oracles?.length === 0 && /introuvable/.test(absente.j?.motif || ""),
     `TF-1319 · ROUGE — une racine absente sort en 2 avec son motif, jamais en liste vide muette (obtenu exit ${absente.code})`);
