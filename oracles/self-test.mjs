@@ -158,6 +158,27 @@ for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "pow
     `plan ${cible} : 4 phases générées (déterministe, zéro exécution)`);
   ok(verdictPlan(pf) === "PASS", `oracle O-5 PASS sur le plan ${cible}`);
 }
+// TF-1685 (14/10/2026) : le plan azure employait <ENV>, <DOMAINE_ENV> et <BUILD> sans les
+// déclarer (gcp : <DEPOT> et <BUILD>, aws : <BUILD>) ; un consommateur qui ne remplit que les
+// jetons déclarés les laisse bruts dans la commande. Contrôle GÉNÉRIQUE : tout jeton <MAJUSCULES>
+// d'une phase figure dans `placeholders`. Plan généré avec build="<BUILD>" : la substitution est
+// alors l'identité, et le contrôle voit la source entière, <BUILD> compris.
+const jetonsNonDeclares = (p) => {
+  const declares = new Set(p.placeholders || []);
+  const employes = new Set(JSON.stringify(p.phases || {}).match(/<[A-Z][A-Z0-9_]*>/g) || []);
+  return [...employes].filter(j => !declares.has(j)).sort();
+};
+for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace"]) {
+  const nd = jetonsNonDeclares(JSON.parse(run(ops, ["plan", cible, "<BUILD>"])));
+  ok(nd.length === 0, `plan ${cible} : tout jeton <MAJUSCULES> employé est déclaré dans placeholders${nd.length ? ` — non déclarés : ${nd.join(" ")}` : ""} (TF-1685)`);
+}
+// ROUGE : plan jouet dont une commande emploie <JETON_OUBLIE> absent de placeholders ; les jetons
+// en minuscules (<appli>, <nom-service>) restent de la prose, jamais des jetons à remplir.
+{
+  const jouet = { placeholders: ["<RG>"], phases: { provision: ["az group create --name <RG> --location <JETON_OUBLIE>   # <appli>-qualif"], deploiement: [], healthcheck: [], rollback: [] } };
+  const nd = jetonsNonDeclares(jouet);
+  ok(nd.length === 1 && nd[0] === "<JETON_OUBLIE>", `plan jouet avec un jeton non déclaré → le contrôle le NOMME (obtenu ${JSON.stringify(nd)}) (TF-1685)`);
+}
 // TF-0258 : les 4 pièges du premier déploiement réel Railway sont versés au plan et O-5
 // reste PASS dessus — un plan qui les tairait serait complet en forme (4 phases, rollback,
 // CLI) mais muet sur ce qui a fait échouer un déploiement réel.

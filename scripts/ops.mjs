@@ -232,6 +232,9 @@ function canary(build, cible, fichierSeuils) {
 // exécuter et sans jamais lire de credential. L'exécution réelle d'un plan est un acte de
 // run MEP (environnement authentifié fourni par l'humain, GO humain) — jamais un self-test.
 // Chaque plan est adossé à sa fiche expert admise (experts-forge, verdict MATERIEL).
+// TF-1685 : tout jeton <MAJUSCULES> employé dans une phase figure dans `placeholders`, <BUILD>
+// compris (substitué en phase deploiement par l'argument build de `plan`) — un jeton non déclaré
+// reste brut chez le consommateur qui ne remplit que les jetons déclarés. Le self-test le juge.
 const PLANS = {
   railway: {
     service: "Railway service (conteneur)",
@@ -290,7 +293,7 @@ const PLANS = {
   gcp: {
     service: "Cloud Run — service conteneur managé",
     fiche: "experts-forge/fiches/expert-ops-gcp.md",
-    placeholders: ["<PROJET>", "<REGION>", "<SERVICE>", "<IMAGE>", "<HASH>", "<REVISION_PRECEDENTE>"],
+    placeholders: ["<PROJET>", "<REGION>", "<SERVICE>", "<IMAGE>", "<HASH>", "<REVISION_PRECEDENTE>", "<DEPOT>", "<BUILD>"],
     provision: [
       "gcloud auth list   # identite de deploiement : roles/run.admin + iam.serviceAccountUser + artifactregistry.reader",
       "gcloud artifacts repositories describe <DEPOT> --location <REGION> --project <PROJET>",
@@ -313,7 +316,7 @@ const PLANS = {
   azure: {
     service: "Azure Container Apps",
     fiche: "experts-forge/fiches/expert-ops-azure.md",
-    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>"],
+    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>", "<ENV>", "<DOMAINE_ENV>", "<BUILD>"],
     provision: [
       "az group create --name <RG> --location <REGION>",
       "az containerapp env create --name <ENV> --resource-group <RG> --location <REGION>",
@@ -351,7 +354,7 @@ const PLANS = {
   aws: {
     service: "AWS App Runner",
     fiche: "experts-forge/fiches/expert-ops-aws.md",
-    placeholders: ["<REGION>", "<ARN_SERVICE>", "<DEPOT_ECR>", "<TAG_IMMUABLE>", "<TAG_PRECEDENT>", "<URL_SERVICE>"],
+    placeholders: ["<REGION>", "<ARN_SERVICE>", "<DEPOT_ECR>", "<TAG_IMMUABLE>", "<TAG_PRECEDENT>", "<URL_SERVICE>", "<BUILD>"],
     provision: [
       "aws ecr describe-repositories --repository-names <DEPOT_ECR> --region <REGION>   # tags IMMUABLES exiges (jamais :latest)",
       "verifier le role d'acces ECR : AWSAppRunnerServicePolicyForECRAccess + iam:PassRole restreint",
