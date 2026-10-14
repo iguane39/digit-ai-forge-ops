@@ -56,6 +56,11 @@ node oracles/oracle-ops.mjs <cible> --drift declare.json  # plus tard : dérive 
 # sur la release COURANTE
 node oracles/oracle-ops.mjs <cible> --empreinte
 
+# Oracle O-18 : révisions actives bornées (N servie + N-1 saine) sur une capture Container Apps
+# (le plan azure porte la borne et l'étape de ménage qui la tient, TF-1638)
+az containerapp revision list --name <app> --resource-group <rg> -o json > revisions.json
+node oracles/oracle-ops.mjs --revisions-actives revisions.json
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -96,6 +101,7 @@ node oracles/self-test.mjs
 | O6 | `--drift <fichier> <cible>` : état déclaré (`etat --sortie`) vs constaté — journal tronqué/réécrit, déploiement furtif |
 | O7 | `<cible> --empreinte` : fichiers de la release courante vs empreinte scellée au déploiement ou à la promotion canary — fichier modifié/supprimé/ajouté en place ; SKIP motivé sans empreinte, ex. déploiement fait hors ops (TF-0288, TF-0298) |
 | O10 | `--manifeste-servi <fichier>` : chaque paquet épinglé par version (`==`) dans un `requirements.txt` SERVI porte au moins une empreinte `--hash=` — une version republiée sous le même numéro entrerait sinon sans être vue (TF-1042) |
+| O18 | `--revisions-actives <fichier.json>` : sur une sortie capturée de `az containerapp revision list -o json`, chaque application ne garde actives que ses révisions servies et une N-1 saine à 0 % ; toute révision en trop est nommée avec sa commande de désactivation (TF-1639) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.

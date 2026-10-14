@@ -305,17 +305,27 @@ const PLANS = {
     ],
     rollback: [
       "gcloud run services update-traffic <SERVICE> --region <REGION> --to-revisions <REVISION_PRECEDENTE>=100   # instantane, sans rebuild",
-      "ne jamais purger les revisions saines anterieures (O-4 : histoire purgee = rollback impossible)",
+      // TF-1638 : « ne jamais purger les revisions saines anterieures » interdisait tout menage ;
+      // la regle utile au retour arriere est de GARDER N-1 saine, pas de tout garder.
+      "garder au moins la revision N-1 saine (O-4 : histoire purgee = rollback impossible) — jamais purger toutes les revisions saines anterieures",
     ],
   },
   azure: {
     service: "Azure Container Apps",
     fiche: "experts-forge/fiches/expert-ops-azure.md",
-    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>"],
+    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>"],
     provision: [
       "az group create --name <RG> --location <REGION>",
       "az containerapp env create --name <ENV> --resource-group <RG> --location <REGION>",
       "az containerapp revision set-mode --name <APP> --resource-group <RG> --mode multiple   # SANS multiple, aucun retour instantane possible",
+      // TF-1638 (lot Produit-64 20261012c, RT-34) : le mode multiple sans borne a laisse 100
+      // revisions actives sur une application ; une revision ACTIVE garde ses minReplicas
+      // factures a 0 % de trafic (1 552,23 EUR en septembre 2026 pour un budget de 100).
+      "BORNE du mode multiple : au plus N servie (trafic > 0) + UNE revision N-1 saine a 0 % actives par application, soit 2 dans le cas courant — une revision ACTIVE garde ses minReplicas factures a 0 % de trafic ; l'etape de menage (phase healthcheck, apres bascule) tient la borne, O-18 la juge (TF-1638)",
+      // TF-1639 : un menage place seulement dans la chaine ne couvre ni un run qui echoue entre
+      // bascule et menage, ni une revision activee a la main, ni un environnement que plus aucun
+      // run ne touche.
+      "menage PERIODIQUE independant des runs : planifier la MEME etape de menage (garde N-1, desactive le reste) au moins chaque jour sur chaque environnement, avec un mode d'exercice a la demande (O-8) — une revision activee a la main ou un run interrompu entre bascule et menage reste sinon facture sans fin (TF-1639)",
     ],
     deploiement: [
       "az acr build --registry <ACR> --image <IMAGE> <BUILD>",
@@ -324,6 +334,14 @@ const PLANS = {
     healthcheck: [
       "curl -fsS https://<APP>--<SUFFIXE>.<DOMAINE_ENV>/sante   # URL de revision, 200 attendu",
       "az containerapp ingress traffic set --name <APP> --resource-group <RG> --revision-weight <SUFFIXE>=100   # bascule APRES healthcheck vert",
+      "curl -fsS https://<APP>.<DOMAINE_ENV>/sante   # controle post-bascule sur l'URL servie, 200 attendu",
+      // TF-1638 : menage APRES le controle post-bascule, rejouable (idempotent : rejoue, il ne
+      // trouve plus rien a desactiver). Garde N-1 = la plus recente revision active a 0 % qui
+      // n'est pas Unhealthy — meme regle qu'O-18. Desactiver est reversible (phase rollback :
+      // revision activate), O-4 tient. Un menage rate AVERTIT sans faire echouer le deploiement.
+      "GARDE=$(az containerapp revision list --name <APP> --resource-group <RG> --query \"sort_by([?properties.active && properties.trafficWeight==\\`0\\` && properties.healthState!='Unhealthy'], &properties.createdTime)[-1].name\" -o tsv)   # menage 1/2 : N-1 saine gardee pour le retour instantane",
+      "for R in $(az containerapp revision list --name <APP> --resource-group <RG> --query \"[?properties.active && properties.trafficWeight==\\`0\\`].name\" -o tsv); do [ \"$R\" = \"$GARDE\" ] || az containerapp revision deactivate --name <APP> --resource-group <RG> --revision \"$R\" || echo \"AVERTISSEMENT menage : $R reste active\"; done   # menage 2/2 : toute autre revision active a 0 % desactivee (TF-1638)",
+      "az containerapp revision list --name <APP> --resource-group <RG> -o json > revisions-<APP>.json && node <FORGE_OPS>/oracles/oracle-ops.mjs --revisions-actives revisions-<APP>.json   # O-18 : revisions actives bornees, verdict au dossier de MEP (TF-1639)",
     ],
     rollback: [
       "az containerapp ingress traffic set --name <APP> --resource-group <RG> --revision-weight <SUFFIXE_PRECEDENT>=100   # instantane en mode multiple",

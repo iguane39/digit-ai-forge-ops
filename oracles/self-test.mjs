@@ -827,6 +827,92 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
     "O17 borne : racine introuvable -> SKIP, jamais un FAIL par defaut implicite");
 }
 
+// ── O18 (TF-1639) et menage du plan azure (TF-1638), mesure Produit-64 du 12/10/2026 : LES
+// REVISIONS ACTIVES D'UNE APPLICATION CONTAINER APPS SONT BORNEES ────────────────────────────
+// Le fait : mode multiple sans borne, 100 revisions actives sur une application, minReplicas
+// factures a 0 % de trafic, 34 jours de derive sous O-1 a O-4 PASS.
+// Messages rouges attendus (rouge.json) : deux constats, qui NOMMENT api-exemple--b16501 et
+// api-exemple--b16500 avec leur commande de desactivation ; front-exemple (N + N-1) n'en a aucun.
+{
+  const o18 = (fichier) => { try { return JSON.parse(run(oracle, ["--revisions-actives", fichier, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const dir18 = path.join(ici, "..", "fixtures", "o18-revisions-actives");
+  const rouge18 = path.join(dir18, "rouge.json");
+  const rRouge18 = o18(rouge18);
+  const f18 = (rRouge18.findings || []).filter(f => f.regle === "O18" && f.sev === "bloquant");
+  ok(rRouge18.verdict === "FAIL", `O18 : 4 revisions actives dont 3 a 0 % -> FAIL (obtenu ${rRouge18.verdict})`);
+  ok(f18.length === 2 && ["api-exemple--b16501", "api-exemple--b16500"].every(n => f18.some(f => f.where === n
+      && f.msg.includes(`az containerapp revision deactivate --name api-exemple --resource-group rg-exemple-dev --revision ${n}`))),
+    `O18 : les 2 revisions en trop sont NOMMEES avec leur commande de desactivation (obtenu ${f18.map(f => f.where).join(", ")})`);
+  ok(!f18.some(f => /b16502|b16503|front-exemple/.test(f.where)),
+    "O18 : N servie, N-1 saine (la plus recente a 0 %) et l'application conforme ne sont jamais accusees");
+  // TF-1013 : jouer le remede recommande — desactiver ce que le constat nomme rend l'oracle PASS.
+  const tmp18 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o18-"));
+  try {
+    const remede = JSON.parse(fs.readFileSync(rouge18, "utf8"));
+    for (const r of remede) if (f18.some(f => f.where === r.name)) r.properties.active = false;
+    const pRemede = path.join(tmp18, "apres-menage.json");
+    fs.writeFileSync(pRemede, JSON.stringify(remede));
+    ok(o18(pRemede).verdict === "PASS", "O18 : remede joue (revisions nommees desactivees) -> PASS (TF-1013)");
+    // Repartition de trafic (deux revisions servies) : la borne est servies + N-1, pas 2 en dur.
+    const partage = JSON.parse(fs.readFileSync(path.join(dir18, "verte.json"), "utf8"));
+    partage.find(r => r.name === "api-exemple--b16503").properties.trafficWeight = 80;
+    partage.find(r => r.name === "api-exemple--b16502").properties.trafficWeight = 20;
+    partage.find(r => r.name === "api-exemple--b16501").properties.active = true;
+    const pPartage = path.join(tmp18, "partage.json");
+    fs.writeFileSync(pPartage, JSON.stringify(partage));
+    ok(o18(pPartage).verdict === "PASS", "O18 : trafic reparti sur 2 revisions + une N-1 saine -> PASS (borne = servies + 1)");
+    // Application sans entree HTTP : aucune revision ne porte de trafic, la plus recente tient lieu de N.
+    const sansEntree = JSON.parse(fs.readFileSync(rouge18, "utf8")).filter(r => r.name.startsWith("api-exemple--"));
+    for (const r of sansEntree) delete r.properties.trafficWeight;
+    const pSans = path.join(tmp18, "sans-entree.json");
+    fs.writeFileSync(pSans, JSON.stringify(sansEntree));
+    const rSans = o18(pSans);
+    ok(rSans.verdict === "FAIL" && (rSans.findings || []).filter(f => f.regle === "O18" && f.sev === "bloquant").map(f => f.where).sort().join(",") === "api-exemple--b16500,api-exemple--b16501",
+      `O18 : sans trafic declare, N = la plus recente, N-1 = la suivante saine, le reste nomme (obtenu ${rSans.verdict})`);
+    const pVide = path.join(tmp18, "vide.json");
+    fs.writeFileSync(pVide, "[]");
+    ok(o18(pVide).verdict === "SKIP", "O18 borne : capture vide -> SKIP, rien a juger");
+    const pCasse = path.join(tmp18, "casse.json");
+    fs.writeFileSync(pCasse, "{ pas du json");
+    ok(o18(pCasse).verdict === "FAIL", "O18 borne : capture illisible -> FAIL, jamais un PASS par defaut");
+  } finally {
+    fs.rmSync(tmp18, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  ok(o18(path.join(dir18, "verte.json")).verdict === "PASS", "O18 : N servie + N-1 saine par application, anciennes desactivees -> PASS");
+  ok(o18(path.join(dir18, "absente.json")).verdict === "SKIP", "O18 borne : capture introuvable -> SKIP");
+
+  // TF-1638 : la prescription azure BORNE le mode multiple et porte le menage APRES la bascule et
+  // son controle, puis la capture jugee par O-18 ; la ligne gcp garde N-1 au lieu de tout garder.
+  const tmpPlan = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-plan18-"));
+  try {
+    const pAz = path.join(tmpPlan, "plan-azure.json");
+    run(ops, ["plan", "azure", fx("app-verte"), "--sortie", pAz]);
+    const az = JSON.parse(fs.readFileSync(pAz, "utf8"));
+    const hc = az.phases.healthcheck;
+    const iBascule = hc.findIndex(l => /ingress traffic set/.test(l));
+    const iPost = hc.findIndex((l, i) => i > iBascule && /curl -fsS .*\/sante/.test(l));
+    const iMenage = hc.findIndex(l => /revision deactivate/.test(l));
+    const iO18 = hc.findIndex(l => /--revisions-actives/.test(l));
+    ok(az.phases.provision.some(l => /set-mode .*multiple/.test(l)) && az.phases.provision.some(l => /^BORNE du mode multiple/.test(l)),
+      "plan azure : le mode multiple est suivi de sa BORNE explicite (N servie + une N-1 saine) (TF-1638)");
+    ok(iBascule >= 0 && iPost > iBascule && iMenage > iPost && iO18 > iMenage,
+      `plan azure : bascule -> controle post-bascule -> menage -> capture O-18, dans cet ordre (indices ${iBascule}/${iPost}/${iMenage}/${iO18})`);
+    ok(/\|\| echo "AVERTISSEMENT menage/.test(hc[iMenage]) && /healthState!='Unhealthy'/.test(hc.find(l => /^GARDE=/.test(l)) || ""),
+      "plan azure : le menage garde N-1 saine et AVERTIT sans faire echouer le deploiement");
+    ok(az.phases.provision.some(l => /menage PERIODIQUE/.test(l)), "plan azure : un menage periodique independant des runs est prescrit (TF-1639)");
+    ok(az.phases.rollback.some(l => /revision activate/.test(l)), "plan azure : la desactivation reste reversible (revision activate en rollback, O-4 tient)");
+    ok(verdictPlan(pAz) === "PASS", "oracle O-5 toujours PASS sur le plan azure borne (TF-1638)");
+    const pGcp = path.join(tmpPlan, "plan-gcp.json");
+    run(ops, ["plan", "gcp", fx("app-verte"), "--sortie", pGcp]);
+    const gcp = JSON.parse(fs.readFileSync(pGcp, "utf8"));
+    ok(!gcp.phases.rollback.some(l => /^ne jamais purger les revisions saines/.test(l)) && gcp.phases.rollback.some(l => /garder au moins la revision N-1 saine/.test(l)),
+      "plan gcp : « garder au moins N-1 saine » remplace « ne jamais purger » (TF-1638)");
+  } finally {
+    fs.rmSync(tmpPlan, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
 // G-03 (TF-0611/0613/0610, 25/08) — LES DEUX JUGES DE LA MIGRATION DNS. Leur recette vit dans
 // l'outil lui-meme (`--self-test`, 17 cas, les deux sens sur les trois regles) ; elle est REJOUEE
 // ici pour que l'invariant du depot la couvre — un controle que la recette du depot ne joue pas

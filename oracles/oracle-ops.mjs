@@ -33,6 +33,10 @@
 //       Terraform `data.<type>.<nom>`), « Propriétaire » et « Commande de vérification », les deux
 //       dernières renseignées (TF-1122). Pile sans bloc data : SANS_OBJET (SKIP). Blocs data sans
 //       artefact : FAIL qui nomme les blocs.
+//   O18 --revisions-actives <fichier.json> : sortie CAPTURÉE de `az containerapp revision list
+//       -o json` ; chaque application ne garde actives que ses révisions servies (trafic > 0) et
+//       UNE N-1 saine à 0 % — toute autre révision active est nommée avec sa commande de
+//       désactivation (TF-1639). Capture vide ou introuvable : SKIP.
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -727,6 +731,75 @@ if (args.includes("--prerequis-environnement")) {
   }
   const durs17 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin17(durs17.length ? "FAIL" : "PASS", durs17.length ? 1 : 0);
+}
+
+// ── O18 · les révisions ACTIVES d'une application Container Apps sont bornées (TF-1639, mesure
+// Produit-64 du 12/10/2026) ──────────────────────────────────────────────────────────────────
+//
+// LE FAIT. La prescription azure imposait le mode multiple révisions pour le retour instantané et
+// ne prescrivait aucune désactivation. Sur Container Apps, une révision ACTIVE garde ses
+// minReplicas facturés à 0 % de trafic : le 28/09/2026, 68 replicas d'API et 63 de front
+// tournaient en même temps sur 100 et 90 révisions actives ; septembre 2026 a coûté 1 552,23 EUR
+// pour un budget de 100, dont 73,6 % facturés au repos. O-1 à O-4 étaient PASS : ils jugent que
+// le retour arrière est POSSIBLE, jamais combien de révisions restent actives. La dérive a duré
+// 34 jours sans qu'aucun contrôle la voie.
+//
+// CE QUI EST JUGÉ, sur une sortie `az containerapp revision list -o json` CAPTURÉE en fichier
+// (aucun appel réseau, même posture qu'O-14) : pour chaque application, les révisions actives se
+// limitent aux révisions SERVIES (trafic > 0) plus UNE révision saine à 0 % (N-1, la plus récente
+// qui n'est pas « Unhealthy ») ; dans le cas courant, deux. Toute autre révision active est un
+// constat bloquant qui la nomme, avec la commande de désactivation — réversible par `az containerapp
+// revision activate`, donc O-4 tient. Même règle que l'étape de ménage du plan azure (`ops.mjs`).
+if (args.includes("--revisions-actives")) {
+  const revPath = args[args.indexOf("--revisions-actives") + 1];
+  const DOM18 = "Exploitation : révisions actives d'une application Container Apps bornées à N servie + N-1 saine (O-18)";
+  const NJ18 = [
+    "la FRAÎCHEUR de la capture — l'oracle lit un fichier, jamais la plateforme ; une révision activée à la main après la capture n'y est pas",
+    "le COÛT réel — l'oracle compte des révisions actives et leurs replicas déclarés, jamais une facture ; minReplicas 0 rend une révision active presque gratuite, elle reste jugée",
+    "la santé applicative réelle de N-1 — « saine » se lit au champ healthState de la capture (toute valeur sauf Unhealthy), jamais par un appel",
+    "une entrée sans booléen properties.active est comptée active (sortie par défaut de `revision list`, sans --all, qui ne liste que les actives)",
+  ];
+  const fin18 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM18, artefact: revPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O18", msg: "chaque application porte ses seules révisions servies et une N-1 saine", where: revPath }], non_juge: NJ18 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!revPath || !fs.existsSync(revPath)) { add("info", "O18", "capture de `az containerapp revision list` introuvable", String(revPath)); fin18("SKIP", 2); }
+  let revisions = null;
+  try { revisions = JSON.parse(fs.readFileSync(revPath, "utf8").replace(/^﻿/, "")); }
+  catch { add("bloquant", "O18", "capture illisible (JSON invalide) — attendu la sortie de `az containerapp revision list -o json`", revPath); fin18("FAIL", 1); }
+  if (!Array.isArray(revisions)) { add("bloquant", "O18", "capture qui n'est pas un tableau de révisions — attendu la sortie de `az containerapp revision list -o json`", revPath); fin18("FAIL", 1); }
+  if (!revisions.length) { add("info", "O18", "aucune révision dans la capture — rien à juger", revPath); fin18("SKIP", 2); }
+  // Une capture peut réunir plusieurs applications (sorties concaténées) : l'application se lit à
+  // l'identifiant de ressource, sinon au préfixe du nom de révision (`<app>--<suffixe>`).
+  const parApp = new Map();
+  for (const r of revisions) {
+    const nom = String(r?.name ?? "");
+    const app = /\/containerApps\/([^/]+)\/revisions\//i.exec(String(r?.id ?? ""))?.[1] || nom.split("--")[0] || "?";
+    if (!parApp.has(app)) parApp.set(app, []);
+    parApp.get(app).push(r);
+  }
+  for (const [app, revs] of parApp) {
+    const actives = revs.filter(r => r?.properties?.active !== false);
+    if (!actives.length) continue;
+    const trafic = r => Number(r?.properties?.trafficWeight) || 0;
+    const date = r => String(r?.properties?.createdTime ?? "");
+    const recentes = [...actives].sort((a, b) => (date(a) < date(b) ? 1 : date(a) > date(b) ? -1 : 0));
+    let servies = actives.filter(r => trafic(r) > 0);
+    // Sans révision qui porte du trafic (application sans entrée HTTP), la plus récente tient lieu de N.
+    if (!servies.length) servies = [recentes[0]];
+    const aZero = recentes.filter(r => !servies.includes(r));
+    const garde = aZero.find(r => String(r?.properties?.healthState ?? "") !== "Unhealthy") || null;
+    const enTrop = aZero.filter(r => r !== garde);
+    const rg = revs.find(r => r?.resourceGroup)?.resourceGroup || "<RG>";
+    if (!garde && aZero.length === 0)
+      add("info", "O18", `application ${app} : ${actives.length} révision(s) active(s), aucune N-1 active — le retour arrière passera par \`az containerapp revision activate\` avant la bascule`, app);
+    for (const r of enTrop) {
+      const rep = r?.properties?.replicas;
+      add("bloquant", "O18", `application ${app} : révision ${r.name} ACTIVE à 0 % de trafic${typeof rep === "number" ? `, ${rep} replica(s)` : ""}, en plus de N servie et de N-1 ${garde ? garde.name : "(aucune saine)"} — une révision active garde ses minReplicas facturés sans servir personne (${actives.length} actives pour une borne de ${servies.length + (garde ? 1 : 0)}). Désactiver : az containerapp revision deactivate --name ${app} --resource-group ${rg} --revision ${r.name} (réversible par revision activate) (TF-1639)`, r.name);
+    }
+  }
+  const durs18 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin18(durs18.length ? "FAIL" : "PASS", durs18.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

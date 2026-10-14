@@ -117,6 +117,14 @@ findings,non_juge}`, exit 0/1/2 :
   L'oracle lit des définitions, jamais un historique — `# exerce_le: AAAA-MM-JJ` déclare l'exercice
   et reste un avertissement, jamais un FAIL rétroactif.
 
+- **O18** `--revisions-actives <fichier.json>` (TF-1639) : sur une sortie **capturée** de
+  `az containerapp revision list -o json` (aucun appel réseau), chaque application ne garde
+  actives que ses révisions servies et **une** N-1 saine à 0 %. Mesure fondatrice (Produit-64,
+  12/10/2026) : le mode multiple sans borne a laissé 100 révisions actives sur une application,
+  minReplicas facturés à 0 % de trafic, 1 552,23 EUR en septembre pour un budget de 100, sous
+  O-1 à O-4 PASS. Toute révision en trop est nommée avec sa commande de désactivation
+  (réversible). Le plan `azure` porte la borne et l'étape de ménage qui la tient (TF-1638).
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les

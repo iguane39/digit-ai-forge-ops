@@ -1,0 +1,107 @@
+[
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-exemple-dev/providers/Microsoft.App/containerApps/api-exemple/revisions/api-exemple--b16503",
+    "name": "api-exemple--b16503",
+    "properties": {
+      "active": true,
+      "createdTime": "2026-09-28T10:00:00+00:00",
+      "healthState": "Healthy",
+      "provisioningState": "Provisioned",
+      "replicas": 1,
+      "runningState": "Running",
+      "trafficWeight": 100
+    },
+    "resourceGroup": "rg-exemple-dev",
+    "type": "Microsoft.App/containerApps/revisions"
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-exemple-dev/providers/Microsoft.App/containerApps/api-exemple/revisions/api-exemple--b16502",
+    "name": "api-exemple--b16502",
+    "properties": {
+      "active": true,
+      "createdTime": "2026-09-27T10:00:00+00:00",
+      "healthState": "Healthy",
+      "provisioningState": "Provisioned",
+      "replicas": 1,
+      "runningState": "Running",
+      "trafficWeight": 0
+    },
+    "resourceGroup": "rg-exemple-dev",
+    "type": "Microsoft.App/containerApps/revisions"
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-exemple-dev/providers/Microsoft.App/containerApps/api-exemple/revisions/api-exemple--b16501",
+    "name": "api-exemple--b16501",
+    "properties": {
+      "active": true,
+      "createdTime": "2026-09-26T10:00:00+00:00",
+      "healthState": "Healthy",
+      "provisioningState": "Provisioned",
+      "replicas": 1,
+      "runningState": "Running",
+      "trafficWeight": 0
+    },
+    "resourceGroup": "rg-exemple-dev",
+    "type": "Microsoft.App/containerApps/revisions"
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-exemple-dev/providers/Microsoft.App/containerApps/api-exemple/revisions/api-exemple--b16500",
+    "name": "api-exemple--b16500",
+    "properties": {
+      "active": true,
+      "createdTime": "2026-09-25T10:00:00+00:00",
+      "healthState": "Unhealthy",
+      "provisioningState": "Provisioned",
+      "replicas": 1,
+      "runningState": "Degraded",
+      "trafficWeight": 0
+    },
+    "resourceGroup": "rg-exemple-dev",
+    "type": "Microsoft.App/containerApps/revisions"
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-exemple-dev/providers/Microsoft.App/containerApps/api-exemple/revisions/api-exemple--b16499",
+    "name": "api-exemple--b16499",
+    "properties": {
+      "active": false,
+      "createdTime": "2026-09-24T10:00:00+00:00",
+      "healthState": "None",
+      "provisioningState": "Provisioned",
+      "replicas": 0,
+      "runningState": "Stopped",
+      "trafficWeight": 0
+    },
+    "resourceGroup": "rg-exemple-dev",
+    "type": "Microsoft.App/containerApps/revisions"
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-exemple-dev/providers/Microsoft.App/containerApps/front-exemple/revisions/front-exemple--f203",
+    "name": "front-exemple--f203",
+    "properties": {
+      "active": true,
+      "createdTime": "2026-09-28T10:05:00+00:00",
+      "healthState": "Healthy",
+      "provisioningState": "Provisioned",
+      "replicas": 1,
+      "runningState": "Running",
+      "trafficWeight": 100
+    },
+    "resourceGroup": "rg-exemple-dev",
+    "type": "Microsoft.App/containerApps/revisions"
+  },
+  {
+    "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-exemple-dev/providers/Microsoft.App/containerApps/front-exemple/revisions/front-exemple--f202",
+    "name": "front-exemple--f202",
+    "properties": {
+      "active": true,
+      "createdTime": "2026-09-27T10:05:00+00:00",
+      "healthState": "Healthy",
+      "provisioningState": "Provisioned",
+      "replicas": 1,
+      "runningState": "Running",
+      "trafficWeight": 0
+    },
+    "resourceGroup": "rg-exemple-dev",
+    "type": "Microsoft.App/containerApps/revisions"
+  }
+]
