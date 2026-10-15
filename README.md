@@ -88,6 +88,16 @@ node oracles/self-test.mjs
   `oracle-ops.mjs` rende O1/O3 **SANS_OBJET** au lieu d'un FAIL à tort ; sans ce fichier,
   l'absence de `COURANT`/`journal.jsonl` reste jugée comme avant (l'oubli n'existe pas — la
   déclaration est explicite, jamais déduite du nom du dossier).
+- **Cible conteneur Docker : `restaurer` refuse HORS CONTRAT (TF-1805).** La cible par défaut de
+  l'étape MEP du pilot est un conteneur Docker local. `ops.mjs restaurer` ne restaure que des
+  releases de fichiers : sur un dossier sans `COURANT` qui porte un `Dockerfile` ou un fichier
+  compose, il sort en **exit 2** `[OPS HORS CONTRAT]`, nomme le geste manuel et n'écrit rien. Le
+  retour arrière d'un conteneur suit le `ROLLBACK.md` du produit (arrêt de N, image N-1 taguée
+  `<produit>:<run-id>`, healthcheck 200, retour à N : M-4 d'ETAPE-MEP). Restaurer un conteneur
+  n'est pas implémenté ici : les conventions de tag et de service appartiennent au produit.
+- **Un document `.md` passé à `oracle-ops.mjs` se juge comme document (TF-1804).** Seules O9,
+  O12, O13 et O16 le jugent ; O1-O4 ne s'y appliquent pas, et le journal `.ops-journal.jsonl`
+  scelle le verdict du document avec `nature: "document"`.
 
 ## Oracles
 
@@ -134,6 +144,25 @@ demande**, distinct de sa cadence : un déclencheur manuel, ou un paramètre d'e
 **lu** dans la garde de cadence. Sans lui, le mécanisme ne peut être éprouvé qu'à sa prochaine
 échéance — donc il se découvre cassé au moment précis où l'on compte dessus. Un paramètre déclaré
 et jamais lu affiche une case à cocher qui ne fait rien : même verdict qu'un paramètre absent.
+
+**Un worker qui planifie lui-même se lit aussi (TF-1806).** Une boucle `while True` à intervalles
+`timedelta`, ou une bibliothèque de planification (APScheduler, `schedule`, Celery beat,
+`node-cron`), ne laisse aucun fichier cron. O-8 lit donc aussi les sources `.py`, `.js`, `.mjs`
+et `.ts` du dépôt, à quatre niveaux au plus, hors dépendances, tests et `frontend`. Il ne lit pas
+un mode d'exercice dans du code : il lit sa déclaration, écrite en commentaire ou en docstring du
+fichier qui planifie.
+
+```python
+"""Worker : santé, rafraîchissement planifié, purge.
+exercice_a_la_demande: python -m app.cli executer-tache purge-creditsafe
+exerce_le: 2026-10-15
+"""
+```
+
+Déclaré, le worker compte comme une définition planifiée (PASS, avec la date d'exercice). Sans
+déclaration, O-8 le nomme en avertissement et rend SKIP, jamais « rien à juger ». Mesuré le
+15/10/2026 en lecture seule sur deux produits du parc : deux workers planifiés en code nommés,
+là où O-8 rendait « aucune définition planifiée ».
 
 Les faits d'exploitation constatés (comportements d'outils tiers qu'aucune documentation n'énonce)
 vivent dans `references/GESTES-EXPLOITATION.md`, datés et sourcés.

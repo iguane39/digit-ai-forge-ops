@@ -65,6 +65,26 @@ ok(nbEv === 3, `journal : 3 événements tracés (obtenu ${nbEv})`);
 // ── ROUGE · restauration sans précédente (COURANT = première release) ─────
 ok(mustFail(ops, ["restaurer", cible], "aucune release précédente"), "restaurer sans précédente → refus");
 
+// ── TF-1805 (lot Produit-83 du 15/10/2026, RO-2) : la cible par défaut du pilot est un CONTENEUR
+// Docker local (ETAPE-MEP § 1). `restaurer` n'y trouvait pas de COURANT et répondait « rien à
+// restaurer » : une phrase fausse sur un staging qui servait bel et bien une version N.
+{
+  const dock = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf1805-"));
+  try {
+    fs.writeFileSync(path.join(dock, "Dockerfile"), "FROM scratch\n", "utf8");
+    fs.writeFileSync(path.join(dock, "docker-compose.yml"), "services:\n  app:\n    image: produit:run-2\n", "utf8");
+    const r = spawnSync(process.execPath, [ops, "restaurer", dock], { encoding: "utf8" });
+    const err = String(r.stderr || "");
+    ok(r.status === 2, `TF-1805 · cible conteneur Docker -> refus HORS CONTRAT exit 2, jamais « rien à restaurer » (obtenu exit ${r.status})`);
+    ok(/conteneur Docker/.test(err) && /ROLLBACK\.md/.test(err) && /docker compose/.test(err) && !/rien à restaurer/.test(err),
+      `TF-1805 · le refus nomme la cible, le geste manuel et ROLLBACK.md (obtenu « ${err.trim().slice(0, 90)} »)`);
+    ok(!fs.existsSync(path.join(dock, "journal.jsonl")) && !fs.existsSync(path.join(dock, "COURANT")),
+      "TF-1805 · le refus n'écrit rien dans le dossier du produit");
+  } finally {
+    fs.rmSync(dock, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
 // ── ROUGE · healthcheck en échec : COURANT intact, refus journalisé ───────
 ok(mustFail(ops, ["deployer", fx("app-rouge"), cible], "healthcheck en échec"), "app malade → déploiement refusé");
 ok(courant(cible) === r1, "COURANT intact après refus (jamais de bascule sur release malade)");
@@ -615,6 +635,37 @@ fs.writeFileSync(path.join(rGhSans, ".github", "workflows", "veille.yml"),
   ["on:", "  schedule:", '    - cron: "7 7 1-7 * 1"', "jobs:", "  veille:", "    runs-on: ubuntu-latest"].join("\n") + "\n", "utf8");
 ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur manuel → FAIL (le sens rouge du même dialecte)");
 
+// (g) TF-1806 (lot Produit-83 du 15/10/2026, RO-3) : un WORKER qui planifie lui-même (boucle à
+// intervalles dans le code, ou bibliothèque de planification) ne laisse aucun fichier cron. O-8
+// rendait « aucune définition planifiée — rien à juger », SKIP, alors que trois tâches tournaient
+// à cadence et qu'un mode d'exercice à la demande existait. Le worker se lit désormais ; sa
+// déclaration `exercice_a_la_demande:` fait le PASS, son absence est DITE (avertissement).
+const worker = (nom, entete) => {
+  const d = path.join(base, "depot-worker-" + nom);
+  fs.mkdirSync(path.join(d, "backend", "app"), { recursive: true });
+  fs.writeFileSync(path.join(d, "backend", "app", "batch.py"), [
+    '"""Worker : santé, rafraîchissement planifié, purge.',
+    ...entete,
+    '"""',
+    "from datetime import timedelta",
+    "INTERVALLE_PURGE = timedelta(days=1)",
+    "def main():",
+    "    while True:",
+    "        traiter_une_fois()",
+  ].join("\n") + "\n", "utf8");
+  return d;
+};
+const rWorkerDeclare = o8(worker("declare", [
+  "exercice_a_la_demande: python -m app.cli executer-tache purge",
+  "exerce_le: 2026-10-15",
+]));
+ok(rWorkerDeclare.verdict === "PASS" && (rWorkerDeclare.findings || []).some(f => /exercé le 2026-10-15/.test(f.msg) && f.where === "backend/app/batch.py"),
+  `TF-1806 · worker planifié en code, exercice déclaré → PASS localisé (obtenu ${rWorkerDeclare.verdict})`);
+const rWorkerMuet = o8(worker("muet", []));
+ok(rWorkerMuet.verdict === "SKIP" && (rWorkerMuet.findings || []).some(f => /EN CODE/.test(f.msg) && /exercice_a_la_demande/.test(f.msg) && f.where === "backend/app/batch.py")
+  && !(rWorkerMuet.findings || []).some(f => /rien à juger/.test(f.msg)),
+  `TF-1806 · ROUGE — worker planifié sans déclaration → avertissement qui le NOMME, jamais « rien à juger » (obtenu ${rWorkerMuet.verdict}, ${(rWorkerMuet.findings || []).map(f => f.msg.slice(0, 40)).join(" | ")})`);
+
 
 // ── TF-0579 (25/08) : LE VERDICT S'ARCHIVE ET DIT SON REGIME ───────────────────────────────
 // Le fait : un gate de MEP est reste ROUGE SIX JOURS pendant que le deploiement avait lieu.
@@ -740,6 +791,33 @@ ok(o8(rGhSans).verdict === "FAIL", "le même workflow GitHub SANS déclencheur m
   ok(verte13.length === 0, `O13 : memes gestes, les deux marques posees -> aucun constat (obtenu ${verte13.length})`);
   ok(o13(path.join(ici, "self-test.mjs")).length === 0,
     "O13 borne : ce fichier (aucun verbe destructif en tete de liste) ne remonte aucun constat");
+
+  // TF-1804 (lot Produit-83 du 15/10/2026, RO-1) : ETAPE-MEP § 3 septies prescrit
+  // `oracle-ops.mjs <document.md>`. Le document conforme sortait FAIL O1/O3 (« COURANT absent »,
+  // « journal.jsonl absent ») : l'oracle le jugeait AUSSI comme une cible de release, et
+  // scellait ce FAIL dans .ops-journal.jsonl a cote du document.
+  const tmp13 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf1804-"));
+  try {
+    const juger = f => { try { return { code: 0, j: JSON.parse(run(oracle, [f, "--json-only"])) }; }
+      catch (e) { try { return { code: e.status, j: JSON.parse(String(e.stdout)) }; } catch { return { code: e.status, j: {} }; } } };
+    const docVert = path.join(tmp13, "DOSSIER-MEP.md");
+    fs.copyFileSync(path.join(dir13, "verte.md"), docVert);
+    const v = juger(docVert);
+    const reglesCible = (v.j.findings || []).filter(f => ["O1", "O2", "O3", "O4"].includes(f.regle));
+    ok(v.j.verdict === "PASS" && v.code === 0 && reglesCible.length === 0,
+      `TF-1804 · document conforme -> PASS exit 0, sans O1-O4 (obtenu ${v.j.verdict}, exit ${v.code}, ${reglesCible.map(f => f.regle).join(",") || "aucune regle de cible"})`);
+    const scelle = fs.readFileSync(path.join(tmp13, ".ops-journal.jsonl"), "utf8").trim().split("\n").map(l => JSON.parse(l));
+    ok(scelle.length === 1 && scelle[0].verdict === "PASS" && scelle[0].nature === "document",
+      `TF-1804 · le journal scelle le verdict du DOCUMENT, jamais un FAIL de cible (obtenu ${scelle.map(s => s.verdict + "/" + s.nature).join(",")})`);
+    const docRouge = path.join(tmp13, "rouge.md");
+    fs.copyFileSync(path.join(dir13, "rouge.md"), docRouge);
+    const r = juger(docRouge);
+    ok(r.j.verdict === "FAIL" && r.code === 1 && (r.j.findings || []).every(f => !["O1", "O3"].includes(f.regle))
+      && (r.j.findings || []).some(f => f.regle === "O13"),
+      `TF-1804 · ROUGE — document aux gestes non marques -> FAIL par O13 seul (obtenu ${r.j.verdict}, ${[...new Set((r.j.findings || []).map(f => f.regle))].join(",")})`);
+  } finally {
+    fs.rmSync(tmp13, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
 }
 
 // ── O14 (TF-1114, mesure Produit-11 du 14/09/2026) : L'INVENTAIRE DOCUMENTE CONTIENT

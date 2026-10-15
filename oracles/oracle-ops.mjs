@@ -21,6 +21,8 @@
 //   O8  --planifie <racine>   : toute définition PLANIFIÉE du dépôt porte un mode d'exercice à
 //       la demande, CÂBLÉ et distinct de sa cadence (TF-0527) — un travail qu'on ne peut
 //       déclencher qu'à sa prochaine échéance se découvre cassé au moment où l'on compte dessus.
+//       Un worker qui planifie EN CODE se lit aussi, par sa déclaration `exercice_a_la_demande:`
+//       (avertissement sans elle, TF-1806).
 //   O10 --manifeste-servi <fichier> : chaque paquet épinglé par version (`==`) dans un
 //       requirements.txt SERVI (image finale) porte au moins une empreinte `--hash=` (TF-1042) —
 //       une version republiée sous le même numéro entre sinon sans être vue.
@@ -59,6 +61,7 @@
 //       oracle de conformité) — seuils SLO humains vs mesures post-bascule (TF-0107).
 // Contrat : JSON {oracle,domaine,artefact,verdict,findings,non_juge} · exit 0/1/2.
 // Usage : node oracle-ops.mjs <cible> [--json-only]
+// Une cible .md est un DOCUMENT : seules O9, O12, O13 et O16 la jugent, jamais O1-O4 (TF-1804).
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -338,7 +341,57 @@ if (args.includes("--planifie")) {
     else
       add("bloquant", "O8", `définition planifiée SANS mode d'exercice à la demande : elle ne peut être éprouvée qu'à sa prochaine cadence, donc elle se découvrira cassée au moment où l'on compte dessus. Ajouter un déclencheur manuel (workflow_dispatch) ou un paramètre d'exécution forcée LU dans la garde de cadence — distinct de la cadence, qui ne change pas`, ou);
   }
-  if (!planifiees) { add("info", "O8", `aucune définition planifiée parmi ${candidats.length} fichier(s) aux emplacements connus — rien à juger`, path.basename(String(cible))); fin8("SKIP", 2); }
+  // TF-1806 (lot Produit-83 du 15/10/2026) : un WORKER qui planifie lui-même ne laisse aucun
+  // fichier cron. Mesuré : trois tâches à cadence (boucle `while True` à intervalles `timedelta`),
+  // un mode d'exercice à la demande écrit, et O-8 rendait « rien à juger ». Le code se lit donc
+  // aussi, borné : sources .py/.js/.mjs/.ts à 4 niveaux au plus, hors dépendances, tests et
+  // interface. O-8 ne sait pas lire un mode d'exercice dans du code : il lit sa DÉCLARATION
+  // (`exercice_a_la_demande: <commande>`, en commentaire ou docstring du fichier qui planifie).
+  // Sans elle : AVERTISSEMENT nommé, verdict SKIP — la règle neuve ne bloque pas.
+  const PLANIF_CODE = [
+    /\b(BlockingScheduler|BackgroundScheduler|AsyncIOScheduler)\b/,
+    /\.add_job\(/,
+    /\bschedule\.every\(/,
+    /\bbeat_schedule\b/,
+    /\bcron\.schedule\(/,
+    /\bnew CronJob\(/,
+  ];
+  const BOUCLE_A_INTERVALLES = t => /^\s*while True\s*:/m.test(t) && /\btimedelta\(\s*(seconds|minutes|hours|days|weeks)\s*=/.test(t);
+  const EXCLUS = new Set(["node_modules", ".venv", "venv", ".git", "dist", "build", "__pycache__", "tests", "test", "e2e", "fixtures", "vendor", "frontend", ".next"]);
+  const sources = [];
+  const ajouterSources = (dir, prof = 0) => {
+    if (prof > 4) return;
+    let noms = [];
+    try { noms = fs.readdirSync(dir); } catch { return; }
+    for (const nom of noms) {
+      if (EXCLUS.has(nom)) continue;
+      const q = path.join(dir, nom);
+      let st; try { st = fs.statSync(q); } catch { continue; }
+      if (st.isDirectory()) ajouterSources(q, prof + 1);
+      else if (/\.(py|js|mjs|ts)$/i.test(nom) && !/\.(test|spec)\./i.test(nom)) sources.push(q);
+    }
+  };
+  if (fs.statSync(cible).isDirectory()) ajouterSources(cible);
+  let enCodeMuets = 0;
+  for (const f of sources) {
+    let texte; try { texte = fs.readFileSync(f, "utf8"); } catch { continue; }
+    if (!PLANIF_CODE.some(re => re.test(texte)) && !BOUCLE_A_INTERVALLES(texte)) continue;
+    const ou = path.relative(cible, f).split(path.sep).join("/");
+    const declaree = /exercice_a_la_demande\s*:\s*(\S.*)$/m.exec(texte);
+    if (!declaree) {
+      enCodeMuets++;
+      add("info", "O8", `planification EN CODE détectée (worker à intervalles ou bibliothèque de planification) sans déclaration « exercice_a_la_demande: <commande> » : O-8 ne lit pas un mode d'exercice dans du code. Écrire, en commentaire ou docstring de ce fichier, la commande qui exerce la tâche hors cadence, puis « exerce_le: AAAA-MM-JJ » le jour où elle a tourné (AVERTISSEMENT, TF-1806)`, ou);
+      continue;
+    }
+    planifiees++;
+    const exerce = /exerce_le\s*:\s*(\d{4}-\d{2}-\d{2})/m.exec(texte);
+    if (!exerce)
+      add("info", "O8", `planification en code, mode d'exercice déclaré (${declaree[1].trim().slice(0, 80)}), mais AUCUN exercice déclaré : ajouter « exerce_le: AAAA-MM-JJ » le jour où la commande a réellement tourné`, ou);
+    else
+      add("info", "O8", `planification en code, mode d'exercice déclaré (${declaree[1].trim().slice(0, 80)}) et exercé le ${exerce[1]}`, ou);
+  }
+  if (!planifiees && enCodeMuets) fin8("SKIP", 2);
+  if (!planifiees) { add("info", "O8", `aucune définition planifiée parmi ${candidats.length} fichier(s) aux emplacements connus ni dans le code — rien à juger`, path.basename(String(cible))); fin8("SKIP", 2); }
   const durs8 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin8(durs8.length ? "FAIL" : "PASS", durs8.length ? 1 : 0);
 }
@@ -1047,6 +1100,10 @@ function empreinteCible(chemin) {
   } catch { return null; }
 }
 
+function natureDe(c) {
+  try { return fs.statSync(c).isFile() && /\.md$/i.test(c) ? "document" : "cible"; } catch { return "cible"; }
+}
+
 function archiver(verdict, code) {
   if (!cible) return { archive: false, motif: "aucune cible — rien a sceller" };
   let dossier;
@@ -1060,6 +1117,8 @@ function archiver(verdict, code) {
     cible: String(cible),
     verdict,
     exit: code,
+    // TF-1804 : un document .md se juge comme document, jamais comme cible de release.
+    nature: natureDe(cible),
     // (b) : le regime de CHAQUE regle qui a parle. « bloque » ou « consultatif », jamais implicite.
     regles: F.map(f => ({ regle: f.regle, sev: f.sev, regime: REGIME[f.sev] || "consultatif" })),
     bloquants: F.filter(f => REGIME[f.sev] === "bloque").length,
@@ -1079,7 +1138,8 @@ function archiver(verdict, code) {
 function sortir(verdict, code) {
   process.stdout.write(JSON.stringify({
     oracle: "oracle-ops", domaine: DOM, artefact: cible || null,
-    verdict, findings: F.length ? F : [{ sev: "info", regle: "—", msg: "O1–O4 sans écart", where: cible }],
+    verdict, findings: F.length ? F : [{ sev: "info", regle: "—",
+      msg: cible && natureDe(cible) === "document" ? "O9, O12, O13, O16 sans écart" : "O1–O4 sans écart", where: cible }],
     // TF-0579 : le verdict DIT desormais son regime et OU il est archive. Un gate dont on ne
     // sait pas s'il bloque est un avis ; un verdict sans trace est invérifiable.
     scellement: archiver(verdict, code),
@@ -1140,6 +1200,18 @@ if (cible && fs.existsSync(cible)) {
       }
     }
   } catch { /* cible illisible : O9/O12/O13/O16 se taisent plutot que d'accuser */ }
+}
+
+// TF-1804 (lot Produit-83 du 15/10/2026) : un DOCUMENT .md se juge par ses regles de document
+// (O9, O12, O13, O16) et s'arrete la. Avant, il tombait aussi dans O1-O4 : `<doc.md>/COURANT`
+// n'existe jamais, et le document conforme que prescrit ETAPE-MEP § 3 septies sortait FAIL,
+// scelle tel quel dans .ops-journal.jsonl.
+const estDocument = (() => {
+  try { return !!cible && fs.statSync(cible).isFile() && /\.md$/i.test(cible); } catch { return false; }
+})();
+if (estDocument) {
+  const dursDoc = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  sortir(dursDoc.length ? "FAIL" : "PASS", dursDoc.length ? 1 : 0);
 }
 
 if (!cible || !fs.existsSync(cible)) { add("info", "—", "cible introuvable", String(cible)); sortir("SKIP", 2); }

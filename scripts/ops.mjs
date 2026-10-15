@@ -11,6 +11,7 @@
 //
 // Contrat de la cible : releases/<ts>/ + COURANT (pointeur texte) + journal.jsonl
 // (append-only, contrat ledger forge-agents : seq strictement croissant depuis 1).
+// Hors contrat : une cible conteneur Docker (restaurer sort en exit 2 avec le geste manuel, TF-1805).
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -117,9 +118,26 @@ function deployer(build, cible) {
   console.log(`[OPS OK] déployé : ${release}${precedent ? ` (précédent : ${precedent})` : ""}`);
 }
 
+// TF-1805 (lot Produit-83 du 15/10/2026) : la cible par défaut du pilot est un conteneur Docker
+// local (ETAPE-MEP § 1). `restaurer` ne sait repointer que des releases de FICHIERS (COURANT +
+// releases/) ; sur un dossier de produit conteneurisé il répondait « rien à restaurer », phrase
+// fausse sur un staging qui sert une version N. Il refuse désormais HORS CONTRAT (exit 2) en
+// nommant le geste manuel, sans rien écrire. Restaurer un conteneur n'est pas implémenté : les
+// conventions de tag et de service appartiennent au produit, qui les écrit dans son ROLLBACK.md.
+const FICHIERS_CONTENEUR = ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml", "Dockerfile"];
+
+function horsContrat(msg) { console.error(`[OPS HORS CONTRAT] ${msg}`); process.exit(2); }
+
 function restaurer(cible) {
   const courant = lireCourant(cible);
-  if (!courant) fail("aucun COURANT — rien à restaurer");
+  const conteneur = FICHIERS_CONTENEUR.filter(f => fs.existsSync(path.join(cible, f)));
+  if (!courant && conteneur.length)
+    horsContrat(`cible conteneur Docker (${conteneur.join(", ")}) : ops.mjs restaurer ne restaure que des `
+      + "releases de fichiers (COURANT + releases/). Geste manuel, celui du ROLLBACK.md du produit : "
+      + "docker compose down ; repointer le service sur l'image N-1 taguée <produit>:<run-id N-1> ; "
+      + "docker compose up -d ; healthcheck 200 ; puis retour à N (ETAPE-MEP M-4). Rien n'a été écrit.");
+  if (!courant) fail("aucun COURANT — cible sans release de fichiers active, rien à restaurer ici "
+    + "(une cible conteneur se restaure par le ROLLBACK.md du produit, TF-1805)");
   const releases = releasesTriees(cible);
   const idx = releases.indexOf(courant);
   const precedente = idx > 0 ? releases[idx - 1] : null;
