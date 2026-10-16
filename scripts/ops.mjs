@@ -460,6 +460,40 @@ PLANS["powerbi-workspace"] = {
   ],
 };
 
+// ── SUPABASE (16/10/2026) : projet heberge (base Postgres, migrations, fonctions) ──
+// Chaque commande vient d'une page officielle lue le 16/10/2026 (S1, S5, S6, S7, S8 de la
+// fiche expert). Meme doctrine : plan-first, zero credential, publication sur GO humain (R-38).
+// Retour arriere HONNETE : la documentation ne decrit aucune migration « down » ; la voie est
+// une migration corrective poussee par `db push`, la restauration (PITR ou sauvegarde) n'etant
+// qu'un dernier recours humain et irreversible, hors CLI.
+PLANS.supabase = {
+  service: "Supabase — projet heberge (base Postgres, migrations, fonctions)",
+  fiche: "experts-forge/fiches/expert-ops-supabase.md",
+  placeholders: ["<PROJECT_REF>", "<NOM_CORRECTIF>", "<URL_SERVICE>"],
+  provision: [
+    "identite de deploiement : variables SUPABASE_ACCESS_TOKEN (jeton personnel a portee limitee), SUPABASE_DB_PASSWORD et SUPABASE_PROJECT_ID fournies par l'environnement du run, jamais une valeur dans le plan ; source : https://supabase.com/docs/guides/deployment/managing-environments, lue le 16/10/2026",
+    "supabase link --project-ref <PROJECT_REF>   # liaison au projet distant <PROJECT_REF> ; source : https://supabase.com/docs/reference/cli/introduction, lue le 16/10/2026",
+    "supabase ssl-enforcement get --project-ref <PROJECT_REF> --experimental   # attendu « SSL is being enforced. » ; « SSL is *NOT* being enforced. » = ecart a traiter (l'activation redemarre la base) ; source : https://supabase.com/docs/guides/platform/ssl-enforcement, lue le 16/10/2026",
+    "supabase network-restrictions get --project-ref <PROJECT_REF> --experimental   # 0.0.0.0/0 + ::/0 = aucune restriction ; couvre Postgres et le pooler, PAS les API HTTPS (PostgREST, Storage, Auth) ; source : https://supabase.com/docs/guides/platform/network-restrictions, lue le 16/10/2026",
+  ],
+  deploiement: [
+    "supabase db push --dry-run --linked   # essai a blanc (--dry-run), sa sortie relue avant le GO",
+    "supabase db push --linked   # applique les migrations au projet distant : publication sur un service heberge, GO humain consigne au dossier de MEP (R-38) ; source : https://supabase.com/docs/reference/cli/introduction, lue le 16/10/2026",
+    "supabase functions deploy --project-ref <PROJECT_REF>   # publication des fonctions, sous le meme GO humain (R-38)",
+  ],
+  healthcheck: [
+    "supabase migration list --linked   # health : etat des migrations du projet lie, relu apres le push",
+    "curl -fsS <URL_SERVICE>/sante   # 200 attendu (contrat sante.mjs de forge-ops) ; <URL_SERVICE> = le produit servi, aucune URL Supabase supposee",
+  ],
+  rollback: [
+    "la documentation ne decrit AUCUNE migration « down » : le retour arriere d'un schema est une migration CORRECTIVE vers l'avant ; source : https://supabase.com/docs/guides/deployment/managing-environments, lue le 16/10/2026",
+    "supabase migration new <NOM_CORRECTIF>   # ecrire le correctif qui defait la migration fautive, versionne avec le produit",
+    "supabase db push --dry-run --linked && supabase db push --linked   # pousser le correctif, sous GO humain (R-38)",
+    "supabase migration list --linked   # re-verification apres retour",
+    "DERNIER RECOURS, GESTE HUMAIN IRREVERSIBLE : restauration d'une sauvegarde ou PITR par le tableau de bord (Database > Backups) ou l'API de gestion `POST https://api.supabase.com/v1/projects/<PROJECT_REF>/database/backups/restore-pitr` — aucune commande CLI de restauration ; projet INACCESSIBLE pendant l'operation, tout ce qui suit le point choisi est PERDU ; sauvegardes quotidiennes Pro 7 j, Team 14, Enterprise jusqu'a 30, Free aucune (export par `supabase db dump`) ; PITR = add-on Pro/Team/Enterprise ; jamais lance par la forge ; source : https://supabase.com/docs/guides/platform/backups, lue le 16/10/2026",
+  ],
+};
+
 function plan(cible, build, sortie) {
   const p = PLANS[cible];
   if (!p) fail(`cible inconnue « ${cible} » — cibles connues : ${Object.keys(PLANS).join(", ")}`);

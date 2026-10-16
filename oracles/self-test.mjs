@@ -170,7 +170,7 @@ const verdictPlan = (fichier) => {
 };
 // TF-0865 (lot L8, 07/09/2026) : deux cibles de produit data rejoignent la boucle — bundle
 // déclaratif Databricks et espace de travail Power BI — mêmes exigences O-5 que les cibles cloud.
-for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace"]) {
+for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace", "supabase"]) {
   const pf = path.join(base, `plan-${cible}.json`);
   run(ops, ["plan", cible, fx("app-verte"), "--sortie", pf]);
   const p = JSON.parse(fs.readFileSync(pf, "utf8"));
@@ -188,9 +188,21 @@ const jetonsNonDeclares = (p) => {
   const employes = new Set(JSON.stringify(p.phases || {}).match(/<[A-Z][A-Z0-9_]*>/g) || []);
   return [...employes].filter(j => !declares.has(j)).sort();
 };
-for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace"]) {
+for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace", "supabase"]) {
   const nd = jetonsNonDeclares(JSON.parse(run(ops, ["plan", cible, "<BUILD>"])));
   ok(nd.length === 0, `plan ${cible} : tout jeton <MAJUSCULES> employé est déclaré dans placeholders${nd.length ? ` — non déclarés : ${nd.join(" ")}` : ""} (TF-1685)`);
+}
+// Supabase (16/10/2026) : paire de fixtures figées — la verte passe O-5, une rouge sans
+// rollback et une rouge dont le déploiement n'emploie pas le CLI `supabase ` échouent.
+ok(verdictPlan(fx("o5-supabase/plan-vert.json")) === "PASS", "fixture plan supabase complet → O-5 PASS");
+ok(verdictPlan(fx("o5-supabase/plan-rouge-rollback-vide.json")) === "FAIL", "fixture plan supabase sans rollback → O-5 FAIL");
+ok(verdictPlan(fx("o5-supabase/plan-rouge-sans-cli.json")) === "FAIL", "fixture plan supabase sans commande `supabase ` au déploiement → O-5 FAIL");
+// Le retour arrière supabase ne promet pas de migration « down » et marque la restauration comme
+// geste humain irréversible (source officielle citée, datée).
+{
+  const rb = JSON.parse(run(ops, ["plan", "supabase", "<BUILD>"])).phases.rollback.join(" ");
+  ok(rb.includes("AUCUNE migration « down »") && rb.includes("GESTE HUMAIN IRREVERSIBLE") && rb.includes("https://supabase.com/docs/guides/platform/backups, lue le 16/10/2026"),
+    "plan supabase : rollback par migration corrective, restauration marquée humaine et irréversible, source datée");
 }
 // ROUGE : plan jouet dont une commande emploie <JETON_OUBLIE> absent de placeholders ; les jetons
 // en minuscules (<appli>, <nom-service>) restent de la prose, jamais des jetons à remplir.

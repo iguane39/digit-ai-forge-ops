@@ -47,7 +47,8 @@ SKIP à vie sur O-7.
 |---|---|---|
 | **plan** | `node scripts/ops.mjs plan <cible> <build> [--sortie plan.json]` | génère le plan d'exécution **déterministe** d'une cible cloud — 4 phases ordonnées (provision, déploiement, healthcheck, **rollback**) — sans rien exécuter |
 
-Cibles : `railway` · `gcp` (Cloud Run) · `azure` (Container Apps) · `aws` (App Runner) —
+Cibles : `railway` · `gcp` (Cloud Run) · `azure` (Container Apps) · `aws` (App Runner) · `supabase` (projet hébergé ; retour
+arrière par migration corrective, restauration = geste humain irréversible) —
 chacune adossée à sa **fiche expert admise** (`experts-forge/fiches/expert-ops-<cible>.md`,
 verdict MATERIEL). L'oracle **O-5** juge un plan (`oracle-ops.mjs --plan plan.json`) :
 4 phases non vides, rollback réel, CLI cohérente avec la cible, zéro credential.
