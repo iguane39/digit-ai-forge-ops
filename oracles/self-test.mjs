@@ -1171,5 +1171,58 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
     `TF-1319 · ROUGE — une racine absente sort en 2 avec son motif, jamais en liste vide muette (obtenu exit ${absente.code})`);
 }
 
+// ── O19 (TF-1212, décision humaine D-3 (a) du 17/10/2026) : LA SAUVEGARDE DES ACTIFS CRITIQUES ──
+// Le fait : un produit à O-1…O-4 PASS a échoué au référentiel d'audit trois contrôles fatals de
+// sauvegarde (CTL-D05-09, CTL-D12-06, CTL-D16-09) qu'aucun oracle de MEP ne regardait. Avant O-19,
+// `--sauvegarde <declaration>` n'existait pas : la déclaration était lue comme une CIBLE (O1/O3).
+// Rouges attendus (rouge.json, jour de référence 2026-10-17) : RPO absent, configuration non citée,
+// exercice en échec, durée au-delà du RTO, intégrité non constatée, fréquence plus lâche que le RPO,
+// aucun exercice, exercice de plus de 12 mois — chacun NOMMÉ sur son actif.
+{
+  const o19 = (fichier, ...extra) => { try { return JSON.parse(run(oracle, ["--sauvegarde", fichier, "--le", "2026-10-17", "--json-only", ...extra])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const dir19 = path.join(ici, "..", "fixtures", "o19-sauvegarde");
+  const rouge19 = path.join(dir19, "rouge.json");
+  const rR = o19(rouge19);
+  const b19 = (rR.findings || []).filter(f => f.regle === "O19" && f.sev === "bloquant");
+  const nomme = (actif, motif) => b19.some(f => f.where === actif && motif.test(f.msg));
+  ok(rR.verdict === "FAIL", `O19 : declaration rouge -> FAIL (obtenu ${rR.verdict})`);
+  ok(nomme("base SQLite sur volume", /RPO non déclaré/) && nomme("base SQLite sur volume", /configuration effective/)
+      && nomme("base SQLite sur volume", /« echec »/) && nomme("base SQLite sur volume", /au-delà du RTO/)
+      && nomme("base SQLite sur volume", /intégrité/),
+    "O19 : RPO absent, configuration non citée, exercice en échec, durée > RTO et intégrité non constatée sont NOMMÉS sur leur actif");
+  ok(nomme("base de recette", /plus lâche que le RPO/) && nomme("base de recette", /aucun exercice de restauration/),
+    "O19 : fréquence 24h pour un RPO de 1h, et une sauvegarde jamais restaurée, sont refusées");
+  ok(nomme("journal d'audit", /plus de 12 mois/) && b19.filter(f => f.where === "journal d'audit").length === 1,
+    "O19 : un exercice de plus de 12 mois est le SEUL constat d'un actif par ailleurs conforme (grille : partiel)");
+  ok(o19(path.join(dir19, "verte.json")).verdict === "PASS", "O19 : RPO/RTO déclarés, sauvegarde continue ou ≤ RPO, restauration réussie ≤ 12 mois, durée ≤ RTO, intégrité constatée -> PASS");
+  ok(o19(path.join(dir19, "aucun-actif.json")).verdict === "PASS", "O19 : « aucun actif critique » MOTIVÉ est une réponse valide -> PASS");
+  const rS = o19(path.join(dir19, "silence.json"));
+  ok(rS.verdict === "FAIL" && (rS.findings || []).some(f => /le silence n'en est pas une/.test(f.msg)), "O19 : actifs vides SANS motif -> FAIL, le silence n'est pas une réponse");
+  ok(o19(path.join(dir19, "absente.json")).verdict === "SKIP", "O19 borne : déclaration introuvable -> SKIP, rien à juger");
+  // TF-1013 : jouer le remède que les constats nomment rend l'oracle PASS.
+  const tmp19 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o19-"));
+  try {
+    const d = JSON.parse(fs.readFileSync(rouge19, "utf8"));
+    const [a, b, c] = d.actifs;
+    a.rpo = "24h"; a.sauvegarde.configuration = "copie-volume.sh (relevé du 2026-10-16)";
+    a.derniere_restauration = { date: "2026-10-16", resultat: "succes", duree: "3h", integrite: "PRAGMA integrity_check = ok, comptes identiques" };
+    b.sauvegarde.frequence = "1h"; b.derniere_restauration = { date: "2026-10-15", resultat: "succes", duree: "40 min", integrite: "comptes identiques" };
+    c.derniere_restauration.date = "2026-10-01";
+    const pRem = path.join(tmp19, "remede.json");
+    fs.writeFileSync(pRem, JSON.stringify(d));
+    ok(o19(pRem).verdict === "PASS", "O19 : remède joué (RPO déclaré, fréquence tenue, exercice rejoué et réussi) -> PASS (TF-1013)");
+    const pFutur = path.join(tmp19, "futur.json");
+    c.derniere_restauration.date = "2026-12-01";
+    fs.writeFileSync(pFutur, JSON.stringify(d));
+    ok(o19(pFutur).verdict === "FAIL", "O19 borne : un exercice daté APRÈS le jour de référence -> FAIL, une preuve du futur n'en est pas une");
+    const pCasse = path.join(tmp19, "casse.json");
+    fs.writeFileSync(pCasse, "{ pas du json");
+    ok(o19(pCasse).verdict === "FAIL", "O19 borne : déclaration illisible -> FAIL, jamais un PASS par défaut");
+  } finally {
+    fs.rmSync(tmp19, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

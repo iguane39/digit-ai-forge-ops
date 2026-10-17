@@ -1,0 +1,25 @@
+{
+ "format": "forge-ops/sauvegarde@1",
+ "produit": "produit-exemple",
+ "actifs": [
+  {
+   "nom": "base SQLite sur volume",
+   "rto": "4h",
+   "sauvegarde": { "mecanisme": "copie du volume", "frequence": "24h" },
+   "derniere_restauration": { "date": "2026-09-01", "resultat": "echec", "duree": "6h", "integrite": "" }
+  },
+  {
+   "nom": "base de recette",
+   "rpo": "1h",
+   "rto": "2h",
+   "sauvegarde": { "mecanisme": "export nocturne", "frequence": "24h", "configuration": "tâche planifiée export-nuit" }
+  },
+  {
+   "nom": "journal d'audit",
+   "rpo": "24h",
+   "rto": "1h",
+   "sauvegarde": { "mecanisme": "copie hebdomadaire", "frequence": "24h", "configuration": "copie-hebdo.sh" },
+   "derniere_restauration": { "date": "2025-06-01", "resultat": "succes", "duree": "30 min", "integrite": "comptes identiques" }
+  }
+ ]
+}

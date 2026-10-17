@@ -39,6 +39,11 @@
 //       -o json` ; chaque application ne garde actives que ses révisions servies (trafic > 0) et
 //       UNE N-1 saine à 0 % — toute autre révision active est nommée avec sa commande de
 //       désactivation (TF-1639). Capture vide ou introuvable : SKIP.
+//   O19 --sauvegarde <declaration.json> [--le AAAA-MM-JJ] : déclaration `forge-ops/sauvegarde@1` ;
+//       chaque actif de données critique porte RPO, RTO, mécanisme, fréquence (≤ RPO) et
+//       configuration de sauvegarde, et un exercice de restauration réussi depuis ≤ 12 mois, de
+//       durée ≤ RTO et d'intégrité constatée ; `actifs: []` exige `aucun_actif_critique` motivé
+//       (TF-1212 : CTL-D05-09, CTL-D12-06, CTL-D16-09 du référentiel d'audit). Introuvable : SKIP.
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -854,6 +859,109 @@ if (args.includes("--revisions-actives")) {
   }
   const durs18 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin18(durs18.length ? "FAIL" : "PASS", durs18.length ? 1 : 0);
+}
+
+// ── O19 · la SAUVEGARDE de chaque actif de données critique est déclarée, tient son RPO, et sa
+// restauration a été exercée depuis moins de 12 mois (TF-1212, décision humaine D-3 (a) du 17/10/2026) ──
+//
+// LE FAIT. Le 09/09/2026, un produit déclaré prêt (cinq étapes closes, oracles au vert, O-1 à O-4
+// PASS) a échoué 12 contrôles fatals sur 175 au référentiel d'audit de la maison ; trois d'entre eux
+// exigent la sauvegarde, et AUCUN contrôle de l'oracle de mise en production ne la regardait. O-4
+// prouve qu'on peut revenir à la release N-1 ; il ne dit rien des DONNÉES, qu'un retour de release
+// ne restaure pas. Les trois contrôles fatals, texte exact (forge-audit, core/controls, pack 1.0.0) :
+//   CTL-D05-09 « Chaque actif de données critique est sauvegardé conformément à un objectif de perte
+//              de données (RPO) explicitement déclaré, et la restauration est testée périodiquement. »
+//   CTL-D12-06 « Un objectif de perte de données tolérée (RPO) et de délai de restauration (RTO) est
+//              déclaré pour chaque actif critique, et la capacité de restauration est testée
+//              périodiquement avec preuve de conformité. »
+//   CTL-D16-09 « La base de données fait l'objet de sauvegardes régulières conformes à un RPO déclaré,
+//              et la procédure de restauration est testée périodiquement avec preuve de conformité au
+//              RTO. »
+// Leur grille commune : conforme = objectifs déclarés et restauration testée avec succès ≤ 12 mois.
+//
+// CE QUI EST JUGÉ, sur une DÉCLARATION `forge-ops/sauvegarde@1` (JSON, aucun appel réseau, même posture
+// qu'O-14 et O-18) : `actifs[]` porte pour chaque actif critique son RPO, son RTO, le mécanisme, la
+// fréquence et la configuration effective de la sauvegarde, et le dernier exercice de restauration
+// (date, résultat, durée, intégrité constatée). Une fréquence plus lâche que le RPO, une durée de
+// restauration mesurée au-delà du RTO, un exercice en échec, absent ou de plus de 12 mois sont des
+// constats bloquants. `actifs: []` n'est recevable qu'avec `aucun_actif_critique: "<motif>"` : « aucun »
+// est une réponse valide, le silence n'en est pas une. Déclaration introuvable : SKIP.
+//
+// SÉVÉRITÉ. Le mode rend son verdict brut (FAIL, exit 1), comme O-18 : c'est une preuve, consommée par
+// la porte M-17 de l'étape MEP du pilot, qui la lit en AVERTISSEMENT tant que l'humain n'en a pas fait
+// un blocage (règle neuve, précédent D-70 (b)). Taux d'accusation mesuré à l'entrée : 0 déclaration de
+// sauvegarde sur le poste, donc 0 accusée — c'est la porte du pilot qui porte la mesure du parc.
+if (args.includes("--sauvegarde")) {
+  const savPath = args[args.indexOf("--sauvegarde") + 1];
+  const iLe = args.indexOf("--le");
+  const leArg = iLe >= 0 ? args[iLe + 1] : null;
+  const DOM19 = "Exploitation : sauvegarde des actifs de données critiques déclarée, conforme au RPO, restauration exercée (O-19)";
+  const NJ19 = [
+    "la VÉRITÉ de la déclaration — l'oracle lit un fichier, jamais la plateforme : une sauvegarde déclarée « continue » qu'aucune politique ne tient passe O-19 ; la configuration citée est la preuve à relire, pas à croire",
+    "la CRITICITÉ des actifs — c'est au produit de dire quels actifs sont critiques ; un actif omis de la déclaration n'est pas vu",
+    "la cohérence du RPO/RTO avec la tolérance métier — l'oracle exige qu'ils soient déclarés et tenus, jamais qu'ils soient bien choisis",
+    "le RESTAURÉ lui-même — durée et intégrité se lisent au rapport d'exercice déclaré, jamais par une restauration rejouée ici",
+  ];
+  const fin19 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM19, artefact: savPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O19", msg: "chaque actif critique porte RPO, RTO, sauvegarde effective conforme au RPO et restauration exercée avec succès depuis moins de 12 mois", where: savPath }], non_juge: NJ19 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!savPath || !fs.existsSync(savPath)) { add("info", "O19", "déclaration de sauvegarde introuvable — rien à juger", String(savPath)); fin19("SKIP", 2); }
+  let d = null;
+  try { d = JSON.parse(fs.readFileSync(savPath, "utf8").replace(/^﻿/, "")); }
+  catch { add("bloquant", "O19", "déclaration illisible (JSON invalide) — attendu le format forge-ops/sauvegarde@1", savPath); fin19("FAIL", 1); }
+  if (!d || typeof d !== "object" || Array.isArray(d)) { add("bloquant", "O19", "déclaration qui n'est pas un objet — attendu le format forge-ops/sauvegarde@1", savPath); fin19("FAIL", 1); }
+  if (d.format !== "forge-ops/sauvegarde@1") add("bloquant", "O19", `format inconnu « ${d.format} » (attendu forge-ops/sauvegarde@1)`, savPath);
+  // Le jour de référence : `--le AAAA-MM-JJ` (bancs reproductibles), sinon aujourd'hui.
+  const jour = /^\d{4}-\d{2}-\d{2}$/.test(String(leArg || "")) ? leArg : new Date().toISOString().slice(0, 10);
+  // Une durée en minutes : « 35 min », « 4h », « 1 j », « continue » (0). null si illisible.
+  const minutes = (v) => {
+    const s = String(v ?? "").trim().toLowerCase();
+    if (/^continu/.test(s) || /^continuous/.test(s)) return 0;
+    const m = /^(\d+(?:[.,]\d+)?)\s*(s|sec|secondes?|min|minutes?|h|heures?|j|jours?|d|days?|sem|semaines?)$/.exec(s);
+    if (!m) return null;
+    const n = Number(m[1].replace(",", "."));
+    const u = m[2];
+    return /^s/.test(u) && !/^sem/.test(u) ? n / 60 : /^min/.test(u) ? n : /^h/.test(u) ? n * 60 : /^(j|d)/.test(u) ? n * 1440 : n * 10080;
+  };
+  const vide = (v) => typeof v !== "string" || !v.trim();
+  const actifs = Array.isArray(d.actifs) ? d.actifs : null;
+  if (!actifs) add("bloquant", "O19", "champ `actifs` absent ou qui n'est pas une liste — chaque actif de données critique s'y déclare, ou `actifs: []` avec `aucun_actif_critique: \"<motif>\"`", savPath);
+  else if (!actifs.length) {
+    const motif = String(d.aucun_actif_critique ?? "").trim();
+    if (motif.length < 10) add("bloquant", "O19", "aucun actif déclaré et aucun motif : `aucun_actif_critique: \"<motif>\"` est une réponse valide, le silence n'en est pas une (CTL-D05-09, CTL-D12-06, CTL-D16-09)", savPath);
+    else add("info", "O19", `aucun actif de données critique déclaré : ${motif}`, savPath);
+  }
+  for (const a of actifs || []) {
+    const nom = vide(a?.nom) ? "(actif sans nom)" : a.nom.trim();
+    const ko = (msg) => add("bloquant", "O19", `actif « ${nom} » : ${msg}`, nom);
+    if (vide(a?.nom)) ko("actif sans nom — un actif qu'on ne nomme pas ne se restaure pas");
+    const rpo = minutes(a?.rpo), rto = minutes(a?.rto);
+    if (rpo === null) ko(`RPO non déclaré ou illisible (« ${a?.rpo ?? ""} ») — non conforme à CTL-D05-09 : « absence de RPO déclaré » ; attendu une durée (« 1h », « 24h », « continue »)`);
+    if (rto === null) ko(`RTO non déclaré ou illisible (« ${a?.rto ?? ""} ») — non conforme à CTL-D12-06 et CTL-D16-09, qui exigent RPO ET RTO déclarés`);
+    const s = a?.sauvegarde || {};
+    if (vide(s.mecanisme)) ko("mécanisme de sauvegarde non déclaré (`sauvegarde.mecanisme`)");
+    const freq = minutes(s.frequence);
+    if (freq === null) ko(`fréquence de sauvegarde non déclarée ou illisible (« ${s.frequence ?? ""} »)`);
+    if (vide(s.configuration)) ko("configuration effective de la sauvegarde non citée (`sauvegarde.configuration` : la commande ou le fichier qui la prouve) — preuve attendue par CTL-D16-09");
+    if (freq !== null && rpo !== null && freq > rpo) ko(`fréquence de sauvegarde « ${s.frequence} » plus lâche que le RPO « ${a.rpo} » : on perdrait jusqu'à la fréquence, pas le RPO déclaré (CTL-D05-09 : « RPO déclaré et respecté »)`);
+    const r = a?.derniere_restauration;
+    if (!r || typeof r !== "object") { ko("aucun exercice de restauration déclaré (`derniere_restauration`) — une sauvegarde jamais restaurée n'est pas une sauvegarde ; grille commune des trois contrôles : conforme = restauration testée avec succès ≤ 12 mois"); continue; }
+    const date = String(r.date ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) ko(`date du dernier exercice de restauration absente ou illisible (« ${date} », attendu AAAA-MM-JJ)`);
+    else {
+      const ecartJours = (Date.parse(jour) - Date.parse(date)) / 86400000;
+      if (ecartJours < 0) ko(`exercice de restauration daté du ${date}, après le jour de référence ${jour} — une preuve datée du futur n'en est pas une`);
+      else if (ecartJours > 365) ko(`dernier exercice de restauration le ${date}, il y a ${Math.round(ecartJours)} jours : plus de 12 mois — « partiel » au référentiel (objectifs déclarés sans test récent) ; rejouer l'exercice`);
+    }
+    if (!/^(succes|succès|reussi|réussi|ok|pass)$/i.test(String(r.resultat ?? "").trim())) ko(`dernier exercice de restauration au résultat « ${r.resultat ?? ""} » — « dernier test en échec non corrigé » est non conforme aux trois contrôles ; corriger puis rejouer`);
+    const duree = minutes(r.duree);
+    if (duree === null) ko("durée de la restauration non mesurée (`derniere_restauration.duree`) — la preuve de conformité au RTO est une durée constatée (CTL-D16-09)");
+    else if (rto !== null && duree > rto) ko(`restauration mesurée en « ${r.duree} », au-delà du RTO déclaré « ${a.rto} » — la preuve de conformité au RTO manque (CTL-D16-09)`);
+    if (vide(r.integrite)) ko("intégrité des données restaurées non constatée (`derniere_restauration.integrite`) — CTL-D12-06 exige la mesure de la durée ET de l'intégrité");
+  }
+  const durs19 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin19(durs19.length ? "FAIL" : "PASS", durs19.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

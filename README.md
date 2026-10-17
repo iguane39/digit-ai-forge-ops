@@ -61,6 +61,10 @@ node oracles/oracle-ops.mjs <cible> --empreinte
 az containerapp revision list --name <app> --resource-group <rg> -o json > revisions.json
 node oracles/oracle-ops.mjs --revisions-actives revisions.json
 
+# Oracle O-19 : sauvegarde des actifs de données critiques (RPO/RTO, restauration exercée ≤ 12 mois)
+# exemple de déclaration : fixtures/o19-sauvegarde/verte.json — porte M-17 de l'étape MEP du pilot
+node oracles/oracle-ops.mjs --sauvegarde forge/etapes/mep/SAUVEGARDE.json
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -112,6 +116,7 @@ node oracles/self-test.mjs
 | O7 | `<cible> --empreinte` : fichiers de la release courante vs empreinte scellée au déploiement ou à la promotion canary — fichier modifié/supprimé/ajouté en place ; SKIP motivé sans empreinte, ex. déploiement fait hors ops (TF-0288, TF-0298) |
 | O10 | `--manifeste-servi <fichier>` : chaque paquet épinglé par version (`==`) dans un `requirements.txt` SERVI porte au moins une empreinte `--hash=` — une version republiée sous le même numéro entrerait sinon sans être vue (TF-1042) |
 | O18 | `--revisions-actives <fichier.json>` : sur une sortie capturée de `az containerapp revision list -o json`, chaque application ne garde actives que ses révisions servies et une N-1 saine à 0 % ; toute révision en trop est nommée avec sa commande de désactivation (TF-1639) |
+| O19 | `--sauvegarde <declaration.json> [--le AAAA-MM-JJ]` : sur une déclaration `forge-ops/sauvegarde@1`, chaque actif de données critique porte RPO, RTO, mécanisme, fréquence (≤ RPO) et configuration de sauvegarde, et un exercice de restauration réussi depuis ≤ 12 mois, de durée ≤ RTO et d'intégrité constatée ; `actifs: []` exige `aucun_actif_critique` motivé (TF-1212 ; CTL-D05-09, CTL-D12-06, CTL-D16-09 du référentiel d'audit) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.

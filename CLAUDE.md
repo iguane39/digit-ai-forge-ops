@@ -61,6 +61,15 @@ par l'humain, GO humain, verdicts O-1…O-5 + les portes M de `ETAPE-MEP.md` (pi
 dossier. La première exécution
 réelle par cible est consignée dans `fiches\forge-ops.md` du pilot — c'est elle qui
 transforme le plan prouvé en geste prouvé.
+**Vers un environnement géré, le plan s'exécute DANS la chaîne du produit, jamais depuis un
+poste** (TF-1212, décision humaine D-3 (a) du 17/10/2026, porte M-16 de `ETAPE-MEP.md`) : ses
+phases deviennent les étapes du pipeline, le jeton est un secret de la chaîne, et le GO humain
+est la porte d'approbation de la chaîne ou la poussée d'un commit nommé. Le référentiel d'audit
+de la maison le pose en contrôle fatal (CTL-D09-01) : « Tout déploiement vers un environnement
+géré transite exclusivement par un pipeline CI/CD automatisé ; chaque exécution produit un
+journal immuable et horodaté (auteur, version, cible, résultat). » `ops.mjs deployer` et
+`canary` restent les gestes d'une cible LOCALE (staging sur le poste), qui n'est pas un
+environnement géré.
 
 ## Contrat de la cible d'exploitation
 
@@ -125,6 +134,17 @@ findings,non_juge}`, exit 0/1/2 :
   minReplicas facturés à 0 % de trafic, 1 552,23 EUR en septembre pour un budget de 100, sous
   O-1 à O-4 PASS. Toute révision en trop est nommée avec sa commande de désactivation
   (réversible). Le plan `azure` porte la borne et l'étape de ménage qui la tient (TF-1638).
+
+- **O19** `--sauvegarde <declaration.json> [--le AAAA-MM-JJ]` (TF-1212, décision humaine D-3 (a)
+  du 17/10/2026) : sur une déclaration `forge-ops/sauvegarde@1` (aucun appel réseau), chaque actif
+  de données critique porte son RPO, son RTO, le mécanisme, la fréquence (jamais plus lâche que le
+  RPO) et la configuration effective de sa sauvegarde, et un exercice de restauration **réussi**
+  depuis 12 mois au plus, de durée mesurée sous le RTO et d'intégrité constatée. `actifs: []`
+  n'est recevable qu'avec `aucun_actif_critique: "<motif>"`. Mesure fondatrice : un produit à
+  O-1…O-4 PASS a échoué au référentiel d'audit de la maison les trois contrôles fatals de
+  sauvegarde (CTL-D05-09, CTL-D12-06, CTL-D16-09) ; O-4 prouve le retour à la release N-1, jamais
+  la restauration des DONNÉES. Verdict brut (FAIL, exit 1) ; la porte M-17 du pilot le lit en
+  avertissement tant que l'humain n'en a pas fait un blocage.
 
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·

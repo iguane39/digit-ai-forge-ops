@@ -1,0 +1,38 @@
+{
+ "format": "forge-ops/sauvegarde@1",
+ "produit": "produit-exemple",
+ "actifs": [
+  {
+   "nom": "base principale (PostgreSQL géré)",
+   "rpo": "1h",
+   "rto": "4h",
+   "sauvegarde": {
+    "mecanisme": "sauvegarde continue de la plateforme (restauration à un instant donné), rétention 7 jours",
+    "frequence": "continue",
+    "configuration": "az postgres flexible-server show --query backup -o json (relevé du 2026-10-10 : backupRetentionDays=7)"
+   },
+   "derniere_restauration": {
+    "date": "2026-10-10",
+    "resultat": "succes",
+    "duree": "35 min",
+    "integrite": "comptes de lignes des 12 tables identiques à la source, contrôle de somme du dernier lot"
+   }
+  },
+  {
+   "nom": "fichiers déposés (stockage objet)",
+   "rpo": "24h",
+   "rto": "8h",
+   "sauvegarde": {
+    "mecanisme": "versionnement et suppression douce du conteneur, copie quotidienne vers un second compte",
+    "frequence": "24h",
+    "configuration": "az storage account blob-service-properties show (relevé du 2026-10-10)"
+   },
+   "derniere_restauration": {
+    "date": "2026-09-30",
+    "resultat": "succes",
+    "duree": "2h",
+    "integrite": "empreintes sha256 des 40 fichiers restaurés égales à celles de la copie"
+   }
+  }
+ ]
+}

@@ -1,0 +1,6 @@
+{
+ "format": "forge-ops/sauvegarde@1",
+ "produit": "site-vitrine",
+ "actifs": [],
+ "aucun_actif_critique": "site statique : aucune base, aucun fichier écrit par le service, le dépôt git est la source de tout le contenu servi"
+}
