@@ -120,7 +120,8 @@ if (planPath) {
   // TF-0865 : deux cibles de produit data — bundle déclaratif Databricks (CLI `databricks bundle`)
   // et espace de travail Power BI alimenté par un projet PBIP (CLI Fabric `fab`).
   // 16/10/2026 : cible supabase (CLI `supabase`, migrations poussées par `supabase db push`).
-  const CLI = { railway: "railway", gcp: "gcloud", azure: "az ", aws: "aws ", "databricks-bundle": "databricks bundle", "powerbi-workspace": "fab ", supabase: "supabase " };
+  // 28/10/2026 : cible cloudflare-workers (CLI `wrangler`, versions téléversées par `wrangler versions upload`).
+  const CLI = { railway: "railway", gcp: "gcloud", azure: "az ", aws: "aws ", "databricks-bundle": "databricks bundle", "powerbi-workspace": "fab ", supabase: "supabase ", "cloudflare-workers": "wrangler " };
   if (p.format !== "forge-ops/plan@1") add("bloquant", "O5", `format inconnu « ${p.format} » (attendu forge-ops/plan@1)`, planPath);
   if (!CLI[p.cible]) add("bloquant", "O5", `cible inconnue « ${p.cible} »`, planPath);
   for (const ph of ["provision", "deploiement", "healthcheck", "rollback"]) {

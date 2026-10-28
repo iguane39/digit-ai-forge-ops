@@ -170,7 +170,7 @@ const verdictPlan = (fichier) => {
 };
 // TF-0865 (lot L8, 07/09/2026) : deux cibles de produit data rejoignent la boucle — bundle
 // déclaratif Databricks et espace de travail Power BI — mêmes exigences O-5 que les cibles cloud.
-for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace", "supabase"]) {
+for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace", "supabase", "cloudflare-workers"]) {
   const pf = path.join(base, `plan-${cible}.json`);
   run(ops, ["plan", cible, fx("app-verte"), "--sortie", pf]);
   const p = JSON.parse(fs.readFileSync(pf, "utf8"));
@@ -188,7 +188,7 @@ const jetonsNonDeclares = (p) => {
   const employes = new Set(JSON.stringify(p.phases || {}).match(/<[A-Z][A-Z0-9_]*>/g) || []);
   return [...employes].filter(j => !declares.has(j)).sort();
 };
-for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace", "supabase"]) {
+for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "powerbi-workspace", "supabase", "cloudflare-workers"]) {
   const nd = jetonsNonDeclares(JSON.parse(run(ops, ["plan", cible, "<BUILD>"])));
   ok(nd.length === 0, `plan ${cible} : tout jeton <MAJUSCULES> employé est déclaré dans placeholders${nd.length ? ` — non déclarés : ${nd.join(" ")}` : ""} (TF-1685)`);
 }
@@ -203,6 +203,77 @@ ok(verdictPlan(fx("o5-supabase/plan-rouge-sans-cli.json")) === "FAIL", "fixture 
   const rb = JSON.parse(run(ops, ["plan", "supabase", "<BUILD>"])).phases.rollback.join(" ");
   ok(rb.includes("AUCUNE migration « down »") && rb.includes("GESTE HUMAIN IRREVERSIBLE") && rb.includes("https://supabase.com/docs/guides/platform/backups, lue le 16/10/2026"),
     "plan supabase : rollback par migration corrective, restauration marquée humaine et irréversible, source datée");
+}
+// Cloudflare Workers (28/10/2026, TF-1995) : paire de fixtures figées — la verte passe O-5, une rouge
+// sans rollback et une rouge dont le déploiement n'emploie pas la CLI `wrangler ` échouent.
+ok(verdictPlan(fx("o5-cloudflare-workers/plan-vert.json")) === "PASS", "fixture plan cloudflare-workers complet → O-5 PASS");
+ok(verdictPlan(fx("o5-cloudflare-workers/plan-rouge-rollback-vide.json")) === "FAIL", "fixture plan cloudflare-workers sans rollback → O-5 FAIL");
+ok(verdictPlan(fx("o5-cloudflare-workers/plan-rouge-sans-cli.json")) === "FAIL", "fixture plan cloudflare-workers sans commande `wrangler ` au déploiement → O-5 FAIL");
+// Les rouges échouent pour la BONNE raison, pas pour une cible inconnue (leçon du banc : une rouge
+// qui échoue à côté de sa règle ne prouve rien).
+{
+  const raisons = (f) => { try { return JSON.parse(run(oracle, ["--plan", fx(f), "--json-only"])).findings; }
+    catch (e) { try { return JSON.parse(String(e.stdout)).findings; } catch { return []; } } };
+  const rb = raisons("o5-cloudflare-workers/plan-rouge-rollback-vide.json");
+  const sc = raisons("o5-cloudflare-workers/plan-rouge-sans-cli.json");
+  ok(rb.length === 1 && /phase « rollback » absente ou vide/.test(rb[0].msg), `fixture cloudflare-workers sans rollback : un seul constat, celui du rollback (obtenu ${rb.length})`);
+  ok(sc.length === 1 && /CLI attendue « wrangler »/.test(sc[0].msg), `fixture cloudflare-workers sans CLI : un seul constat, celui de la CLI « wrangler » (obtenu ${sc.length})`);
+}
+// Le plan cloudflare-workers : le retour arrière est le geste NATIF `wrangler rollback` (source datée),
+// il dit ce qu'il ne défait pas (ressources liées), la bascule passe par `versions upload` puis
+// `versions deploy` (jamais `wrangler deploy` joué pour de bon), et le fait du guide de migration —
+// Workers n'accepte pas un domaine dont les serveurs de noms ne sont pas chez Cloudflare — est noté
+// dans la cible. Aucune valeur de jeton : seulement le NOM des variables.
+{
+  const cf = JSON.parse(run(ops, ["plan", "cloudflare-workers", "<BUILD>"]));
+  const rb = cf.phases.rollback.join(" ");
+  const dep = cf.phases.deploiement.join(" ");
+  const hc = cf.phases.healthcheck.join(" ");
+  const pv = cf.phases.provision.join(" ");
+  ok(/npx wrangler rollback <ID_VERSION_PRECEDENTE> /.test(rb) && rb.includes("https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/, lue le 28/10/2026"),
+    "plan cloudflare-workers : rollback par `wrangler rollback` sur une version nommée, source datée");
+  ok(rb.includes("il ne change PAS les ressources liees") && rb.includes("REFUSE si une classe de Durable Object"),
+    "plan cloudflare-workers : le rollback dit ce qu'il ne défait pas et quand il est refusé");
+  ok(/wrangler versions upload /.test(dep) && /wrangler versions deploy <ID_VERSION>@100%/.test(hc) && /wrangler deploy --dry-run/.test(dep)
+      && !cf.phases.deploiement.concat(cf.phases.healthcheck).some(l => /^npx wrangler deploy\b/.test(l) && !/^npx wrangler deploy --dry-run /.test(l)),
+    "plan cloudflare-workers : version téléversée sans trafic puis déployée ; `wrangler deploy` seulement à blanc");
+  ok(pv.includes("Unlike Pages, Workers does not support any domain whose nameservers are not managed by Cloudflare") && pv.includes("migrate-from-pages/, lue le 28/10/2026"),
+    "plan cloudflare-workers : le fait du guide de migration (serveurs de noms chez Cloudflare) est noté, source datée");
+  ok(pv.includes("CLOUDFLARE_API_TOKEN") && pv.includes("CLOUDFLARE_ACCOUNT_ID") && !/(CLOUDFLARE_API_TOKEN|CLOUDFLARE_ACCOUNT_ID)\s*[=:]\s*\S/.test(JSON.stringify(cf)),
+    "plan cloudflare-workers : variables d'identité nommées, aucune valeur affectée");
+  ok(/GO humain[^;#]*\(R-38\)/.test(dep) && /GO humain[^;#]*\(R-38\)/.test(hc) && /GO humain[^;#]*\(R-38\)/.test(rb),
+    "plan cloudflare-workers : publication, bascule et retour arrière sous GO humain (R-38)");
+}
+// TF-2010 (part ops) : l'enchaînement d'un front Workers et d'une base Supabase est un document
+// CÂBLÉ (loi n° 1) — CLAUDE.md et README le nomment, le plan cloudflare-workers y renvoie — et SOURCÉ
+// (chaque source porte son adresse et sa date de lecture). Il nomme les variables des deux plateformes
+// sans leur donner de valeur, et l'oracle de documents le juge sans écart.
+{
+  const docChemin = path.join(ici, "..", "references", "ENCHAINEMENT-PLANS.md");
+  const doc = fs.existsSync(docChemin) ? fs.readFileSync(docChemin, "utf8") : "";
+  const sources = [...doc.matchAll(/^  - url: (https:\/\/\S+)\r?\n    lu_le: (\d{4}-\d{2}-\d{2})\r?$/gm)];
+  ok(doc.length > 0 && sources.length >= 10 && sources.every(m => m[2] === "2026-10-28"),
+    `ENCHAINEMENT-PLANS.md : sources[] avec adresse et date de lecture (obtenu ${sources.length} sources)`);
+  ok(doc.includes("supabase db push") && doc.includes("wrangler versions upload") && doc.includes("wrangler rollback"),
+    "ENCHAINEMENT-PLANS.md : les gestes des deux plans y sont nommés");
+  const cfPlan = JSON.parse(run(ops, ["plan", "cloudflare-workers", "<BUILD>"]));
+  const nomsPlan = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"];
+  const nomsSupabase = ["SUPABASE_ACCESS_TOKEN", "SUPABASE_DB_PASSWORD", "SUPABASE_PROJECT_ID", "SUPABASE_URL"];
+  ok([...nomsPlan, ...nomsSupabase].every(n => doc.includes(n)) && !/\b(CLOUDFLARE|SUPABASE)_[A-Z_]+\s*[=:]\s*["'`]?[A-Za-z0-9]/.test(doc.replace(/^sources:[\s\S]*?^---$/m, "")),
+    "ENCHAINEMENT-PLANS.md : variables des deux plateformes nommées, aucune valeur affectée");
+  // ROUGE du contrôle de valeur : une affectation, quelle qu'en soit la forme, serait vue.
+  const motifValeur = /\b(CLOUDFLARE|SUPABASE)_[A-Z_]+\s*[=:]\s*["'`]?[A-Za-z0-9]/;
+  ok(motifValeur.test("SUPABASE_URL=abc123") && motifValeur.test("CLOUDFLARE_API_TOKEN: \"x9\"") && !motifValeur.test("`SUPABASE_URL` et `SUPABASE_KEY` par `wrangler secret put`"),
+    "contrôle des valeurs affectées : une affectation est vue, un nom cité dans la prose ne l'est pas");
+  ok(cfPlan.phases.provision.some(l => l.includes("references/ENCHAINEMENT-PLANS.md")) && ["CLAUDE.md", "README.md"].every(f =>
+      fs.readFileSync(path.join(ici, "..", f), "utf8").includes("ENCHAINEMENT-PLANS.md")),
+    "ENCHAINEMENT-PLANS.md : appelé par CLAUDE.md, README.md et la provision du plan cloudflare-workers (loi n° 1)");
+  ok(doc.includes("https://supabase.com/docs/guides/auth/redirect-urls") && doc.includes("*-<NOM_WORKER>.<SOUS_DOMAINE>.workers.dev/**"),
+    "ENCHAINEMENT-PLANS.md : l'URL de redirection des prévisualisations est donnée, avec la page Supabase qui la fonde");
+  let verdictDoc = "ILLISIBLE";
+  try { verdictDoc = JSON.parse(run(oracle, [docChemin, "--json-only"])).verdict; }
+  catch (e) { try { verdictDoc = JSON.parse(String(e.stdout)).verdict; } catch { /* reste ILLISIBLE */ } }
+  ok(verdictDoc === "PASS", `ENCHAINEMENT-PLANS.md : oracle de documents (O9, O12, O13, O16) sans écart (obtenu ${verdictDoc})`);
 }
 // ROUGE : plan jouet dont une commande emploie <JETON_OUBLIE> absent de placeholders ; les jetons
 // en minuscules (<appli>, <nom-service>) restent de la prose, jamais des jetons à remplir.

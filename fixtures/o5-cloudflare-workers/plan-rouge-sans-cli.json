@@ -1,0 +1,50 @@
+{
+  "format": "forge-ops/plan@1",
+  "cible": "cloudflare-workers",
+  "service": "Cloudflare Workers — Worker avec ressources statiques (versions, deploiements, retour arriere natif)",
+  "build": "fixtures/app-verte",
+  "source_fiche": "experts-forge/fiches/expert-ops-cloudflare.md",
+  "garde_fous": [
+    "healthcheck avant toute bascule — jamais de bascule sur release malade",
+    "aucun credential dans la forge ni dans ce plan (placeholders <...> a resoudre par l'environnement du run)",
+    "execution reelle = run MEP, GO humain — jamais un self-test"
+  ],
+  "placeholders": [
+    "<BUILD>",
+    "<DOMAINE>",
+    "<MESSAGE_VERSION>",
+    "<MESSAGE_RETOUR>",
+    "<ID_VERSION>",
+    "<ID_VERSION_PRECEDENTE>",
+    "<URL_VERSION>",
+    "<POURCENT_NOUVELLE>",
+    "<POURCENT_PRECEDENTE>",
+    "<URL_SERVICE>"
+  ],
+  "phases": {
+    "provision": [
+      "identite de deploiement : variables CLOUDFLARE_API_TOKEN (jeton d'API cree avec le modele « Edit Cloudflare Workers », restreint au seul compte du deploiement) et CLOUDFLARE_ACCOUNT_ID, fournies par l'environnement du run comme secrets de la chaine du produit (le plan s'execute dans la chaine, jamais depuis un poste), jamais une valeur dans le plan ni dans le depot ; source : https://developers.cloudflare.com/workers/ci-cd/external-cicd/github-actions/, lue le 28/10/2026",
+      "npx wrangler whoami --json   # identite lue par la CLI ; sort en code non nul si elle n'est pas authentifiee ; le compte attendu est celui de CLOUDFLARE_ACCOUNT_ID ; source : https://developers.cloudflare.com/workers/wrangler/commands/general/, lue le 28/10/2026",
+      "domaine personnalise <DOMAINE> : Workers n'accepte AUCUN domaine dont les serveurs de noms ne sont pas geres par Cloudflare (« Unlike Pages, Workers does not support any domain whose nameservers are not managed by Cloudflare. ») — verifier que la zone de <DOMAINE> est chez Cloudflare AVANT de migrer un projet Pages dont le domaine y pointe par un CNAME ; sinon la migration est bloquee, et deplacer les serveurs de noms est un geste humain hors forge ; source : https://developers.cloudflare.com/workers/static-assets/migration-guides/migrate-from-pages/, lue le 28/10/2026",
+      "front Workers devant une base Supabase : ordre des deux plans, variables d'environnement nommees par plateforme et URL de redirection de l'auth pour les previsualisations sont dans references/ENCHAINEMENT-PLANS.md de forge-ops (TF-2010) ; la base se deploie AVANT le front",
+      "un secret change est un deploiement : `wrangler secret put` cree une nouvelle version ET la deploie aussitot ; avec des deploiements progressifs, poser le secret par `wrangler versions secret put`, qui ne cree que la version ; source : https://developers.cloudflare.com/workers/configuration/secrets/, lue le 28/10/2026"
+    ],
+    "deploiement": [
+      "deploiement fait a la main depuis le tableau de bord   # aucune commande du CLI : refuse par O-5"
+    ],
+    "healthcheck": [
+      "curl -fsS <URL_VERSION>/sante   # smoke sur l'URL de la version, hors trafic, 200 attendu (contrat sante.mjs de forge-ops) ; source : https://developers.cloudflare.com/workers/versions-and-deployments/version-urls/, lue le 28/10/2026",
+      "npx wrangler versions deploy <ID_VERSION>@<POURCENT_NOUVELLE>% <ID_VERSION_PRECEDENTE>@<POURCENT_PRECEDENTE>% --yes   # bascule APRES healthcheck vert, en palier : deploiement PROGRESSIF entre deux versions, les pourcentages sont fixes par l'humain ; seules les 100 dernieres versions telechargees sont deployables ; GO humain (R-38) ; source : https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/, lue le 28/10/2026",
+      "npx wrangler deployments status   # health : les versions qui servent le trafic et leur part, relues apres le palier ; source : https://developers.cloudflare.com/workers/wrangler/commands/workers/, lue le 28/10/2026",
+      "npx wrangler versions deploy <ID_VERSION>@100% --yes   # promotion de la nouvelle version a 100 % une fois le palier sain (dernier geste de la bascule) ; sans palier, c'est la seule commande de bascule ; GO humain (R-38) ; source : https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/, lue le 28/10/2026",
+      "curl -fsS <URL_SERVICE>/sante   # controle post-bascule sur l'URL servie, 200 attendu ; pendant un deploiement progressif deux versions servent, un client peut voir l'une puis l'autre (version skew) ; source : https://developers.cloudflare.com/workers/versions-and-deployments/gradual-deployments/, lue le 28/10/2026"
+    ],
+    "rollback": [
+      "npx wrangler deployments list   # les 10 deploiements les plus recents : relever <ID_VERSION_PRECEDENTE>, la version saine servie avant la bascule ; source : https://developers.cloudflare.com/workers/wrangler/commands/workers/, lue le 28/10/2026",
+      "npx wrangler rollback <ID_VERSION_PRECEDENTE> --message \"<MESSAGE_RETOUR>\"   # cree AUSSITOT un nouveau deploiement de cette version, active sur toutes les routes et tous les domaines, a 100 % (aussi depuis un deploiement progressif) ; sans identifiant, la version televersee avant la derniere ; --message saute les invites, donc utilisable en chaine ; sous GO humain (R-38) ; source : https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/, lue le 28/10/2026",
+      "limites du retour arriere : 100 versions les plus recentes seulement ; REFUSE si une classe de Durable Object a change de cycle de vie entre les deux versions, ou si la version visee lie un bucket R2, un namespace KV ou une file supprimes ; il ne change PAS les ressources liees (KV, D1, R2, Durable Objects) : une structure de donnees modifiee entre les deux versions peut faire echouer le code ancien — un changement de schema se defait par la voie de sa base (migration corrective), jamais par ce geste ; source : https://developers.cloudflare.com/workers/versions-and-deployments/rollbacks/, lue le 28/10/2026",
+      "npx wrangler deployments status   # re-verification apres retour : la seule version servie est <ID_VERSION_PRECEDENTE>",
+      "curl -fsS <URL_SERVICE>/sante   # re-verification apres retour, 200 attendu"
+    ]
+  }
+}

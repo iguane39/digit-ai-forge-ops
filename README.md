@@ -39,7 +39,8 @@ node scripts/ops.mjs etat <cible>
 # Verdict d'exploitation O1-O4 (consommé par l'étape MEP du pilot)
 node oracles/oracle-ops.mjs <cible> [--json-only]
 
-# Plan cloud déterministe (railway | gcp | azure | aws | supabase) — génère, n'exécute jamais
+# Plan cloud déterministe (railway | gcp | azure | aws | supabase | cloudflare-workers) — génère, n'exécute jamais
+# Front Workers + base Supabase : ordre des deux plans, variables nommées, URL de redirection -> references/ENCHAINEMENT-PLANS.md
 # Plan d'un PRODUIT DATA (databricks-bundle | powerbi-workspace) — même doctrine, publication sur GO humain (TF-0865)
 node scripts/ops.mjs plan <cible> <build> --sortie plan.json
 node oracles/oracle-ops.mjs --plan plan.json   # O-5 : 4 phases, rollback réel, zéro credential
