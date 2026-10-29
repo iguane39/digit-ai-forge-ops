@@ -182,6 +182,16 @@ findings,non_juge}`, exit 0/1/2 :
   (jamais `cancel-in-progress: true`) et réserve `id-token: write` au job de production. Faits sourcés et
   datés : `references/WORKFLOW-DEPLOIEMENT.md`.
 
+- **O22** `--mise-en-service <COMPOSANTS-OPS.md> [--le "AAAA-MM-JJ HH:MM"]` (D-108 (b), décision humaine du
+  29/10/2026). Une tâche planifiée ou récurrente déclarée « en service » (« actif », « partagé » ou « en
+  service ») porte la lecture d'une première exécution RÉELLE (identifiant ou URL de la publication, date et
+  heure de lecture) et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat.
+  Mesure fondatrice : le 21/10/2026, une tâche planifiée de publication sur un réseau social déclarée « C'est en
+  service » sur la foi d'un essai ; aucune publication du 20 au 25/10, vérification de 18 h 45 non faite. La
+  tâche est désignée par sa table (titre, Cadence ou Type), jamais devinée. Document seul, aucun appel réseau ;
+  l'oracle ne tourne pas à l'échéance, c'est le run qui le rejoue. Fixtures :
+  `fixtures/o22-mise-en-service-planifiee/`.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les

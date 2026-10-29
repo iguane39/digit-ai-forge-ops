@@ -81,6 +81,10 @@ node oracles/oracle-ops.mjs --conteneurs-a-etat <racine-du-produit> [--composant
 # gabarit : gabarits/workflow-deploiement-production.yml — faits et sources : references/WORKFLOW-DEPLOIEMENT.md
 node oracles/oracle-ops.mjs --workflow-deploiement .github/workflows/deploiement-production.yml [--environnement production] [--protection env.json]
 
+# Oracle O-22 : « en service » d'une tâche planifiée porte la lecture d'une première exécution réelle et sa prochaine échéance
+# exemple : fixtures/o22-mise-en-service-planifiee/verte.md ; --le fixe l'instant de référence (sinon : maintenant)
+node oracles/oracle-ops.mjs --mise-en-service docs/projet/COMPOSANTS-OPS.md [--le "AAAA-MM-JJ HH:MM"]
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -139,6 +143,7 @@ FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 | O19 | `--sauvegarde <declaration.json> [--le AAAA-MM-JJ]` : sur une déclaration `forge-ops/sauvegarde@1`, chaque actif de données critique porte RPO, RTO, mécanisme, fréquence (≤ RPO) et configuration de sauvegarde, et un exercice de restauration réussi depuis ≤ 12 mois, de durée ≤ RTO et d'intégrité constatée ; `actifs: []` exige `aucun_actif_critique` motivé (TF-1212 ; CTL-D05-09, CTL-D12-06, CTL-D16-09 du référentiel d'audit) |
 | O20 | `--conteneurs-a-etat <racine> [--composants <COMPOSANTS-OPS.md>]` : chaque `docker run` et chaque service compose d'une image à état monte un volume nommé ou un dossier de l'hôte sur le chemin exact de ses données ; chaque `docker start` vise un conteneur dont la commande de création est écrite ; la table « Composants à état » déclare volume et commande de création (TF-1986) |
 | O21 | `--workflow-deploiement <fichier.yml> [--environnement <nom>] [--protection <capture.json>]` : un job qui déploie référence un environnement ; le job de production a son GO humain prouvé (job de garde qui lit l'environnement par l'API, ou capture de `gh api …/environments/<nom>`) ; il est couvert par un groupe de concurrence sans `cancel-in-progress: true` ; `id-token: write` ne va qu'à lui (TF-2003) |
+| O22 | `--mise-en-service <COMPOSANTS-OPS.md> [--le "AAAA-MM-JJ HH:MM"]` : une tâche planifiée ou récurrente déclarée « en service » (« actif », « partagé » ou « en service ») porte l'identifiant ou l'URL d'une première exécution réelle lue, la date et l'heure de lecture, et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat (D-108 (b)) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.
@@ -306,6 +311,43 @@ compte n'est pas mesuré.
 **Ce qui n'est pas jugé :** les réglages réels sans capture ; la confiance fédérée côté cloud ; l'épinglage par
 SHA et le secret long d'une action de connexion (WF-2 et WF-5 de forge-websec) ; une garde lue mais neutralisée
 (`|| true`) ; un workflow réutilisable appelé au niveau du job.
+
+## « En service » d'une tâche planifiée se prouve par une exécution lue (O-22, D-108 (b))
+
+`node oracles/oracle-ops.mjs --mise-en-service <COMPOSANTS-OPS.md> [--le "AAAA-MM-JJ HH:MM"]` juge un document,
+sans rien exécuter ni appeler. Le fait qui l'a fait naître, le 21/10/2026 chez un produit : une tâche planifiée
+de publication sur un réseau social a été déclarée « C'est en service » à la mise en service. L'essai avait
+passé. Aucune publication n'a eu lieu du 20 au 25/10, et la vérification prévue à 18 h 45 n'a pas été faite.
+Rien dans la forge n'empêchait la déclaration ni ne signalait l'échéance manquée. Décision humaine D-108 (b)
+du 29/10/2026 : « en service » exige l'identifiant d'une publication lue, et une échéance dépassée alerte.
+
+Une tâche est **désignée** par sa table, jamais devinée de son nom : sous un titre « Tâches planifiées »
+(ou « récurrentes »), par une colonne `Cadence` (ou `Planification`, `Récurrence`) renseignée, ou par une
+colonne `Type` qui dit planifié, récurrent, cron. Quand elle est « en service » (statut « actif » ou
+« partagé » du vocabulaire fermé d'O-15, ou « en service »), sa ligne porte :
+
+| Colonne | Contenu |
+|---|---|
+| `Première exécution lue` | l'identifiant ou l'URL de la publication réelle ; ni « l'essai a passé », ni une date, ni un mot |
+| `Première lecture le` | la date ET l'heure où elle a été lue, `AAAA-MM-JJ HH:MM` (`THH:MM` et `HHhMM` acceptés) |
+| `Prochaine échéance` | l'instant où l'exécution suivante doit être relue ; sans heure, elle vaut la fin de son jour |
+| `Dernière exécution lue`, `Dernière lecture le` | la preuve plus récente, exigée quand l'échéance est passée |
+
+Constats, tous bloquants, un par raison et par tâche : preuve absente, ou un essai (« à blanc », « simulé »)
+sans le mot « réelle » ; lecture sans date, sans heure, illisible ou postérieure à l'instant de référence ;
+échéance absente ou illisible ; **échéance dépassée sans lecture plus récente qu'elle**, le constat disant
+la lecture la plus récente connue. Une table sans les colonnes de preuve rend un seul constat qui nomme les
+tâches en service et les colonnes. Le remède est dit dans chaque constat : lire l'exécution et dater la
+lecture, ou ramener le statut à « déclaré », la forme honnête d'une tâche dont aucune exécution n'a été lue
+(non jugée). Aucune tâche désignée, ou aucune en service : SKIP, jamais un PASS vide. `--le` fixe l'instant de
+référence, une date seule valant la fin de son jour ; un `--le` illisible rend `donnees_insuffisantes`.
+Exemples : `fixtures/o22-mise-en-service-planifiee/` (`verte.md`, `rouge.md`, `rouge-sans-colonnes.md`).
+
+**Ce qui n'est pas jugé :** la vérité de l'identifiant (un identifiant inventé passe : l'ouvrir reste un geste
+de relecture) ; une tâche déclarée en service hors des tables désignées ; l'échéance, lue telle que déclarée,
+jamais recalculée depuis la cadence ; le fuseau (heure locale du poste) ; **l'alerte au sens d'une
+notification** : l'oracle rend un constat quand on le rejoue, il ne tourne pas à l'échéance. Qui le rejoue, et
+quand, est une décision de run.
 
 ## Un travail planifié s'exerce (O-8, TF-0527)
 

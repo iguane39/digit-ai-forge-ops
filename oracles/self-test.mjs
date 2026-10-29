@@ -1758,5 +1758,101 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(verdictDoc21 === "PASS", `O21 : WORKFLOW-DEPLOIEMENT.md passe l'oracle de documents (O9, O12, O13, O16) (obtenu ${verdictDoc21})`);
 }
 
+// ── O22 (D-108 (b), décision humaine du 29/10/2026) : « EN SERVICE » D'UNE TÂCHE PLANIFIÉE PORTE LA LECTURE D'UNE ─────
+// PREMIÈRE EXÉCUTION RÉELLE, ET UNE ÉCHÉANCE PASSÉE SANS PREUVE PLUS RÉCENTE EST UN CONSTAT ───────────────────────────
+// Le fait du 21/10/2026 : une tâche planifiée de publication déclarée « C'est en service », l'essai avait passé,
+// aucune publication du 20 au 25/10, la vérification de 18 h 45 jamais faite. Avant O-22, `--mise-en-service`
+// n'existait pas. Les fixtures se jouent à l'instant fixe `--le "2026-10-25 12:00"` : le verdict ne vieillit pas.
+{
+  console.log("");
+  const REF22 = "2026-10-25 12:00";
+  const o22 = (fichier, ...extra) => { try { return JSON.parse(run(oracle, ["--mise-en-service", fichier, "--json-only", ...extra])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const dir22 = path.join(ici, "..", "fixtures", "o22-mise-en-service-planifiee");
+  const fx22 = (f) => path.join(dir22, f);
+  const durs = (r) => (r.findings || []).filter(f => f.regle === "O22" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const rVerte22 = o22(fx22("verte.md"), "--le", REF22);
+  ok(rVerte22.verdict === "PASS" && durs(rVerte22).length === 0,
+    `O22 : quatre tâches (id lu, URL, id en code, échéance passée suivie d'une lecture plus récente), une « déclaré », un composant non planifié -> PASS (obtenu ${rVerte22.verdict})`);
+  const rRouge22 = o22(fx22("rouge.md"), "--le", REF22);
+  const f22 = durs(rRouge22);
+  ok(rRouge22.verdict === "FAIL", `O22 : six tâches « en service » sans preuve valable -> FAIL (obtenu ${rRouge22.verdict})`);
+  const de22 = (nom, motif) => f22.filter(f => f.where === nom && motif.test(f.msg)).length === 1;
+  ok(de22("publication-exemple", /« essai passé » est un essai.*ni identifiant ni URL/), "O22 : « essai passé » tenu pour preuve -> constat, le fait du 21/10 (publication-exemple)");
+  ok(de22("export-exemple", /date et heure de lecture absentes/), "O22 : preuve sans date ni heure de lecture -> constat (export-exemple)");
+  ok(de22("sauvegarde-exemple", /prochaine échéance absente/), "O22 : aucune prochaine échéance -> constat (sauvegarde-exemple)");
+  ok(de22("veille-exemple", /DÉPASSÉE à 2026-10-25 12:00 sans preuve plus récente \(la lecture la plus récente date du 2026-10-20 08:00\)/),
+    "O22 : échéance du 21/10 à 18 h 45 passée sans lecture plus récente -> constat qui dit la dernière lecture (veille-exemple)");
+  ok(de22("rappel-exemple", /après l'instant de référence/), "O22 : lecture datée du futur -> constat (rappel-exemple)");
+  ok(de22("relance-exemple", /SANS heure/), "O22 : lecture sans heure -> constat (relance-exemple)");
+  ok(f22.length === 6 && !f22.some(f => f.where === "inventaire-exemple"), `O22 : six tâches fautives, six constats, la tâche « déclaré » non jugée (obtenu ${f22.length})`);
+  const rCol22 = o22(fx22("rouge-sans-colonnes.md"), "--le", REF22);
+  ok(rCol22.verdict === "FAIL" && durs(rCol22).length === 1 && /publication-exemple/.test(durs(rCol22)[0].msg)
+      && /« Première exécution lue » ni « Première lecture le » ni « Prochaine échéance »/.test(durs(rCol22)[0].msg),
+    `O22 : tâche « actif » dans une table sans colonne de preuve -> FAIL, ce seul constat, qui nomme la tâche et les trois colonnes (obtenu ${rCol22.verdict}, ${durs(rCol22).length})`);
+  const tmp22 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o22-"));
+  try {
+    const ecrire = (nom, texte) => { const p = path.join(tmp22, nom); fs.writeFileSync(p, texte, "utf8"); return p; };
+    const EN = ["Composant", "Statut", "Première exécution lue", "Première lecture le", "Prochaine échéance"];
+    const doc22 = (entetes, ...lignes) => `## Tâches planifiées\n\n| ${entetes.join(" | ")} |\n|${entetes.map(() => "---").join("|")}|\n${lignes.map(l => `| ${l.join(" | ")} |`).join("\n")}\n`;
+    const un = (id, stat, pre, lec, ech) => ecrire(`${id}.md`, doc22(EN, [id, stat, pre, lec, ech]));
+    const sansConstat = (r) => r.verdict === "PASS" && durs(r).length === 0;
+    // TF-1013 : les remèdes que nomment les constats se jouent, et rendent PASS.
+    const tacheRouge = ["veille-exemple", "en service", "job-0042", "2026-10-20 08:00", "2026-10-21 18:45"];
+    ok(o22(ecrire("echue.md", doc22(EN, tacheRouge)), "--le", REF22).verdict === "FAIL", "O22 remède : la tâche à échéance passée, seule dans sa table -> FAIL");
+    ok(sansConstat(o22(ecrire("echue-relue.md", doc22([...EN, "Dernière exécution lue", "Dernière lecture le"], [...tacheRouge, "job-0057", "2026-10-25 09:00"])), "--le", REF22)),
+      "O22 remède 1 : lire la dernière exécution (identifiant + heure de lecture) après l'échéance -> PASS, l'échéance restant passée");
+    const rDecl = o22(ecrire("declaree.md", doc22(EN, ["veille-exemple", "déclaré", "—", "—", "—"])), "--le", REF22);
+    ok(rDecl.verdict === "SKIP" && durs(rDecl).length === 0, `O22 remède 2 : ramener le Statut à « déclaré » -> plus de constat, SKIP et jamais un PASS vide (obtenu ${rDecl.verdict})`);
+    ok(sansConstat(o22(un("pub-exemple", "actif", "https://reseau.exemple/p/881122", "2026-10-21 18:50", "2026-10-26 18:45"), "--le", REF22)),
+      "O22 remède 3 : l'URL de la publication réelle + l'heure de lecture + l'échéance -> PASS");
+    ok(sansConstat(o22(ecrire("colonnes-ajoutees.md", doc22(EN, ["publication-exemple", "actif", "post-17912345678", "2026-10-21 18:50", "2026-10-26 18:45"])), "--le", REF22)),
+      "O22 remède 4 : table de rouge-sans-colonnes.md complétée des trois colonnes -> PASS");
+    // La preuve : un identifiant ou une URL, jamais une date, une heure, un mot ou un essai.
+    const refus = (pre) => o22(un("preuve", "actif", pre, "2026-10-21 18:50", "2026-10-26 18:45"), "--le", REF22);
+    ok(refus("2026-10-21 18:50").verdict === "FAIL" && refus("ok").verdict === "FAIL" && refus("publié").verdict === "FAIL",
+      "O22 : une date, « ok » ou « publié » ne sont pas un identifiant -> FAIL");
+    ok(sansConstat(refus("id 17912345678")) && sansConstat(refus("https://reseau.exemple/p/881122")), "O22 : un identifiant à chiffres ou une URL -> PASS");
+    ok(/cite un essai/.test(durs(refus("https://reseau.exemple/p/881122 (publication d'essai)"))[0]?.msg || ""),
+      "O22 : une URL de publication « d'essai » -> FAIL (cite un essai : la preuve attendue est celle d'une exécution réelle)");
+    ok(sansConstat(refus("https://reseau.exemple/p/881122 (publication réelle, après l'essai à blanc)")), "O22 : « réelle » dit dans la cellule -> PASS");
+    // Les instants : AAAA-MM-JJ HH:MM, graphies THH:MM et HHhMM ; une échéance sans heure vaut la fin de son jour.
+    ok(sansConstat(o22(un("graphies", "actif", "post-123456", "2026-10-21T18:50", "2026-10-26 18h45"), "--le", REF22)), "O22 : « THH:MM » et « HHhMM » sont lus");
+    ok(durs(o22(un("calendrier", "actif", "post-123456", "2026-02-30 10:00", "2026-10-26 18:45"), "--le", REF22))[0]?.msg.includes("illisibles"), "O22 : un 30 février est illisible -> constat");
+    ok(sansConstat(o22(un("jour-meme", "actif", "post-123456", "2026-10-25 09:00", "2026-10-25"), "--le", REF22)), "O22 : échéance sans heure = fin du jour : le jour même, pas encore passée");
+    ok(o22(un("lendemain", "actif", "post-123456", "2026-10-25 09:00", "2026-10-25"), "--le", "2026-10-26").verdict === "FAIL", "O22 : la même échéance, `--le` du lendemain -> DÉPASSÉE");
+    ok(o22(un("limite", "actif", "post-123456", "2026-10-21 18:45", "2026-10-21 18:45"), "--le", REF22).verdict === "FAIL",
+      "O22 : lecture à la minute même de l'échéance = pas plus récente que l'échéance -> constat");
+    ok(sansConstat(o22(un("limite-apres", "actif", "post-123456", "2026-10-21 18:46", "2026-10-21 18:45"), "--le", REF22)),
+      "O22 : lecture une minute après l'échéance -> PASS, la lecture est plus récente que l'échéance");
+    // Sans `--le`, l'instant de référence est maintenant.
+    ok(sansConstat(o22(un("futur-lointain", "actif", "post-123456", "2026-10-21 18:50", "2099-01-01 08:00"))), "O22 : sans --le, une échéance en 2099 n'est pas passée -> PASS");
+    ok(o22(un("passe-lointain", "actif", "post-123456", "1999-12-30 18:50", "2000-01-01 08:00")).verdict === "FAIL", "O22 : sans --le, une échéance en 2000 sans lecture plus récente -> FAIL");
+    // Désignation d'une tâche planifiée : titre, colonne Cadence ou colonne Type — jamais le nom seul.
+    const ent2 = ["Composant", "Type", "Statut"];
+    ok(o22(ecrire("type.md", `## Inventaire\n\n| ${ent2.join(" | ")} |\n|---|---|---|\n| pub-exemple | tâche planifiée | actif |\n`), "--le", REF22).verdict === "FAIL",
+      "O22 : une colonne Type « tâche planifiée » désigne la tâche, sans titre ni Cadence -> jugée");
+    ok(o22(ecrire("sans-designation.md", `## Inventaire\n\n| ${ent2.join(" | ")} |\n|---|---|---|\n| pub-exemple | application | actif |\n`), "--le", REF22).verdict === "SKIP",
+      "O22 : « actif » sans titre, Cadence ni Type de tâche planifiée -> non jugé, SKIP");
+    ok(sansConstat(o22(ecrire("sans-accents.md", doc22(["Composant", "Statut", "Premiere execution lue", "Premiere lecture le", "Prochaine echeance"], ["pub-exemple", "actif", "post-123456", "2026-10-21 18:50", "2026-10-26 18:45"])), "--le", REF22)),
+      "O22 : en-têtes écrits sans accents -> lus pareil");
+    ok(o22(ecrire("sans-statut.md", "## Tâches planifiées\n\n| Composant | Cadence |\n|---|---|\n| pub-exemple | chaque jour |\n"), "--le", REF22).verdict === "FAIL",
+      "O22 : table de tâches planifiées sans colonne Statut -> FAIL");
+    // Bornes : aucun défaut implicite.
+    ok(o22(path.join(tmp22, "absent.md")).verdict === "donnees_insuffisantes", "O22 borne : document introuvable -> donnees_insuffisantes");
+    ok(o22(fx22("verte.md"), "--le", "hier").verdict === "donnees_insuffisantes", "O22 borne : --le illisible -> donnees_insuffisantes, jamais un repli silencieux sur maintenant");
+    ok(o22(path.join(ici, "..", "fixtures", "o15-statut-composants", "doc-vert.md"), "--le", REF22).verdict === "SKIP",
+      "O22 borne : un inventaire sans tâche planifiée désignée (statuts « actif » compris) -> SKIP");
+  } finally {
+    fs.rmSync(tmp22, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // Loi n° 1 : la règle est câblée — documentée là où la forge documente les autres.
+  const lire22 = (f) => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire22(f); return t.includes("--mise-en-service") && t.includes("O22") && t.includes("D-108 (b)"); })
+      && lire22("README.md").includes("fixtures/o22-mise-en-service-planifiee"),
+    "O22 : la règle, son mode et sa décision sont appelés par README.md et CLAUDE.md, fixtures citées (loi n° 1)");
+  ok(/O22 --mise-en-service/.test(lire22("oracles/oracle-ops.mjs").split("import fs")[0]), "O22 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

@@ -55,6 +55,11 @@
 //       (`production` par défaut) a son GO humain prouvé, par un job de garde qui lit l'environnement
 //       par l'API ou par la capture de `gh api …/environments/<nom>` ; il est couvert par un groupe de
 //       concurrence sans cancel-in-progress: true ; id-token: write ne va qu'à lui (TF-2003).
+//   O22 --mise-en-service <COMPOSANTS-OPS.md> [--le AAAA-MM-JJ[ HH:MM]] : une tâche planifiée ou
+//       récurrente déclarée « en service » (« actif », « partagé » ou « en service ») porte la lecture
+//       d'une première exécution RÉELLE (identifiant ou URL de la publication, date et heure de lecture)
+//       et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat
+//       (D-108 (b)). Aucune tâche désignée ou aucune en service : SKIP.
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -1492,6 +1497,153 @@ if (args.includes("--workflow-deploiement")) {
   }
   const durs21 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin21(durs21.length ? "FAIL" : "PASS", durs21.length ? 1 : 0);
+}
+
+// ── O22 · « EN SERVICE » d'une tâche planifiée ou récurrente est une affirmation qui porte la lecture
+// d'une première exécution RÉELLE, et son échéance suivante (D-108 (b), décision humaine du 29/10/2026) ──
+//
+// LE FAIT. Le 21/10/2026, chez un produit, une tâche planifiée de publication sur un réseau social a été
+// déclarée « C'est en service » à la mise en service. L'essai avait passé. Pourtant aucune publication n'a
+// eu lieu du 20 au 25/10, et la vérification prévue à 18 h 45 n'a pas été faite. Rien dans la forge
+// n'empêchait la déclaration, rien ne signalait l'échéance manquée : O-8 lit la DÉFINITION d'une
+// planification (jamais un passage), O-15 lit le Statut face à l'export (jamais une exécution).
+//
+// CE QUI EST JUGÉ, sur un DOCUMENT (le COMPOSANTS-OPS.md du produit, tables markdown, aucun appel réseau) :
+// une ligne de tâche planifiée ou récurrente dont le Statut est « en service » (« actif » ou « partagé »
+// au vocabulaire fermé d'O-15, ou la graphie « en service ») porte (1) la preuve d'une première exécution
+// RÉELLE lue — un identifiant ou une URL de la publication, jamais « l'essai a passé » —, (2) la date ET
+// l'heure de cette lecture, (3) sa prochaine échéance ; et une échéance PASSÉE sans lecture plus récente
+// qu'elle est un constat. Une tâche est désignée par sa table, jamais devinée : titre « Tâches planifiées /
+// récurrentes », colonne « Cadence » (ou « Planification », « Récurrence ») renseignée, ou colonne « Type »
+// qui dit planifié, récurrent, cron… Le Statut « déclaré » n'est pas jugé : c'est la forme honnête d'une
+// tâche dont aucune exécution n'a encore été lue — le remède que nomment les constats.
+// Colonnes lues : Statut ; Première exécution lue ; Première lecture le ; Prochaine échéance ; et, quand
+// l'échéance est passée, Dernière exécution lue + Dernière lecture le (la preuve plus récente).
+// Instants au format AAAA-MM-JJ HH:MM (« THH:MM », « HHhMM » acceptés), heure LOCALE du poste ; une
+// échéance sans heure vaut la fin de son jour ; `--le AAAA-MM-JJ[ HH:MM]` fixe l'instant de référence
+// (bancs reproductibles), une date seule valant la fin de son jour ; sinon, maintenant.
+const _EN_SERVICE_O22 = ["actif", "partage", "en service"];
+const _SUJET_O22 = "taches?|travail|travaux|jobs?|publications?";
+const _TITRE_PLANIFIE_O22 = new RegExp(`\\b(${_SUJET_O22})\\b.*\\b(planifie\\w*|recurrent\\w*|programme\\w*)\\b|\\b(planifie\\w*|recurrent\\w*|programme\\w*)\\b.*\\b(${_SUJET_O22})\\b`);
+const _TYPE_PLANIFIE_O22 = /planifi|recurr|cron|schedul|periodi|programm/;
+const _ESSAI_O22 = /\b(essais?|a blanc|dry-?run|simul\w*|mock|factice|fictif)\b/;
+// Un instant « AAAA-MM-JJ[ HH:MM] » → { ms, heure } ou null. Une date inexistante (31 février) est refusée.
+function _instantO22(valeur, finDeJour = false) {
+  const s = _sansAccents(_valeurCellule(valeur));
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:(?: |t)(\d{1,2}) ?[:h] ?(\d{2}))?$/.exec(s);
+  if (!m) return null;
+  const [A, Mo, J] = [+m[1], +m[2], +m[3]];
+  const heure = m[4] !== undefined;
+  const H = heure ? +m[4] : (finDeJour ? 23 : 0), Mi = heure ? +m[5] : (finDeJour ? 59 : 0);
+  const d = new Date(A, Mo - 1, J, H, Mi, finDeJour && !heure ? 59 : 0);
+  if (H > 23 || Mi > 59 || d.getFullYear() !== A || d.getMonth() !== Mo - 1 || d.getDate() !== J) return null;
+  return { ms: d.getTime(), heure };
+}
+// La cellule dit-elle une exécution RÉELLE lue ? → null si oui, sinon le motif du refus.
+function _refusPreuveO22(cellule) {
+  if (_vide(cellule)) return "cellule vide";
+  const s = _valeurCellule(cellule);
+  const essai = _ESSAI_O22.test(_sansAccents(s)) && !/\breel(le)?s?\b/.test(_sansAccents(s));
+  const aUrl = /https?:\/\/[^\s)>\]]+/i.test(s);
+  const aId = s.split(/[\s,;()]+/).some(w => w.length >= 6 && /\d/.test(w) && /^[\w:.\-\/]+$/.test(w)
+    && !/^\d{4}-\d{2}-\d{2}/.test(w) && !/^\d{1,2}[:hH]\d{2}$/.test(w));
+  if (!aUrl && !aId) return essai ? `« ${s} » est un essai, pas une exécution réelle, et ne porte ni identifiant ni URL` : `« ${s} » ne porte ni identifiant ni URL`;
+  if (essai) return `« ${s} » cite un essai (à blanc, simulé) : la preuve attendue est celle d'une exécution RÉELLE ; si c'en est une, le dire (« réelle »)`;
+  return null;
+}
+if (args.includes("--mise-en-service")) {
+  const docPath = args[args.indexOf("--mise-en-service") + 1];
+  const iLe22 = args.indexOf("--le");
+  const leArg22 = iLe22 >= 0 ? args[iLe22 + 1] : null;
+  const DOM22 = "Exploitation : « en service » d'une tâche planifiée exige la lecture d'une première exécution réelle et sa prochaine échéance (O-22)";
+  const NJ22 = [
+    "la VÉRITÉ de la preuve — l'oracle juge qu'un identifiant ou une URL de publication est écrit, avec l'heure de sa lecture ; il ne lit ni la plateforme ni la publication : un identifiant inventé passe, et c'est à la relecture humaine de l'ouvrir",
+    "une tâche planifiée déclarée en service HORS des tables lues — sans titre « Tâches planifiées / récurrentes », sans colonne Cadence ni Type qui la désigne, elle n'est pas vue (la désignation est explicite, jamais devinée du nom)",
+    "la prochaine échéance est celle DÉCLARÉE : l'oracle ne la recalcule ni de la cadence ni de la définition (O-8 lit les définitions de planification), et ne lit aucun historique d'exécution",
+    "l'ALERTE au sens d'une notification : l'oracle rend un constat quand on le rejoue, il ne tourne pas à l'échéance ; qui le rejoue, et quand, est une décision de run (supervision continue : hors périmètre)",
+    "le fuseau : les instants s'écrivent sans fuseau et se comparent à l'heure locale du poste qui joue l'oracle",
+    "la lecture des mots « essai », « à blanc », « simulé » : une preuve qui les cite sans dire « réelle » est refusée, et l'identifiant d'un essai qui ne les cite pas passe — l'oracle lit des mots, jamais le fait",
+  ];
+  const fin22 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM22, artefact: docPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O22", msg: "chaque tâche planifiée en service porte la lecture d'une première exécution réelle, son heure de lecture et sa prochaine échéance, et aucune échéance passée n'est restée sans lecture plus récente", where: docPath }], non_juge: NJ22 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!docPath || !fs.existsSync(docPath)) { add("bloquant", "O22", "document introuvable", String(docPath)); fin22("donnees_insuffisantes", 2); }
+  let reference = Date.now();
+  if (leArg22 !== null) {
+    const ref = _instantO22(leArg22, true);
+    if (!ref) { add("bloquant", "O22", `--le « ${leArg22} » illisible (attendu AAAA-MM-JJ ou AAAA-MM-JJ HH:MM) — aucun repli silencieux sur maintenant`, "--le"); fin22("donnees_insuffisantes", 2); }
+    reference = ref.ms;
+  }
+  const aff = ms => { const d = new Date(ms); const p = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const tables22 = _tablesMarkdown(fs.readFileSync(docPath, "utf8"));
+  const base22 = path.basename(docPath);
+  let tachesVues = 0, enService22 = 0;
+  for (const t of tables22) {
+    const iStatut = _colonne(t, "statut");
+    const parTitre = t.titres.some(h => _TITRE_PLANIFIE_O22.test(_norm(h)));
+    if (iStatut < 0) {
+      if (parTitre) add("bloquant", "O22", `table de tâches planifiées (ligne ${t.ligne}) sans colonne « Statut » — « en service » ne peut ni se déclarer ni se prouver (D-108 (b))`, `${base22}:${t.ligne}`);
+      continue;
+    }
+    const iNom = Math.max(0, _colonne(t, "composant", "nom", "tache", "ressource"));
+    const iCad = _colonne(t, "cadence", "planification", "recurrence");
+    const iType = _colonne(t, "type", "nature");
+    const planifiee = l => parTitre || (iCad >= 0 && !_vide(l[iCad])) || (iType >= 0 && _TYPE_PLANIFIE_O22.test(_norm(l[iType])));
+    const taches = t.lignes.filter(l => planifiee(l) && !/^aucun/.test(_norm(l[iNom])));
+    tachesVues += taches.length;
+    const enService = taches.filter(l => _EN_SERVICE_O22.includes(_norm(l[iStatut])));
+    enService22 += enService.length;
+    if (!enService.length) continue;
+    const col = {
+      pre1: _colonne(t, "premiere execution lue", "preuve de premiere execution", "premiere execution"),
+      lec1: _colonne(t, "premiere lecture le", "premiere lecture", "lue le"),
+      pre2: _colonne(t, "derniere execution lue", "derniere execution"),
+      lec2: _colonne(t, "derniere lecture le", "derniere lecture"),
+      ech: _colonne(t, "prochaine echeance", "echeance"),
+    };
+    const manquantes = [col.pre1 < 0 ? "Première exécution lue" : null, col.lec1 < 0 ? "Première lecture le" : null, col.ech < 0 ? "Prochaine échéance" : null].filter(Boolean);
+    if (manquantes.length) {
+      add("bloquant", "O22", `table (ligne ${t.ligne}) : ${enService.length} tâche(s) planifiée(s) déclarée(s) en service (${enService.map(l => _valeurCellule(l[iNom])).join(", ")}) sans colonne ${manquantes.map(c => `« ${c} »`).join(" ni ")} — « en service » n'a rien à lire : la preuve d'une première exécution réelle lue et la prochaine échéance s'écrivent dans la table, ou le Statut reste « déclaré » (D-108 (b))`, `${base22}:${t.ligne}`);
+      continue;
+    }
+    for (const l of enService) {
+      const nom = _valeurCellule(l[iNom]);
+      const ko = msg => add("bloquant", "O22", `tâche « ${nom} » déclarée « ${_valeurCellule(l[iStatut])} » : ${msg} (D-108 (b))`, nom);
+      const lectures = [];
+      // Une lecture : preuve d'une exécution réelle + instant (date ET heure), passé par rapport à la référence.
+      const lire = (pre, lec, qui) => {
+        const refus = _refusPreuveO22(l[pre]);
+        const inst = _instantO22(l[lec]);
+        if (refus) ko(`${qui} non lue — ${refus} ; lire l'identifiant ou l'URL de la publication réelle, ou ramener le Statut à « déclaré »`);
+        if (!inst) ko(`${qui} : date et heure de lecture ${_vide(l[lec]) ? "absentes" : `illisibles (« ${_valeurCellule(l[lec])} »)`} — attendu AAAA-MM-JJ HH:MM`);
+        else if (!inst.heure) ko(`${qui} : lecture datée du ${_valeurCellule(l[lec])} SANS heure — l'heure de lecture se dit`);
+        else if (inst.ms > reference) ko(`${qui} : lecture datée du ${aff(inst.ms)}, après l'instant de référence ${aff(reference)} — une preuve datée du futur n'en est pas une`);
+        else if (!refus) lectures.push(inst.ms);
+      };
+      lire(col.pre1, col.lec1, "première exécution réelle");
+      const dernier = col.pre2 >= 0 && !_vide(l[col.pre2]) || col.lec2 >= 0 && !_vide(l[col.lec2]);
+      if (dernier) {
+        if (col.pre2 < 0 || col.lec2 < 0) ko("une dernière exécution est citée sans colonnes « Dernière exécution lue » et « Dernière lecture le » à la fois");
+        else lire(col.pre2, col.lec2, "dernière exécution");
+      }
+      if (_vide(l[col.ech])) { ko("prochaine échéance absente — sans elle, personne ne sait quand relire l'exécution suivante ; écrire AAAA-MM-JJ HH:MM"); continue; }
+      const ech = _instantO22(l[col.ech], true);
+      if (!ech) { ko(`prochaine échéance illisible (« ${_valeurCellule(l[col.ech])} ») — attendu AAAA-MM-JJ HH:MM`); continue; }
+      if (ech.ms < reference && !(lectures.length && Math.max(...lectures) > ech.ms)) {
+        const derniere = lectures.length ? `la lecture la plus récente date du ${aff(Math.max(...lectures))}` : "aucune lecture valide";
+        ko(`échéance du ${_valeurCellule(l[col.ech])} DÉPASSÉE à ${aff(reference)} sans preuve plus récente (${derniere}) — l'exécution attendue n'a pas été lue : lire l'identifiant ou l'URL de la dernière publication (colonnes « Dernière exécution lue » et « Dernière lecture le ») et poser la prochaine échéance, ou ramener le Statut à « déclaré »`);
+      }
+    }
+  }
+  if (!enService22 && !F.length) {
+    add("info", "O22", tachesVues
+      ? `${tachesVues} tâche(s) planifiée(s) lue(s), aucune déclarée en service (« actif », « partagé », « en service ») — rien à prouver`
+      : "aucune tâche planifiée ou récurrente désignée (titre « Tâches planifiées », colonne Cadence ou Type) — rien à juger", docPath);
+    fin22("SKIP", 2);
+  }
+  const durs22 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin22(durs22.length ? "FAIL" : "PASS", durs22.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
