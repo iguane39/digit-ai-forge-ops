@@ -163,6 +163,31 @@ if (planPath) {
   const sousFixtures = String(planPath).split(/[\\/]/).includes("fixtures");
   if (champSecret.test(brut) && !sousFixtures)
     add("bloquant", "O5", "secret trivial en clair dans un champ mot de passe/secret/jeton — un plan ne transporte jamais de secret (TF-1217)", planPath);
+  // TF-2007 (29/10/2026, étude du pilot du 28/10, ligne S2) : un plan supabase porte les garde-fous que la plateforme
+  // ne révèle qu'au déploiement. Lus dans l'ordre des phases (provision, déploiement, healthcheck ; le rollback rejoue
+  // un push correctif et n'est pas lu ici), sur la commande en tête de ligne, avant son commentaire « # » :
+  //   - le push des migrations suit leur rejeu sur une base locale vide (supabase db reset --local) ;
+  //   - le push suit le contrôle de dérive du projet distant (supabase db diff --linked) ;
+  //   - le déploiement des fonctions suit la pose de leurs secrets (supabase secrets set) ;
+  //   - la voie de déploiement est tranchée face à l'intégration GitHub (« Deploy to production »).
+  if (p.cible === "supabase" && p.phases && typeof p.phases === "object") {
+    const lignes5 = ["provision", "deploiement", "healthcheck"].flatMap(ph => (Array.isArray(p.phases[ph]) ? p.phases[ph] : []).map(String));
+    const commande = (l) => l.split("#")[0];
+    const rang = (re) => lignes5.findIndex(l => re.test(commande(l)));
+    const iPush = rang(/^supabase\s+db\s+push\b(?![^#]*--dry-run)/);
+    const iReset = rang(/^supabase\s+db\s+reset\b.*--local\b/);
+    const iDiff = rang(/^supabase\s+db\s+diff\b.*--linked\b/);
+    const iFonctions = rang(/^supabase\s+functions\s+deploy\b/);
+    const iSecrets = rang(/^supabase\s+secrets\s+set\b/);
+    if (iPush >= 0 && (iReset < 0 || iReset > iPush))
+      add("majeur", "O5", "plan supabase : migrations poussées sans rejeu préalable sur une base locale vide (`supabase db reset --local`, « Resets the local database with local migrations. ») — une migration qui ne passe que sur la base de développement échoue en production (TF-2007)", planPath);
+    if (iPush >= 0 && (iDiff < 0 || iDiff > iPush))
+      add("majeur", "O5", "plan supabase : migrations poussées sans contrôle de dérive du projet distant (`supabase db diff --linked`, « Diffs local migration files against the linked project. ») — un changement fait au tableau de bord reste hors des migrations (TF-2007)", planPath);
+    if (iFonctions >= 0 && (iSecrets < 0 || iSecrets > iFonctions))
+      add("majeur", "O5", "plan supabase : fonctions déployées avant la pose de leurs secrets (`supabase secrets set`) — une fonction appelée avant que son secret existe échoue (TF-2007)", planPath);
+    if (!lignes5.some(l => /Deploy to production/.test(l)))
+      add("majeur", "O5", "plan supabase : la voie de déploiement n'est pas tranchée face à l'intégration GitHub de Supabase (option « Deploy to production ») — deux voies appliqueraient les mêmes migrations, dont une sans le GO de la chaîne (TF-2007)", planPath);
+  }
   const durs5 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin5(durs5.length ? "FAIL" : "PASS", durs5.length ? 1 : 0);
 }

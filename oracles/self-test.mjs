@@ -197,6 +197,48 @@ for (const cible of ["railway", "gcp", "azure", "aws", "databricks-bundle", "pow
 ok(verdictPlan(fx("o5-supabase/plan-vert.json")) === "PASS", "fixture plan supabase complet → O-5 PASS");
 ok(verdictPlan(fx("o5-supabase/plan-rouge-rollback-vide.json")) === "FAIL", "fixture plan supabase sans rollback → O-5 FAIL");
 ok(verdictPlan(fx("o5-supabase/plan-rouge-sans-cli.json")) === "FAIL", "fixture plan supabase sans commande `supabase ` au déploiement → O-5 FAIL");
+// TF-2007 (29/10/2026) : les rouges échouent pour LEUR raison seule, et le plan du 16/10 (ancienne verte)
+// devient rouge sur les 4 garde-fous neufs : rejeu local, dérive, secrets avant fonctions, voie unique.
+{
+  const constats = (f) => { try { return JSON.parse(run(oracle, ["--plan", fx(f), "--json-only"])).findings; }
+    catch (e) { try { return JSON.parse(String(e.stdout)).findings; } catch { return []; } } };
+  const rb = constats("o5-supabase/plan-rouge-rollback-vide.json");
+  const sc = constats("o5-supabase/plan-rouge-sans-cli.json");
+  ok(rb.length === 1 && /phase « rollback » absente ou vide/.test(rb[0].msg), `fixture supabase sans rollback : un seul constat, celui du rollback (obtenu ${rb.length})`);
+  ok(sc.length === 1 && /CLI attendue « supabase »/.test(sc[0].msg), `fixture supabase sans CLI : un seul constat, celui de la CLI « supabase » (obtenu ${sc.length})`);
+  const av = constats("o5-supabase/plan-rouge-avant-tf2007.json");
+  const motifs = [/sans rejeu préalable sur une base locale vide/, /sans contrôle de dérive du projet distant/, /fonctions déployées avant la pose de leurs secrets/, /voie de déploiement n'est pas tranchée[\s\S]*Deploy to production/];
+  ok(av.length === 4 && motifs.every(m => av.some(f => f.sev === "majeur" && /TF-2007/.test(f.msg) && m.test(f.msg))),
+    `TF-2007 · ROUGE — le plan supabase du 16/10 (ancienne verte) : exactement les 4 garde-fous neufs manquants, chacun nommé (obtenu ${av.length})`);
+  // TF-1013 : le remède nommé, les 4 lignes du plan neuf posées dans l'ancien, rend O-5 PASS.
+  const neuf = JSON.parse(run(ops, ["plan", "supabase", "<BUILD>"]));
+  const ancien = JSON.parse(fs.readFileSync(fx("o5-supabase/plan-rouge-avant-tf2007.json"), "utf8"));
+  const prendre = (ph, re) => neuf.phases[ph].find(l => re.test(l));
+  ancien.phases.provision.push(prendre("provision", /Deploy to production/), prendre("provision", /^supabase db reset --local/), prendre("provision", /^supabase db diff --linked/));
+  ancien.phases.deploiement.splice(ancien.phases.deploiement.findIndex(l => /^supabase functions deploy/.test(l)), 0, prendre("deploiement", /^supabase secrets set/));
+  const pRemede = path.join(base, "plan-supabase-remede-tf2007.json");
+  fs.writeFileSync(pRemede, JSON.stringify(ancien), "utf8");
+  ok(verdictPlan(pRemede) === "PASS", "TF-2007 · remède joué : les 4 lignes nommées posées dans le plan du 16/10 -> O-5 PASS (TF-1013)");
+  // Le plan neuf : l'ordre, les sources du jour, la dépense dite humaine, et un retour arrière pour fonctions et secrets.
+  const ordre = [...neuf.phases.provision, ...neuf.phases.deploiement];
+  const rang = (re) => ordre.findIndex(l => re.test(l));
+  ok(rang(/^supabase start /) < rang(/^supabase db reset --local/) && rang(/^supabase db reset --local/) < rang(/^supabase db push --linked/)
+      && rang(/^supabase db diff --linked/) < rang(/^supabase db push --linked/) && rang(/^supabase secrets set /) < rang(/^supabase functions deploy /),
+    "TF-2007 · plan supabase : pile locale, rejeu et dérive AVANT le push ; secrets AVANT les fonctions");
+  const pv = neuf.phases.provision.join(" ");
+  ok(/DEPENSE/.test(pv) && /decision humaine \(R-29\)/.test(pv) && pv.includes("$0.01344 per hour") && pv.includes("manage-your-usage/branching, lues le 29/10/2026"),
+    "TF-2007 · plan supabase : le branching est dit pour ce qu'il est, une dépense à décision humaine (R-29), tarif cité et sourcé");
+  ok(pv.includes("Deploy to production") && pv.includes("branching/github-integration, lue le 29/10/2026") && /UNE seule voie de deploiement/.test(pv),
+    "TF-2007 · plan supabase : une seule voie face à l'intégration GitHub (« Deploy to production »), source datée");
+  ok(pv.includes("verify_jwt = false") && pv.includes("function-configuration, lue le 29/10/2026"),
+    "TF-2007 · plan supabase : une fonction ouverte sans JWT se nomme au dossier de MEP, source datée");
+  const sec = neuf.phases.deploiement.find(l => /^supabase secrets set /.test(l)) || "";
+  ok(/GO humain \(R-38\)/.test(sec) && sec.includes("jamais versionne") && sec.includes("functions/secrets et https://supabase.com/docs/reference/cli/supabase-secrets-set, lues le 29/10/2026"),
+    "TF-2007 · plan supabase : poser un secret change la production aussitôt, sous GO humain ; fichier jamais versionné ; sources datées");
+  const rbNeuf = neuf.phases.rollback.join(" ");
+  ok(rbNeuf.includes("supabase functions deploy <FONCTION>") && rbNeuf.includes("supabase secrets unset <NOM_SECRET>"),
+    "TF-2007 · plan supabase : le retour arrière couvre les fonctions (version précédente du dépôt) et les secrets (unset)");
+}
 // Le retour arrière supabase ne promet pas de migration « down » et marque la restauration comme
 // geste humain irréversible (source officielle citée, datée).
 {
@@ -1656,9 +1698,11 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
     const texteG = fs.readFileSync(gabarit21, "utf8");
     // Le premier remède : retirer la garde du gabarit le rend rouge, la remettre le rend vert.
     const sansNeeds = path.join(tmp21, "gabarit-sans-garde.yml");
-    fs.writeFileSync(sansNeeds, texteG.replace("    needs: garde-go\n", ""), "utf8");
+    // Fins de ligne CRLF ou LF : une extraction sous Windows (core.autocrlf) écrit le gabarit en CRLF.
+    const ligneNeeds = /^    needs: garde-go\r?\n/m;
+    fs.writeFileSync(sansNeeds, texteG.replace(ligneNeeds, ""), "utf8");
     const rN = o21(sansNeeds);
-    ok(texteG.includes("    needs: garde-go\n") && rN.verdict === "FAIL" && seul(rN, "bloquant", /GO humain NON PROUVÉ/),
+    ok(ligneNeeds.test(texteG) && rN.verdict === "FAIL" && seul(rN, "bloquant", /GO humain NON PROUVÉ/),
       "O21 : le gabarit privé de needs: garde-go -> FAIL ; c'est la garde, et rien d'autre, qui prouve le GO");
     const prot = JSON.parse(fs.readFileSync(fx21("protection-verte.json"), "utf8"));
     prot.protection_rules[1].prevent_self_review = false;

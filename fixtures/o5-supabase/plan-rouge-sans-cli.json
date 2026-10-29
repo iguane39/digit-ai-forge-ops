@@ -12,20 +12,33 @@
   "placeholders": [
     "<PROJECT_REF>",
     "<NOM_CORRECTIF>",
-    "<URL_SERVICE>"
+    "<URL_SERVICE>",
+    "<NOM_MIGRATION_DERIVE>",
+    "<FICHIER_SECRETS>",
+    "<REF_GIT_PRECEDENTE>",
+    "<FONCTION>",
+    "<NOM_SECRET>"
   ],
   "phases": {
     "provision": [
       "identite de deploiement : variables SUPABASE_ACCESS_TOKEN (jeton personnel a portee limitee), SUPABASE_DB_PASSWORD et SUPABASE_PROJECT_ID fournies par l'environnement du run, jamais une valeur dans le plan ; source : https://supabase.com/docs/guides/deployment/managing-environments, lue le 16/10/2026",
       "supabase link --project-ref <PROJECT_REF>   # liaison au projet distant <PROJECT_REF> ; source : https://supabase.com/docs/reference/cli/introduction, lue le 16/10/2026",
       "supabase ssl-enforcement get --project-ref <PROJECT_REF> --experimental   # attendu « SSL is being enforced. » ; « SSL is *NOT* being enforced. » = ecart a traiter (l'activation redemarre la base) ; source : https://supabase.com/docs/guides/platform/ssl-enforcement, lue le 16/10/2026",
-      "supabase network-restrictions get --project-ref <PROJECT_REF> --experimental   # 0.0.0.0/0 + ::/0 = aucune restriction ; couvre Postgres et le pooler, PAS les API HTTPS (PostgREST, Storage, Auth) ; source : https://supabase.com/docs/guides/platform/network-restrictions, lue le 16/10/2026"
+      "supabase network-restrictions get --project-ref <PROJECT_REF> --experimental   # 0.0.0.0/0 + ::/0 = aucune restriction ; couvre Postgres et le pooler, PAS les API HTTPS (PostgREST, Storage, Auth) ; source : https://supabase.com/docs/guides/platform/network-restrictions, lue le 16/10/2026",
+      "integration GitHub de Supabase : « Enable the Deploy to production option in your GitHub Integration configuration to automatically deploy changes when you push or merge to production branch. » — UNE seule voie de deploiement : ce plan pousse par la chaine du produit, donc l'option Deploy to production reste DESACTIVEE dans la configuration de l'integration GitHub du projet ; sinon les memes migrations partent deux fois, dont une sans le GO de la chaine (R-38) ; et une migration hors transaction « applies with supabase db push but fails when branching deploys it » ; source : https://supabase.com/docs/guides/deployment/branching/github-integration, lue le 29/10/2026",
+      "branching (environnements d'apercu par pull request) : « Each branch is a separate environment with its own Supabase instance and API credentials. » ; c'est une DEPENSE : « There is no fixed fee for a Preview branch. You only pay for the usage it incurs. » et « A branch running on the default Micro Compute size starts at $0.01344 per hour. » — l'activer est une decision humaine (R-29), jamais un geste du plan ; statut : la gestion des branches par le tableau de bord est « currently in beta », la contradiction alpha ou beta relevee le 28/10/2026 n'est pas tranchee par les pages lues ; sources : https://supabase.com/docs/guides/deployment/branching et https://supabase.com/docs/guides/platform/manage-your-usage/branching, lues le 29/10/2026",
+      "supabase start   # pile locale du rejeu ci-dessous ; « A container manager compatible with Docker APIs is a prerequisite for supabase start » ; source : https://supabase.com/docs/guides/local-development, lue le 29/10/2026",
+      "supabase db reset --local --no-seed   # REJEU de toutes les migrations sur une base locale vide AVANT tout push : « Resets the local database with local migrations. » ; une migration qui ne passe que sur la base de developpement echoue ici, pas en production ; source : https://supabase.com/docs/reference/cli/supabase-db-reset, lue le 29/10/2026",
+      "supabase db diff --linked   # DERIVE du projet distant : « Diffs local migration files against the linked project. » ; une sortie non vide = un schema change hors des migrations (tableau de bord) : le capturer par `supabase db diff --linked -f <NOM_MIGRATION_DERIVE>` (« Saves schema diff to a new migration file. »), le relire et le versionner AVANT le push ; « Under the legacy migra engine, the diff is known to miss some changes. » ; source : https://supabase.com/docs/reference/cli/supabase-db-diff, lue le 29/10/2026",
+      "verify_jwt des fonctions : « By default, Edge Functions require a valid JWT in the authorization header. » ; relire supabase/config.toml : toute fonction a `verify_jwt = false` (ou deployee avec --no-verify-jwt) est nommee au dossier de MEP avec sa raison (webhook signe), car « it will allow anyone to invoke your Edge Function without a valid JWT » ; source : https://supabase.com/docs/guides/functions/function-configuration, lue le 29/10/2026"
     ],
     "deploiement": [
       "deploiement fait a la main depuis le tableau de bord   # aucune commande du CLI : refuse par O-5"
     ],
     "healthcheck": [
       "supabase migration list --linked   # health : etat des migrations du projet lie, relu apres le push",
+      "supabase db diff --linked   # apres le push, sortie vide attendue : migrations locales et projet lie decrivent le meme schema ; source : https://supabase.com/docs/reference/cli/supabase-db-diff, lue le 29/10/2026",
+      "supabase secrets list --project-ref <PROJECT_REF>   # les secrets qu'attendent les fonctions sont presents (« List all secrets in the linked project. ») ; source : https://supabase.com/docs/reference/cli/supabase-secrets-set, lue le 29/10/2026",
       "curl -fsS <URL_SERVICE>/sante   # 200 attendu (contrat sante.mjs de forge-ops) ; <URL_SERVICE> = le produit servi, aucune URL Supabase supposee"
     ],
     "rollback": [
@@ -33,6 +46,8 @@
       "supabase migration new <NOM_CORRECTIF>   # ecrire le correctif qui defait la migration fautive, versionne avec le produit",
       "supabase db push --dry-run --linked && supabase db push --linked   # pousser le correctif, sous GO humain (R-38)",
       "supabase migration list --linked   # re-verification apres retour",
+      "fonctions : la reference de `supabase functions deploy` lue le 29/10/2026 ne decrit aucun retour arriere natif ; le retour arriere d'une fonction est le redeploiement de sa version precedente, tiree du depot : `git checkout <REF_GIT_PRECEDENTE> -- supabase/functions/<FONCTION>` puis `supabase functions deploy <FONCTION> --project-ref <PROJECT_REF>`, sous GO humain (R-38) ; source : https://supabase.com/docs/reference/cli/supabase-functions-deploy, lue le 29/10/2026",
+      "secrets : remettre la valeur precedente, tenue par la chaine, par `supabase secrets set` ; retirer un secret ajoute par `supabase secrets unset <NOM_SECRET> --project-ref <PROJECT_REF>` (« Unset a secret(s) from the linked Supabase project. ») ; effet immediat, sous GO humain (R-38) ; source : https://supabase.com/docs/reference/cli/supabase-secrets-set, lue le 29/10/2026",
       "DERNIER RECOURS, GESTE HUMAIN IRREVERSIBLE : restauration d'une sauvegarde ou PITR par le tableau de bord (Database > Backups) ou l'API de gestion `POST https://api.supabase.com/v1/projects/<PROJECT_REF>/database/backups/restore-pitr` — aucune commande CLI de restauration ; projet INACCESSIBLE pendant l'operation, tout ce qui suit le point choisi est PERDU ; sauvegardes quotidiennes Pro 7 j, Team 14, Enterprise jusqu'a 30, Free aucune (export par `supabase db dump`) ; PITR = add-on Pro/Team/Enterprise ; jamais lance par la forge ; source : https://supabase.com/docs/guides/platform/backups, lue le 16/10/2026"
     ]
   }

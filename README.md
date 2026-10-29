@@ -41,6 +41,8 @@ node oracles/oracle-ops.mjs <cible> [--json-only]
 
 # Plan cloud déterministe (railway | gcp | azure | aws | supabase | cloudflare-workers) — génère, n'exécute jamais
 # Front Workers + base Supabase : ordre des deux plans, variables nommées, URL de redirection -> references/ENCHAINEMENT-PLANS.md
+# supabase (TF-2007) : rejeu des migrations sur base locale vide et dérive (db diff --linked) avant le push, secrets avant
+# les fonctions, une seule voie face à « Deploy to production » de l'intégration GitHub, branching = dépense humaine
 # Plan d'un PRODUIT DATA (databricks-bundle | powerbi-workspace) — même doctrine, publication sur GO humain (TF-0865)
 node scripts/ops.mjs plan <cible> <build> --sortie plan.json
 node oracles/oracle-ops.mjs --plan plan.json   # O-5 : 4 phases, rollback réel, zéro credential
@@ -129,7 +131,7 @@ FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 | O2 | la release courante repasse son healthcheck (exécution réelle) |
 | O3 | journal intègre : JSON valide, seq strictement croissant depuis 1, types connus (même SANS_OBJET que O1 si `PLATEFORME` est déclaré, TF-0844) |
 | O4 | rollback prouvable : aucune release citée au journal n'est purgée ; pointeur ↔ histoire cohérents |
-| O5 | `--plan <fichier>` : plan cloud complet (4 phases, rollback réel, zéro credential) |
+| O5 | `--plan <fichier>` : plan cloud complet (4 phases, rollback réel, zéro credential) ; plan `supabase` : rejeu local et contrôle de dérive avant le push, secrets avant les fonctions, voie tranchée face à l'intégration GitHub (TF-2007) |
 | O6 | `--drift <fichier> <cible>` : état déclaré (`etat --sortie`) vs constaté — journal tronqué/réécrit, déploiement furtif |
 | O7 | `<cible> --empreinte` : fichiers de la release courante vs empreinte scellée au déploiement ou à la promotion canary — fichier modifié/supprimé/ajouté en place ; SKIP motivé sans empreinte, ex. déploiement fait hors ops (TF-0288, TF-0298) |
 | O10 | `--manifeste-servi <fichier>` : chaque paquet épinglé par version (`==`) dans un `requirements.txt` SERVI porte au moins une empreinte `--hash=` — une version republiée sous le même numéro entrerait sinon sans être vue (TF-1042) |
