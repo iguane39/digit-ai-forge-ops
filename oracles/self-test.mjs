@@ -1540,5 +1540,79 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   }
 }
 
+// ── O20 (TF-1986, lot Produit-85 du 24/10/2026) : UN CONTENEUR À ÉTAT GARDE SES DONNÉES DANS UN VOLUME ─────
+// Le fait : un conteneur de traitement sans volume, dont la commande de création n'était écrite nulle part (le
+// README ne donnait que `docker start`), a perdu une tâche de 612 photos au redémarrage de Docker. Avant O-20,
+// `--conteneurs-a-etat` n'existait pas : la racine du produit était lue comme une cible (O1/O3), sans aucun
+// constat sur un volume. Rouges attendus : chacun NOMMÉ à sa ligne.
+{
+  console.log("");
+  const o20 = (racine, ...extra) => { try { return JSON.parse(run(oracle, ["--conteneurs-a-etat", racine, "--json-only", ...extra])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const dir20 = path.join(ici, "..", "fixtures", "o20-conteneurs-a-etat");
+  const rR = o20(path.join(dir20, "rouge"));
+  const c20 = (rR.findings || []).filter(f => f.regle === "O20");
+  const nomme = (ou, sev, motif) => c20.some(f => f.where === ou && f.sev === sev && motif.test(f.msg));
+  ok(rR.verdict === "FAIL", `O20 : fixture rouge -> FAIL (obtenu ${rR.verdict})`);
+  ok(nomme("scripts/base-locale.sh:3", "bloquant", /SANS -v ni --mount[\s\S]*--rm/),
+    "O20 : docker run postgres sans -v ni --mount, avec --rm -> bloquant, la phrase de docs.docker.com citée (continuation shell lue)");
+  ok(nomme("scripts/cache.ps1:2", "bloquant", /monté sur \/var\/lib\/redis, pas sur le chemin des données \/data/),
+    "O20 : redis avec un volume sur un autre chemin que /data -> bloquant (continuation PowerShell lue)");
+  ok(nomme("compose.yaml (service base)", "bloquant", /WILL NOT PERSIST/),
+    "O20 : postgres 17 monté sur /var/lib/postgresql -> bloquant, la documentation de l'image citée (« WILL NOT PERSIST »)");
+  ok(nomme("compose.yaml (service file)", "bloquant", /est un tmpfs/), "O20 : mongo sur un tmpfs -> bloquant");
+  ok(nomme("README.md:10", "majeur", /docker start nodeodm : la commande qui CRÉE ce conteneur n'est écrite nulle part/),
+    "O20 : docker start d'un conteneur dont la commande de création n'est écrite nulle part -> majeur (le fait du 24/10/2026)");
+  ok(c20.filter(f => f.where.startsWith("README.md")).length === 1 && !c20.some(f => /suffit/.test(f.msg)),
+    "O20 : une phrase qui cite « docker start » hors du code Markdown n'est pas lue comme une commande");
+  ok(!c20.some(f => /nginx/.test(f.msg)), "O20 : nginx, image sans état, n'est pas jugé");
+  ok(nomme("COMPOSANTS-OPS.md:14", "bloquant", /« moteur-odm » : sa commande de création déclarée ne monte aucun volume sur \/var\/www\/data/),
+    "O20 : table, commande de création déclarée sans volume -> bloquant");
+  ok(nomme("COMPOSANTS-OPS.md:15", "majeur", /volume déclaré « cache-donnees » n'est pas celui que monte/),
+    "O20 : table, volume déclaré différent de celui que monte la commande -> majeur");
+  ok(["scripts/base-locale.sh:3", "compose.yaml (service base)", "compose.yaml (service file)"].every(ou => nomme(ou, "majeur", /sans ligne dans la table « Composants à état »/)),
+    "O20 : chaque composant à état lancé sans ligne dans la table est nommé");
+  ok(c20.length === 10, `O20 : la rouge porte ses 10 constats attendus, aucun de plus (obtenu ${c20.length})`);
+  const rV = o20(path.join(dir20, "verte"));
+  ok(rV.verdict === "PASS" && !(rV.findings || []).some(f => f.sev === "bloquant" || f.sev === "majeur"),
+    `O20 : verte -> PASS (volume nommé, dossier Windows, postgres 16 et 18 à leur chemin, compose court et long, table complète ; obtenu ${rV.verdict})`);
+  const tmp20 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o20-"));
+  try {
+    const poser = (rel, contenu) => { const p = path.join(tmp20, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, contenu, "utf8"); return p; };
+    const table = (cmd) => ["# Composants Ops", "", "## Composants à état", "", "| Composant | Volume | Commande de création |", "|---|---|---|", "| base-q | base-q-donnees | `" + cmd + "` |", ""].join("\n");
+    const sansVolume = "docker run -d --name base-q postgres:16";
+    const avecVolume = "docker run -d --name base-q -v base-q-donnees:/var/lib/postgresql/data postgres:16";
+    poser("remede/lancer.sh", sansVolume + "\n");
+    poser("remede/docs/projet/COMPOSANTS-OPS.md", table(sansVolume));
+    const rAvant = o20(path.join(tmp20, "remede"));
+    poser("remede/lancer.sh", avecVolume + "\n");
+    poser("remede/docs/projet/COMPOSANTS-OPS.md", table(avecVolume));
+    const rApres = o20(path.join(tmp20, "remede"));
+    ok(rAvant.verdict === "FAIL" && rApres.verdict === "PASS",
+      `O20 : remède joué (-v <volume>:/var/lib/postgresql/data dans le script et dans la table) -> PASS (TF-1013 ; avant ${rAvant.verdict}, après ${rApres.verdict})`);
+    poser("anonyme/lancer.sh", "docker run --rm -d --name b-mysql -v /var/lib/mysql mysql:8\ndocker run -d --name b-mongo -v /data/db mongo:7\n");
+    const cA = (o20(path.join(tmp20, "anonyme")).findings || []).filter(f => f.regle === "O20");
+    ok(cA.some(f => f.sev === "bloquant" && /b-mysql/.test(f.msg) && /ANONYME[\s\S]*--rm/.test(f.msg)) && cA.some(f => f.sev === "majeur" && /b-mongo/.test(f.msg) && /ANONYME/.test(f.msg)),
+      "O20 : volume anonyme avec --rm -> bloquant (détruit à l'arrêt), sans --rm -> majeur (rien ne le désigne)");
+    poser("sans-declaration/lancer.sh", avecVolume + "\n");
+    const rSD = o20(path.join(tmp20, "sans-declaration"));
+    ok(rSD.verdict === "FAIL" && (rSD.findings || []).some(f => f.sev === "majeur" && /aucune déclaration/.test(f.msg)),
+      "O20 : composant à état bien monté mais aucune COMPOSANTS-OPS.md -> majeur, la déclaration manque");
+    fs.mkdirSync(path.join(tmp20, "vide"));
+    ok(o20(path.join(tmp20, "vide")).verdict === "SKIP", "O20 borne : aucun conteneur ni déclaration -> SKIP, rien à juger");
+    poser("ancre/compose.yaml", "x-commun: &commun\n  restart: always\nservices:\n  base:\n    image: postgres:16\n");
+    const rAn = o20(path.join(tmp20, "ancre"));
+    ok(rAn.verdict === "FAIL" && (rAn.findings || []).some(f => f.sev === "majeur" && /non lu par le lecteur/.test(f.msg)),
+      "O20 borne : fichier compose que le lecteur refuse (ancre) -> FAIL dit, jamais un PASS silencieux");
+    ok(o20(path.join(tmp20, "racine-absente")).verdict === "SKIP", "O20 borne : racine introuvable -> SKIP");
+  } finally {
+    fs.rmSync(tmp20, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  const ref20 = JSON.parse(fs.readFileSync(path.join(ici, "..", "references", "CONTENEURS-A-ETAT.json"), "utf8"));
+  ok(ref20.format === "forge-ops/conteneurs-a-etat@1" && ref20.verifie_le === "2026-10-29"
+      && [...ref20.images, ...ref20.faits_docker].every(e => /^https:\/\//.test(e.source) && e.lu_le === "2026-10-29" && !!e.citation),
+    `O20 : référentiel daté, chaque image (${ref20.images.length}) et chaque fait Docker (${ref20.faits_docker.length}) cite sa source et sa date de lecture`);
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

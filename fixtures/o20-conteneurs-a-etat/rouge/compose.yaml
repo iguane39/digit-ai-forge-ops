@@ -1,0 +1,17 @@
+# Fixture ROUGE O-20 (TF-1986) : postgres 17 monté sur /var/lib/postgresql (la documentation de
+# l'image dit « WILL NOT PERSIST »), mongo sur un tmpfs ; nginx n'a pas d'état et n'est pas jugé.
+services:
+  base:
+    image: postgres:17
+    volumes:
+      - base-donnees:/var/lib/postgresql
+  file:
+    image: mongo:7
+    tmpfs:
+      - /data/db
+  web:
+    image: nginx:1.27
+    ports:
+      - "8080:80"
+volumes:
+  base-donnees:

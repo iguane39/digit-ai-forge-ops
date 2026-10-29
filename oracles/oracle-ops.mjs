@@ -44,6 +44,12 @@
 //       configuration de sauvegarde, et un exercice de restauration réussi depuis ≤ 12 mois, de
 //       durée ≤ RTO et d'intégrité constatée ; `actifs: []` exige `aucun_actif_critique` motivé
 //       (TF-1212 : CTL-D05-09, CTL-D12-06, CTL-D16-09 du référentiel d'audit). Introuvable : SKIP.
+//   O20 --conteneurs-a-etat <racine> [--composants <COMPOSANTS-OPS.md>] : chaque `docker run` et
+//       chaque service compose d'une image à état (référentiel references/CONTENEURS-A-ETAT.json ou
+//       table « Composants à état » de COMPOSANTS-OPS.md) monte un volume nommé ou un dossier de
+//       l'hôte sur le chemin exact de ses données de travail ; chaque `docker start` vise un
+//       conteneur dont la commande de création est écrite ; la table déclare volume et commande de
+//       création de chaque composant à état (TF-1986). Rien à juger : SKIP.
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -72,6 +78,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { correspond, hacherFichier } from "../scripts/lib-empreinte.mjs";
+import { lireYaml } from "../scripts/lib-yaml.mjs";
 
 const DOM = "Exploitation : cible déployée saine et restaurable";
 const NON_JUGE = [
@@ -966,6 +973,340 @@ if (args.includes("--sauvegarde")) {
   }
   const durs19 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin19(durs19.length ? "FAIL" : "PASS", durs19.length ? 1 : 0);
+}
+
+// ── O20 · un conteneur À ÉTAT garde ses données dans un VOLUME, et sa commande de création est
+// écrite (TF-1986, lot Produit-85 du 24/10/2026) ──────────────────────────────────────────────────
+//
+// LE FAIT. Un conteneur de traitement photogrammétrique tournait sans volume, et sa commande de
+// création n'était écrite nulle part : le README ne donnait que `docker start`. Docker Desktop a
+// redémarré à 19:59:42 ; la tâche de 612 photos, à 7 % après 3 h, a été perdue. Aucun mode de cet
+// oracle ne lisait un volume ni un `docker run` (note du registre du pilot, 27/10/2026).
+//
+// CE QUI EST JUGÉ, statique (aucune commande Docker exécutée, aucun appel réseau) :
+//   (1) chaque `docker run` / `docker container run` écrit dans les fichiers du produit (Markdown,
+//       scripts, sources) et chaque service d'un fichier compose, dont l'image est à état — image du
+//       référentiel references/CONTENEURS-A-ETAT.json, ou composant de la table « Composants à
+//       état » de COMPOSANTS-OPS.md —, monte un volume nommé ou un dossier de l'hôte EXACTEMENT sur
+//       le chemin de ses données de travail. Un volume anonyme, un tmpfs ou un volume posé sur un
+//       autre chemin n'en tiennent pas lieu (faits Docker cités au référentiel ; postgres 17 monté
+//       sur /var/lib/postgresql « WILL NOT PERSIST » selon la documentation de l'image) ;
+//   (2) chaque `docker start` / `docker restart` vise un conteneur dont la commande de création est
+//       écrite : un `docker run --name` lu, un service compose, ou une ligne de la table ;
+//   (3) la table « Composants à état » (colonnes Composant, Volume, Commande de création ; Image et
+//       Données de travail facultatives) déclare, pour chaque composant à état, son volume et sa
+//       commande de création, et cette commande monte le volume déclaré sur le chemin des données ;
+//       un composant à état lancé sans ligne dans la table est nommé.
+// Le chemin des données se lit dans la colonne « Données de travail », sinon au référentiel.
+const _VALEUR_RUN_O20 = new Set(["--add-host", "--annotation", "-a", "--attach", "--blkio-weight", "--blkio-weight-device",
+  "--cap-add", "--cap-drop", "--cgroup-parent", "--cgroupns", "--cidfile", "-c", "--cpu-shares", "--cpu-period", "--cpu-quota",
+  "--cpu-rt-period", "--cpu-rt-runtime", "--cpus", "--cpuset-cpus", "--cpuset-mems", "--detach-keys", "--device",
+  "--device-cgroup-rule", "--device-read-bps", "--device-read-iops", "--device-write-bps", "--device-write-iops", "--dns",
+  "--dns-option", "--dns-search", "--domainname", "--entrypoint", "-e", "--env", "--env-file", "--expose", "--gpus",
+  "--group-add", "--health-cmd", "--health-interval", "--health-retries", "--health-start-interval", "--health-start-period",
+  "--health-timeout", "-h", "--hostname", "--ip", "--ip6", "--ipc", "--isolation", "--kernel-memory", "-l", "--label",
+  "--label-file", "--link", "--link-local-ip", "--log-driver", "--log-opt", "--mac-address", "-m", "--memory",
+  "--memory-reservation", "--memory-swap", "--memory-swappiness", "--mount", "--name", "--network", "--net",
+  "--network-alias", "--oom-score-adj", "--pid", "--pids-limit", "--platform", "-p", "--publish", "--pull", "--restart",
+  "--runtime", "--security-opt", "--shm-size", "--stop-signal", "--stop-timeout", "--storage-opt", "--sysctl", "--tmpfs",
+  "--ulimit", "-u", "--user", "--userns", "--uts", "-v", "--volume", "--volume-driver", "--volumes-from", "-w", "--workdir"]);
+const _COURTES_BOOL_O20 = new Set(["d", "i", "t", "P", "q"]);
+const _EXCLUS_O20 = new Set(["node_modules", ".git", ".venv", "venv", "dist", "build", "vendor", "__pycache__", ".next",
+  "coverage", "tests", "test", "e2e", "fixtures", ".terraform"]);
+const _FICHIER_LU_O20 = /(\.(md|sh|bash|zsh|ps1|psm1|cmd|bat|mk|mjs|cjs|js|ts|py|ya?ml|txt)$)|^(Makefile|justfile|Taskfile)$/i;
+const _COMPOSE_O20 = /^(docker-)?compose(\.[\w.-]+)?\.ya?ml$/i;
+
+// Découpe une commande en mots, guillemets simples et doubles respectés ; s'arrête à un opérateur de
+// shell (&&, ||, ;, |, >, <) ou à un accent grave (fin d'un code en ligne Markdown).
+function _motsCommandeO20(texte) {
+  const mots = [];
+  let cur = "", q = null, a = false;
+  for (let k = 0; k < texte.length; k++) {
+    const ch = texte[k];
+    if (q) { if (ch === q) q = null; else cur += ch; continue; }
+    if (ch === '"' || ch === "'") { q = ch; a = true; continue; }
+    if (ch === "`") break;
+    if (/\s/.test(ch)) { if (a) { mots.push(cur); cur = ""; a = false; } continue; }
+    if (!a && /[;&|<>]/.test(ch)) break;
+    if (a && /[;|<>]/.test(ch)) { mots.push(cur); cur = ""; a = false; break; }
+    if (a && ch === "&" && texte[k + 1] === "&") { mots.push(cur); cur = ""; a = false; break; }
+    cur += ch; a = true;
+  }
+  if (a) mots.push(cur);
+  // Fin d'une chaîne de code (`execSync("docker run … img")`) : la ponctuation de clôture n'est pas l'image.
+  return mots.map(m => m.replace(/["')`;,\]}]+$/, "")).filter(m => m !== "");
+}
+
+// Un montage de `-v` / `--volume` ou d'un volume compose court : source:cible[:options], une lettre de
+// lecteur Windows en tête de la source étant gardée.
+function _montageCourtO20(valeur) {
+  let s = String(valeur), lecteur = "";
+  if (/^[A-Za-z]:[\\/]/.test(s)) { lecteur = s.slice(0, 2); s = s.slice(2); }
+  const parts = s.split(":");
+  if (parts.length === 1) return { type: "anonyme", cible: _cheminO20(lecteur + parts[0]) };
+  return { type: "volume", source: lecteur + parts[0], cible: _cheminO20(parts[1]) };
+}
+function _montageLongO20(valeur) {
+  const champs = {};
+  for (const part of String(valeur).split(",")) {
+    const i = part.indexOf("=");
+    if (i > 0) champs[part.slice(0, i).trim().toLowerCase()] = part.slice(i + 1).trim();
+  }
+  const type = (champs.type || "volume").toLowerCase();
+  const cible = _cheminO20(champs.target || champs.destination || champs.dst || "");
+  const source = champs.source || champs.src || "";
+  if (type === "tmpfs") return { type: "tmpfs", cible };
+  if (type === "volume" && !source) return { type: "anonyme", cible };
+  return { type: "volume", source, cible };
+}
+const _cheminO20 = (p) => { const s = String(p ?? "").trim().replace(/\\/g, "/"); return s.length > 1 ? s.replace(/\/+$/, "") : s; };
+
+// Lecture des options d'un `docker run` : nom, --rm, montages, image.
+function _lireRunO20(mots) {
+  const r = { nom: null, rm: false, montages: [], volumesFrom: [], image: null };
+  for (let k = 0; k < mots.length; k++) {
+    const m = mots[k];
+    if (m === "--") { r.image = mots[k + 1] ?? null; break; }
+    if (m.startsWith("--")) {
+      const eg = m.indexOf("=");
+      const nom = eg > 0 ? m.slice(0, eg) : m;
+      let val = eg > 0 ? m.slice(eg + 1) : null;
+      if (val === null && _VALEUR_RUN_O20.has(nom)) val = mots[++k] ?? "";
+      if (nom === "--rm") r.rm = true;
+      else if (nom === "--name") r.nom = val;
+      else if (nom === "--volume") r.montages.push(_montageCourtO20(val));
+      else if (nom === "--mount") r.montages.push(_montageLongO20(val));
+      else if (nom === "--tmpfs") r.montages.push({ type: "tmpfs", cible: _cheminO20(String(val).split(":")[0]) });
+      else if (nom === "--volumes-from") r.volumesFrom.push(val);
+      continue;
+    }
+    if (m.startsWith("-") && m.length > 1) {
+      const lettre = m[1];
+      const opt = "-" + lettre;
+      if (_VALEUR_RUN_O20.has(opt)) {
+        const val = m.length > 2 ? m.slice(2) : (mots[++k] ?? "");
+        if (opt === "-v") r.montages.push(_montageCourtO20(val));
+        continue;
+      }
+      // Grappe de drapeaux sans valeur (-d, -it, -dit) ; un drapeau inconnu est lu sans valeur.
+      continue;
+    }
+    r.image = m;
+    break;
+  }
+  return r;
+}
+
+// Référence d'image normalisée : dépôt sans registre Docker Hub ni « library/ », étiquette, majeure.
+function _imageO20(ref) {
+  const brut = String(ref ?? "").trim();
+  if (!brut || /[$%{]/.test(brut)) return { brut, depot: null, etiquette: null, majeure: null };
+  let s = brut.split("@")[0];
+  let etiquette = null;
+  const dernierSlash = s.lastIndexOf("/");
+  const deuxPoints = s.lastIndexOf(":");
+  if (deuxPoints > dernierSlash) { etiquette = s.slice(deuxPoints + 1); s = s.slice(0, deuxPoints); }
+  s = s.toLowerCase().replace(/^(docker\.io|index\.docker\.io|registry-1\.docker\.io)\//, "").replace(/^library\//, "");
+  const mj = /^(\d+)/.exec(etiquette || "");
+  return { brut, depot: s, etiquette, majeure: mj ? Number(mj[1]) : null };
+}
+
+if (args.includes("--conteneurs-a-etat")) {
+  const racine20 = args[args.indexOf("--conteneurs-a-etat") + 1];
+  const iComp = args.indexOf("--composants");
+  const DOM20 = "Exploitation : un conteneur à état garde ses données dans un volume, et sa commande de création est écrite (O-20)";
+  const NJ20 = [
+    "les plateformes GÉRÉES (Railway, Container Apps, Cloud Run, App Runner…) : leurs volumes se déclarent dans la plateforme, hors des fichiers lus ici",
+    "une image hors du référentiel references/CONTENEURS-A-ETAT.json et absente de la table « Composants à état » : elle n'est pas reconnue à état — c'est au produit de la déclarer",
+    "une image ou un nom résolus par une variable ($IMAGE, %NOM%) : le conteneur n'est reconnu que par son --name déclaré dans la table",
+    "la VÉRITÉ du chemin déclaré en « Données de travail » et la persistance effective côté hôte (disque, droits, sauvegarde : O-19)",
+    "une commande construite dynamiquement dans du code, ou une option de `docker run` inconnue suivie d'une valeur, qui peut fausser la lecture de l'image",
+    "un conteneur créé hors des fichiers du produit (à la main, par un outil tiers) : seul l'écrit se lit — c'est l'écart que la règle (2) fait voir",
+  ];
+  const fin20 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM20, artefact: racine20 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O20", msg: "chaque composant à état monte un volume sur le chemin de ses données, et sa commande de création est écrite et déclarée", where: racine20 }], non_juge: NJ20 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!racine20 || !fs.existsSync(racine20) || !fs.statSync(racine20).isDirectory()) { add("info", "O20", "racine du produit introuvable (un dossier est attendu)", String(racine20)); fin20("SKIP", 2); }
+  let ref20 = null;
+  try { ref20 = JSON.parse(fs.readFileSync(new URL("../references/CONTENEURS-A-ETAT.json", import.meta.url), "utf8")); }
+  catch (e) { add("bloquant", "O20", `référentiel references/CONTENEURS-A-ETAT.json illisible (${String(e.message).slice(0, 80)}) : aucune image à état n'est reconnue, verdict refusé`, "references/CONTENEURS-A-ETAT.json"); fin20("FAIL", 1); }
+  const entreeRef = (img) => (ref20.images || []).find(e => e.image === img.depot
+    && (e.majeure_max === undefined || (img.majeure !== null && img.majeure <= e.majeure_max))
+    && (e.majeure_min === undefined || (img.majeure !== null ? img.majeure >= e.majeure_min : !!e.sans_majeure)));
+  const rel = (f) => path.relative(racine20, f).split(path.sep).join("/");
+
+  // (3) La déclaration : table « Composants à état » de COMPOSANTS-OPS.md.
+  const declPath = iComp >= 0 ? args[iComp + 1] : path.join(racine20, "docs", "projet", "COMPOSANTS-OPS.md");
+  const declaration = { existe: fs.existsSync(declPath), table: false, lignes: [] };
+  if (declaration.existe) {
+    for (const t of _tablesMarkdown(fs.readFileSync(declPath, "utf8"))) {
+      const iC = _colonne(t, "composant"), iV = _colonne(t, "volume"), iK = _colonne(t, "commande de creation");
+      if (iC < 0 || iV < 0 || iK < 0) continue;
+      declaration.table = true;
+      const iI = _colonne(t, "image"), iD = _colonne(t, "donnees de travail");
+      t.lignes.forEach((l, n) => {
+        const composant = _valeurCellule(l[iC]);
+        if (!composant || /^aucun/.test(_norm(composant))) return;
+        declaration.lignes.push({ composant, image: iI >= 0 ? _valeurCellule(l[iI]) : "", donnees: iD >= 0 ? _cheminO20(_valeurCellule(l[iD])) : "",
+          volume: _valeurCellule(l[iV]), commande: String(l[iK] ?? "").replace(/`/g, "").trim(), ligne: t.ligne + 2 + n });
+      });
+    }
+  }
+  // Une ligne se reconnaît à son nom (--name, service, container_name). Sans nom, à son image, si une
+  // seule ligne la porte : deux conteneurs de la même image ne se confondent jamais.
+  const ligneDe = (nom, img) => {
+    if (nom) return declaration.lignes.find(d => _norm(d.composant) === _norm(nom)) || null;
+    const memeImage = img?.depot ? declaration.lignes.filter(d => d.image && _imageO20(d.image).depot === img.depot) : [];
+    return memeImage.length === 1 ? memeImage[0] : null;
+  };
+  const cheminsDonnees = (decl, img) => decl?.donnees ? [decl.donnees] : (img?.depot ? (entreeRef(img)?.donnees || []).map(_cheminO20) : []);
+
+  // Lecture des fichiers du produit : commandes Docker et fichiers compose.
+  const fichiers = [];
+  (function parcourir(dir, prof) {
+    if (prof > 4) return;
+    let noms = [];
+    try { noms = fs.readdirSync(dir); } catch { return; }
+    for (const nom of noms) {
+      if (_EXCLUS_O20.has(nom)) continue;
+      const q = path.join(dir, nom);
+      let st; try { st = fs.statSync(q); } catch { continue; }
+      if (st.isDirectory()) parcourir(q, prof + 1);
+      else if (st.size < 2_000_000 && (_FICHIER_LU_O20.test(nom) || _COMPOSE_O20.test(nom))) fichiers.push(q);
+    }
+  })(racine20, 0);
+
+  const runs = [], starts = [], services = [];
+  for (const f of fichiers) {
+    let texte; try { texte = fs.readFileSync(f, "utf8"); } catch { continue; }
+    if (_COMPOSE_O20.test(path.basename(f))) {
+      let doc = null;
+      try { doc = lireYaml(texte).valeur; }
+      catch (e) { add("majeur", "O20", `fichier compose non lu par le lecteur de l'oracle (${String(e.message).slice(0, 90)}${e.ligne ? `, ligne ${e.ligne}` : ""}) : ses services ne sont pas jugés — un fichier non lu ne vaut jamais PASS`, rel(f)); continue; }
+      const sv = doc && typeof doc === "object" && doc.services && typeof doc.services === "object" ? doc.services : {};
+      for (const [nomService, s] of Object.entries(sv)) {
+        if (!s || typeof s !== "object") continue;
+        const montages = [];
+        for (const v of Array.isArray(s.volumes) ? s.volumes : []) {
+          if (typeof v === "string") montages.push(_montageCourtO20(v));
+          else if (v && typeof v === "object") {
+            const type = String(v.type || "volume").toLowerCase();
+            const cible = _cheminO20(v.target || "");
+            if (type === "tmpfs") montages.push({ type: "tmpfs", cible });
+            else if (type === "volume" && !v.source) montages.push({ type: "anonyme", cible });
+            else montages.push({ type: "volume", source: String(v.source ?? ""), cible });
+          }
+        }
+        for (const t of [].concat(s.tmpfs ?? [])) if (typeof t === "string") montages.push({ type: "tmpfs", cible: _cheminO20(t.split(":")[0]) });
+        services.push({ ou: `${rel(f)} (service ${nomService})`, nom: nomService, conteneur: typeof s.container_name === "string" ? s.container_name : null,
+          image: _imageO20(s.image), rm: false, montages, volumesFrom: [].concat(s.volumes_from ?? []) });
+      }
+      continue;
+    }
+    // La table de la déclaration est jugée par la règle (3) : ses commandes ne se relisent pas ici.
+    if (declaration.existe && path.resolve(f) === path.resolve(declPath)) continue;
+    // Lignes logiques : continuation shell « \ », PowerShell « ` », cmd « ^ ». Dans un Markdown, seul
+    // le code se lit (bloc clôturé ou code en ligne) : une phrase qui cite « docker start » n'est pas
+    // une commande.
+    const estMd = /\.md$/i.test(f);
+    let dansBloc = false;
+    const brutes = texte.split(/\r?\n/);
+    for (let n = 0; n < brutes.length; n++) {
+      let ligne = brutes[n];
+      const debut = n;
+      if (estMd && /^\s*(```|~~~)/.test(ligne)) { dansBloc = !dansBloc; continue; }
+      while (/(\\|`|\^)\s*$/.test(ligne) && n + 1 < brutes.length && !(estMd && !dansBloc)) { ligne = ligne.replace(/(\\|`|\^)\s*$/, " ") + brutes[++n].trim(); }
+      const segments = !estMd || dansBloc ? [ligne] : [...ligne.matchAll(/`([^`]+)`/g)].map(x => x[1]);
+      for (const segment of segments) {
+      const re = /\bdocker(?:\.exe)?\s+(?:container\s+)?(run|start|restart)\s+([^\n]*)/g;
+      let m;
+      while ((m = re.exec(segment))) {
+        const mots = _motsCommandeO20(m[2]);
+        const ou = `${rel(f)}:${debut + 1}`;
+        if (m[1] === "run") { const r = _lireRunO20(mots); runs.push({ ou, ...r, image: _imageO20(r.image) }); }
+        else {
+          const noms = [];
+          for (let k = 0; k < mots.length; k++) {
+            const w = mots[k];
+            if (/^(--detach-keys|--checkpoint|--checkpoint-dir|-t|--time|-s|--signal)$/.test(w)) { k++; continue; }
+            if (w.startsWith("-")) continue;
+            noms.push(w);
+          }
+          starts.push({ ou, verbe: m[1], noms });
+        }
+      }
+      }
+    }
+  }
+  if (!runs.length && !starts.length && !services.length && !declaration.lignes.length) {
+    if (!F.length) add("info", "O20", `aucun docker run, docker start, service compose ni composant à état déclaré parmi ${fichiers.length} fichier(s) lus — rien à juger`, racine20);
+    const dursVides = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+    fin20(dursVides.length ? "FAIL" : "SKIP", dursVides.length ? 1 : 2);
+  }
+
+  // (1) Le volume, sur le chemin exact des données de travail.
+  const sansLigne = [];
+  const jugerMontages = (c, genre) => {
+    const decl = ligneDe(c.nom || c.conteneur, c.image) || (c.conteneur ? ligneDe(c.conteneur, null) : null);
+    const ref = c.image.depot ? entreeRef(c.image) : null;
+    if (!decl && !ref) return;
+    const chemins = cheminsDonnees(decl, c.image);
+    const qui = `${genre} ${c.image.brut || "(image non résolue)"}${c.nom ? ` (${c.nom})` : ""}`;
+    if (!decl) sansLigne.push({ qui, ou: c.ou });
+    if (!chemins.length) { add("majeur", "O20", `${qui} : composant à état dont le chemin des données de travail n'est ni déclaré (colonne « Données de travail ») ni au référentiel — le volume ne peut pas être confronté à son chemin`, c.ou); return; }
+    const montes = c.montages.filter(x => x.type === "volume" && chemins.includes(x.cible));
+    if (montes.length) return;
+    const citation = ref?.citation ? ` ; documentation de l'image (${ref.source}, lue le ${ref.lu_le}) : « ${ref.citation} »` : "";
+    const anonyme = c.montages.find(x => x.type === "anonyme" && chemins.includes(x.cible));
+    const tmpfs = c.montages.find(x => x.type === "tmpfs" && chemins.includes(x.cible));
+    const ailleurs = c.montages.filter(x => x.type === "volume");
+    if (tmpfs) add("bloquant", "O20", `${qui} : ${chemins.join(" ou ")} est un tmpfs — « When the container stops, the tmpfs mount is removed, and files written there won't be persisted. » (docs.docker.com/engine/storage/tmpfs/, lue le 29/10/2026) ; monter un volume nommé : -v <volume>:${chemins[0]} (TF-1986)`, c.ou);
+    else if (anonyme && c.rm) add("bloquant", "O20", `${qui} : volume ANONYME sur ${chemins[0]} avec --rm — il est détruit à l'arrêt du conteneur (« the anonymous volume associated with the container is destroyed », docs.docker.com/engine/storage/volumes/, lue le 29/10/2026) ; nommer le volume : -v <volume>:${chemins[0]} (TF-1986)`, c.ou);
+    else if (anonyme) add("majeur", "O20", `${qui} : volume ANONYME sur ${chemins[0]} — sans nom, le prochain docker run ne le rattache pas et les données restent dans un volume que rien ne désigne ; nommer le volume : -v <volume>:${chemins[0]} (TF-1986)`, c.ou);
+    else if (c.volumesFrom.length) add("info", "O20", `${qui} : volumes hérités de ${c.volumesFrom.join(", ")} (--volumes-from) — non confrontés au chemin ${chemins[0]}`, c.ou);
+    else if (ailleurs.length) add("bloquant", "O20", `${qui} : volume monté sur ${ailleurs.map(x => x.cible).join(", ")}, pas sur le chemin des données ${chemins.join(" ou ")} — les données restent dans la couche éphémère du conteneur${citation} (TF-1986)`, c.ou);
+    else add("bloquant", "O20", `${qui} : composant à état SANS -v ni --mount — « Data written to the container layer doesn't persist when the container is destroyed. » (docs.docker.com/engine/storage/, lue le 29/10/2026)${c.rm ? " ; avec --rm, le conteneur est retiré à son arrêt" : ""} ; monter un volume nommé : -v <volume>:${chemins[0]} (TF-1986)`, c.ou);
+  };
+  for (const r of runs) jugerMontages(r, "docker run");
+  for (const s of services) jugerMontages(s, "service compose");
+
+  // (2) Un conteneur démarré a sa commande de création écrite.
+  const crees = new Set([...runs.map(r => r.nom), ...services.flatMap(s => [s.nom, s.conteneur])].filter(Boolean).map(_norm));
+  for (const s of starts) for (const nom of s.noms) {
+    if (/[$%]/.test(nom)) continue;
+    if (crees.has(_norm(nom)) || ligneDe(nom, null)) continue;
+    add("majeur", "O20", `docker ${s.verbe} ${nom} : la commande qui CRÉE ce conteneur n'est écrite nulle part (aucun docker run --name ${nom}, aucun service compose, aucune ligne de la table « Composants à état ») — s'il porte un état, son volume ne peut pas être vérifié, et le conteneur ne se recrée pas à l'identique (TF-1986)`, s.ou);
+  }
+
+  // (3) La table déclare volume et commande de création, et la commande monte le volume déclaré.
+  for (const d of declaration.lignes) {
+    const ou = `${path.basename(declPath)}:${d.ligne}`;
+    if (_vide(d.volume)) add("bloquant", "O20", `composant à état « ${d.composant} » sans VOLUME déclaré (TF-1986)`, ou);
+    if (_vide(d.commande)) { add("bloquant", "O20", `composant à état « ${d.composant} » sans COMMANDE DE CRÉATION déclarée — le fait du 24/10/2026 : un README qui ne donne que docker start (TF-1986)`, ou); continue; }
+    const mRun = /\bdocker(?:\.exe)?\s+(?:container\s+)?run\s+(.*)$/.exec(d.commande);
+    if (!mRun) {
+      if (/\bdocker[\s-]compose\b/.test(d.commande)) add("info", "O20", `composant à état « ${d.composant} » créé par compose : son service est jugé dans le fichier compose`, ou);
+      else add("majeur", "O20", `composant à état « ${d.composant} » : la commande de création déclarée n'est ni un docker run ni un docker compose — le volume ne peut pas y être lu (TF-1986)`, ou);
+      continue;
+    }
+    const r = _lireRunO20(_motsCommandeO20(mRun[1]));
+    const img = _imageO20(r.image || d.image);
+    const chemins = cheminsDonnees(d, img);
+    if (!chemins.length) { add("majeur", "O20", `composant à état « ${d.composant} » : chemin des données de travail ni déclaré (colonne « Données de travail ») ni au référentiel pour l'image ${img.brut || "(inconnue)"} (TF-1986)`, ou); continue; }
+    const monte = r.montages.find(x => x.type === "volume" && chemins.includes(x.cible));
+    if (!monte) { add("bloquant", "O20", `composant à état « ${d.composant} » : sa commande de création déclarée ne monte aucun volume sur ${chemins.join(" ou ")} (TF-1986)`, ou); continue; }
+    if (!_vide(d.volume) && _cheminO20(monte.source) !== _cheminO20(d.volume))
+      add("majeur", "O20", `composant à état « ${d.composant} » : le volume déclaré « ${d.volume} » n'est pas celui que monte sa commande de création (« ${monte.source} ») (TF-1986)`, ou);
+  }
+  if (sansLigne.length) {
+    const liste = sansLigne.map(s => `${s.qui} [${s.ou}]`).join(" ; ");
+    if (!declaration.existe) add("majeur", "O20", `${sansLigne.length} composant(s) à état lancé(s) et aucune déclaration (${rel(declPath)} absent) : volume et commande de création ne sont écrits nulle part d'opposable — ${liste} (TF-1986)`, rel(declPath));
+    else if (!declaration.table) add("majeur", "O20", `${path.basename(declPath)} sans table « Composants à état » (colonnes Composant, Volume, Commande de création) alors que ${sansLigne.length} composant(s) à état sont lancés — ${liste} (TF-1986)`, path.basename(declPath));
+    else for (const s of sansLigne) add("majeur", "O20", `${s.qui} : composant à état lancé sans ligne dans la table « Composants à état » de ${path.basename(declPath)} (TF-1986)`, s.ou);
+  }
+  const durs20 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin20(durs20.length ? "FAIL" : "PASS", durs20.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

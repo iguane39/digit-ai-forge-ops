@@ -162,6 +162,14 @@ findings,non_juge}`, exit 0/1/2 :
   la restauration des DONNÉES. Verdict brut (FAIL, exit 1) ; la porte M-17 du pilot le lit en
   avertissement tant que l'humain n'en a pas fait un blocage.
 
+- **O20** `--conteneurs-a-etat <racine> [--composants <COMPOSANTS-OPS.md>]` (TF-1986, lot Produit-85 du
+  24/10/2026). Une image est à état si le référentiel daté `references/CONTENEURS-A-ETAT.json` ou la table
+  « Composants à état » de `COMPOSANTS-OPS.md` la nomme. Chacun de ses `docker run` et services compose monte
+  alors un volume nommé ou un dossier de l'hôte sur le chemin exact de ses données. Chaque `docker start` vise
+  un conteneur dont la commande de création est écrite, et la table déclare volume et commande de création.
+  Mesure fondatrice : un conteneur sans volume, créé par une commande écrite nulle part, a perdu une tâche de
+  612 photos au redémarrage de Docker. Lecture seule, aucune commande Docker exécutée.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les
@@ -194,7 +202,7 @@ mise à jour, restaurée — chaque état validé par l'oracle (fixture verte), 
 type prouvé refusé (fixtures rouges : healthcheck en échec, journal corrompu, pointeur
 fantôme, restauration sans précédent, canary dégradé, dérive O-6, écart d'empreinte O-7
 (voies deployer et canary), mesures hors seuils SLO, base production ou non déclarée à
-réinitialiser). L'exercice réel de `reinitialiser-base` sur un conteneur Postgres jetable se joue à
+réinitialiser, conteneur à état sans volume ou recréé par une commande écrite nulle part). L'exercice réel de `reinitialiser-base` sur un conteneur Postgres jetable se joue à
 la demande : `FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs`. À rejouer après toute
 modification.
 

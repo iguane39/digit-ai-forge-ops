@@ -1,0 +1,103 @@
+{
+  "format": "forge-ops/conteneurs-a-etat@1",
+  "role": "Référentiel daté de O-20 (TF-1986) : où chaque image à état connue écrit ses données de travail, et les faits Docker qui font d'un volume la seule persistance. Donnée volatile (loi n° 4) : une image qui change de répertoire de données (postgres 18) se corrige ici, pas dans le code de l'oracle.",
+  "verifie_le": "2026-10-29",
+  "faits_docker": [
+    {
+      "fait": "couche d'écriture éphémère",
+      "citation": "Data written to the container layer doesn't persist when the container is destroyed.",
+      "source": "https://docs.docker.com/engine/storage/",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "fait": "un volume survit au conteneur",
+      "citation": "A volume's contents exist outside the lifecycle of a given container.",
+      "source": "https://docs.docker.com/engine/storage/volumes/",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "fait": "un volume anonyme est détruit avec --rm",
+      "citation": "Just like named volumes, anonymous volumes persist even if you remove the container that uses them, except if you use the --rm flag when creating the container, in which case the anonymous volume associated with the container is destroyed.",
+      "source": "https://docs.docker.com/engine/storage/volumes/",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "fait": "un montage tmpfs n'est pas persistant",
+      "citation": "When the container stops, the tmpfs mount is removed, and files written there won't be persisted.",
+      "source": "https://docs.docker.com/engine/storage/tmpfs/",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "fait": "syntaxe des deux options de montage",
+      "citation": "docker run --mount type=volume,src=<volume-name>,dst=<mount-path> ; docker run --volume <volume-name>:<mount-path>",
+      "source": "https://docs.docker.com/engine/storage/volumes/",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "fait": "--rm retire le conteneur et ses volumes anonymes",
+      "citation": "Automatically remove the container and its associated anonymous volumes when it exits",
+      "source": "https://docs.docker.com/reference/cli/docker/container/run/",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "fait": "volumes d'un service compose",
+      "citation": "target: The path in the container where the volume is mounted.",
+      "source": "https://docs.docker.com/reference/compose-file/services/",
+      "lu_le": "2026-10-29"
+    }
+  ],
+  "images": [
+    {
+      "image": "postgres",
+      "majeure_max": 17,
+      "donnees": ["/var/lib/postgresql/data"],
+      "citation": "Mount the data volume at /var/lib/postgresql/data and not at /var/lib/postgresql. Mounts at the latter path WILL NOT PERSIST database data when the container is re-created.",
+      "source": "https://github.com/docker-library/docs/blob/master/postgres/README.md",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "image": "postgres",
+      "majeure_min": 18,
+      "sans_majeure": true,
+      "donnees": ["/var/lib/postgresql"],
+      "citation": "The defined VOLUME was changed in 18 and above to /var/lib/postgresql. Mounts and volumes should be targeted at the updated location.",
+      "source": "https://github.com/docker-library/docs/blob/master/postgres/README.md",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "image": "mysql",
+      "donnees": ["/var/lib/mysql"],
+      "citation": "as /var/lib/mysql inside the container, where MySQL by default will write its data files.",
+      "source": "https://github.com/docker-library/docs/blob/master/mysql/README.md",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "image": "mariadb",
+      "donnees": ["/var/lib/mysql"],
+      "citation": "mounts the /my/own/datadir directory from the underlying host system as /var/lib/mysql inside the container, where MariaDB by default will write its data files.",
+      "source": "https://github.com/docker-library/docs/blob/master/mariadb/README.md",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "image": "mongo",
+      "donnees": ["/data/db"],
+      "citation": "as /data/db inside the container, where MongoDB by default will write its data files.",
+      "source": "https://github.com/docker-library/docs/blob/master/mongo/README.md",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "image": "redis",
+      "donnees": ["/data"],
+      "citation": "If persistence is enabled, data is stored in the VOLUME /data",
+      "source": "https://github.com/docker-library/docs/blob/master/redis/README.md",
+      "lu_le": "2026-10-29"
+    },
+    {
+      "image": "opendronemap/nodeodm",
+      "donnees": ["/var/www/data"],
+      "citation": "If you want to store results on a separate drive, map the /var/www/data folder to the location of your drive: docker run -p 3000:3000 -v /mnt/external_hd:/var/www/data opendronemap/nodeodm",
+      "source": "https://github.com/OpenDroneMap/NodeODM/blob/master/README.md",
+      "lu_le": "2026-10-29"
+    }
+  ]
+}

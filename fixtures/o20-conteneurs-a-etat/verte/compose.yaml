@@ -1,0 +1,20 @@
+# Fixture VERTE O-20 (TF-1986) : postgres 18 monté sur /var/lib/postgresql (son VOLUME depuis la
+# version 18), mongo par la syntaxe longue ; nginx n'a pas d'état et n'est pas jugé.
+services:
+  base:
+    image: postgres:18
+    volumes:
+      - base-donnees:/var/lib/postgresql
+  file:
+    image: mongo:7
+    volumes:
+      - type: volume
+        source: file-donnees
+        target: /data/db
+  web:
+    image: nginx:1.27
+    ports:
+      - "8080:80"
+volumes:
+  base-donnees:
+  file-donnees:

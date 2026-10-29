@@ -71,6 +71,10 @@ node oracles/oracle-ops.mjs --revisions-actives revisions.json
 # exemple de déclaration : fixtures/o19-sauvegarde/verte.json — porte M-17 de l'étape MEP du pilot
 node oracles/oracle-ops.mjs --sauvegarde forge/etapes/mep/SAUVEGARDE.json
 
+# Oracle O-20 : un conteneur à état garde ses données dans un volume, et sa commande de création est écrite
+# exemple : fixtures/o20-conteneurs-a-etat/verte/ — référentiel des images : references/CONTENEURS-A-ETAT.json
+node oracles/oracle-ops.mjs --conteneurs-a-etat <racine-du-produit> [--composants docs/projet/COMPOSANTS-OPS.md]
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -127,6 +131,7 @@ FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 | O10 | `--manifeste-servi <fichier>` : chaque paquet épinglé par version (`==`) dans un `requirements.txt` SERVI porte au moins une empreinte `--hash=` — une version republiée sous le même numéro entrerait sinon sans être vue (TF-1042) |
 | O18 | `--revisions-actives <fichier.json>` : sur une sortie capturée de `az containerapp revision list -o json`, chaque application ne garde actives que ses révisions servies et une N-1 saine à 0 % ; toute révision en trop est nommée avec sa commande de désactivation (TF-1639) |
 | O19 | `--sauvegarde <declaration.json> [--le AAAA-MM-JJ]` : sur une déclaration `forge-ops/sauvegarde@1`, chaque actif de données critique porte RPO, RTO, mécanisme, fréquence (≤ RPO) et configuration de sauvegarde, et un exercice de restauration réussi depuis ≤ 12 mois, de durée ≤ RTO et d'intégrité constatée ; `actifs: []` exige `aucun_actif_critique` motivé (TF-1212 ; CTL-D05-09, CTL-D12-06, CTL-D16-09 du référentiel d'audit) |
+| O20 | `--conteneurs-a-etat <racine> [--composants <COMPOSANTS-OPS.md>]` : chaque `docker run` et chaque service compose d'une image à état monte un volume nommé ou un dossier de l'hôte sur le chemin exact de ses données ; chaque `docker start` vise un conteneur dont la commande de création est écrite ; la table « Composants à état » déclare volume et commande de création (TF-1986) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.
@@ -228,6 +233,43 @@ trois échecs types, puis le détruit. Il ne télécharge aucune image.
 - la portabilité des commandes déclarées : elles passent au shell du poste (`cmd.exe` sous Windows,
   `/bin/sh` ailleurs), où une même commande peut se lire autrement ;
 - toute exécution Supabase.
+
+## Un conteneur à état garde ses données dans un volume (O-20, TF-1986)
+
+`node oracles/oracle-ops.mjs --conteneurs-a-etat <racine-du-produit> [--composants <COMPOSANTS-OPS.md>]`
+lit les fichiers du produit sans rien exécuter. Le fait qui l'a fait naître, le 24/10/2026 : un conteneur de
+traitement tournait sans volume, et sa commande de création n'était écrite nulle part (le README ne donnait
+que `docker start`). Au redémarrage de Docker, une tâche de 612 photos, à 7 % après 3 h, a été perdue.
+
+Les 3 règles nomment chaque écart à sa ligne :
+
+1. **Le volume, sur le chemin exact des données.** Chaque `docker run` (scripts shell, PowerShell, cmd,
+   sources, code des fichiers Markdown) et chaque service d'un fichier compose dont l'image est à état monte
+   un volume nommé ou un dossier de l'hôte sur le chemin de ses données de travail. Un volume anonyme, un
+   `tmpfs` ou un volume posé ailleurs n'en tiennent pas lieu. Exemple documenté : postgres 17 monté sur
+   `/var/lib/postgresql` « WILL NOT PERSIST », le chemin est `/var/lib/postgresql/data` jusqu'à la 17 et
+   `/var/lib/postgresql` depuis la 18.
+2. **La commande de création est écrite.** Chaque `docker start` ou `docker restart` vise un conteneur créé
+   par un `docker run --name` lu, par un service compose, ou déclaré dans la table.
+3. **La déclaration.** `COMPOSANTS-OPS.md` du produit (par défaut `docs/projet/COMPOSANTS-OPS.md`) porte une
+   table « Composants à état ». Un composant à état lancé sans ligne dans cette table est nommé.
+
+| Colonne | Contenu |
+|---|---|
+| `Composant` | le nom du conteneur (`--name`) ou du service compose |
+| `Image` | facultative ; sert à reconnaître un conteneur sans nom |
+| `Données de travail` | facultative pour une image du référentiel, exigée sinon : le chemin, dans le conteneur, où il écrit |
+| `Volume` | le volume nommé ou le dossier de l'hôte |
+| `Commande de création` | le `docker run` complet, qui doit monter ce volume sur ce chemin, ou `docker compose up -d <service>` |
+
+Une image est reconnue à état par cette table ou par le référentiel daté `references/CONTENEURS-A-ETAT.json`
+(postgres, mysql, mariadb, mongo, redis, opendronemap/nodeodm, lus le 29/10/2026 dans la documentation de
+chaque image). Exemple complet : `fixtures/o20-conteneurs-a-etat/verte/`. Sans conteneur ni déclaration :
+SKIP. Un fichier compose que le lecteur refuse (ancre, alias) rend FAIL, jamais un PASS silencieux.
+
+**Ce qui n'est pas jugé :** les volumes des plateformes gérées (Railway, Container Apps, Cloud Run) ; une image
+hors référentiel et absente de la table ; une image résolue par une variable ; la vérité du chemin déclaré ;
+une commande construite dynamiquement dans du code ; un conteneur créé hors des fichiers du produit.
 
 ## Un travail planifié s'exerce (O-8, TF-0527)
 
