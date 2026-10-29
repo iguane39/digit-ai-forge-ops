@@ -1,0 +1,32 @@
+{
+ "format": "forge-ops/bases@1",
+ "produit": "produit-exemple",
+ "bases": [
+  {
+   "nom": "production",
+   "environnement": "production",
+   "moteur": "postgres-docker",
+   "adresse": { "hote": "db.produit-exemple.invalid", "port": 5432, "base": "app", "utilisateur": "app", "conteneur": "produit-exemple-pg-prod" },
+   "migrations": { "commande": "npm run db:migrate", "verification": "npm run db:migrate:status" },
+   "donnees": { "nature": "synthetique", "commande": "npm run db:seed" },
+   "verification": { "tables": ["clients"] }
+  },
+  {
+   "nom": "sans-environnement",
+   "moteur": "postgres-docker",
+   "adresse": { "hote": "localhost", "port": 55433, "base": "app_dev", "utilisateur": "postgres", "conteneur": "produit-exemple-pg-dev" },
+   "migrations": { "commande": "npm run db:migrate", "verification": "npm run db:migrate:status" },
+   "donnees": { "nature": "synthetique", "commande": "npm run db:seed" },
+   "verification": { "tables": ["clients"] }
+  },
+  {
+   "nom": "qualif-sur-serveur-de-prod",
+   "environnement": "qualification",
+   "moteur": "postgres-docker",
+   "adresse": { "url": "postgresql://app@db.produit-exemple.invalid:5432/app_qualif", "conteneur": "produit-exemple-pg-qualif" },
+   "migrations": { "commande": "npm run db:migrate", "verification": "npm run db:migrate:status" },
+   "donnees": { "nature": "synthetique", "commande": "npm run db:seed" },
+   "verification": { "tables": ["clients"] }
+  }
+ ]
+}

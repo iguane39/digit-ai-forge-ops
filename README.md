@@ -48,6 +48,11 @@ node oracles/oracle-ops.mjs --plan plan.json   # O-5 : 4 phases, rollback réel,
 # Canary local simulé : paliers de trafic croissants, promotion sur critère de config
 node scripts/ops.mjs canary <dossier-build> <cible> [--seuils seuils-canary.json]
 
+# Réinitialiser une base de développement ou de qualification (TF-2013) : le plan par défaut, rien d'exécuté
+# exemple de déclaration : fixtures/reinitialiser-base/verte.json ; production ou non déclarée : exit 2
+node scripts/ops.mjs reinitialiser-base forge/BASES.json qualif [--sortie plan-base.json]
+node scripts/ops.mjs reinitialiser-base forge/BASES.json qualif --executer   # postgres-docker d'un Docker local seulement
+
 # Oracle O-6 : dérive entre état déclaré (instantané) et état constaté maintenant
 node scripts/ops.mjs etat <cible> --sortie declare.json   # à un instant T
 node oracles/oracle-ops.mjs <cible> --drift declare.json  # plus tard : dérive ?
@@ -71,6 +76,8 @@ node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.
 
 # Preuve par le geste : déploiement réel local + rollback + défauts types refusés
 node oracles/self-test.mjs
+# ... plus l'exercice réel de reinitialiser-base sur un conteneur postgres:16-alpine jetable, créé puis détruit
+FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 ```
 
 ## Contrat de la cible
@@ -86,7 +93,9 @@ node oracles/self-test.mjs
 - Une release sans `sante.mjs` (contrat de santé, exit 0 = sain) est **refusée**.
 - Un healthcheck en échec laisse `COURANT` intact : **jamais de bascule sur release malade**.
 - Types d'événements du journal : `deploiement` · `deploiement_refuse` · `restauration` ·
-  `canary_etape` · `canary_promotion` · `canary_annulation`.
+  `canary_etape` · `canary_promotion` · `canary_annulation` ; et ceux de `reinitialiser-base`
+  (TF-2013), écrits dans le journal posé à côté de la déclaration : `base_reinitialisation_refusee` ·
+  `base_reinitialisation_etape` · `base_reinitialisation` · `base_reinitialisation_echec`.
 - **Cible tenue par une plateforme externe (TF-0844)** : une cible déployée par `plan`
   (railway, gcp, azure, aws...) ne porte NI `COURANT` NI `journal.jsonl` — la plateforme les
   tient elle-même. Déclarer un fichier `<cible>/PLATEFORME` (texte, ex. `railway`) pour que
@@ -141,6 +150,82 @@ compare des mesures post-bascule à des **seuils SLO fixés par l'humain** (fich
 obligatoire, aucun défaut implicite). Verdicts : `stable` (exit 0) ·
 `rollback_recommande` (exit 1) · `donnees_insuffisantes` (exit 2). **Ne déclenche jamais de
 rollback** — la bascule arrière reste un geste humain via `ops.mjs restaurer`.
+
+## Réinitialiser une base hors production (TF-2013)
+
+`node scripts/ops.mjs reinitialiser-base <declaration.json> <cible> [--executer] [--sortie plan.json]`
+vide puis reconstruit une base de développement ou de qualification à la demande (décision R-58 (a) du
+29/10/2026). Le trou, mesuré le même jour : aucune forge ne savait le faire ; `restaurer` ne repointe que
+des releases de fichiers, et le plan `supabase` ne pousse que des migrations vers l'avant.
+
+**Par défaut, le verbe rend le plan et n'exécute rien.** Le plan (`forge-ops/reinitialisation-base@1`)
+ordonne quatre étapes : vider, rejouer les migrations, charger les données, vérifier. La vérification
+exige les migrations à jour et un compte de lignes non nul pour chaque table déclarée. `--executer` joue
+le plan, et seulement sur une cible `postgres-docker` d'un démon Docker local, après contrôle du démon, du
+conteneur (démarré) et du port déclaré (publié). La forge ne crée aucun conteneur. Vider supprime puis
+recrée la base depuis la base de maintenance `postgres` : `DROP DATABASE … WITH (FORCE)`, puis
+`CREATE DATABASE`.
+
+**La déclaration** est un fichier du produit au format `forge-ops/bases@1`, dans la posture de la
+déclaration de sauvegarde d'O-19. Exemple complet : `fixtures/reinitialiser-base/verte.json`. Chaque base
+de `bases[]` porte :
+
+| Champ | Contenu |
+|---|---|
+| `nom` | le nom passé en argument `<cible>` |
+| `environnement` | `developpement`, `qualification` ou `production` |
+| `moteur` | `postgres-docker`, `supabase-local`, ou `supabase-distant` (projet lié, `--linked`) |
+| `adresse` | `hote`, `port`, `base`, `utilisateur` (ou `url` sans mot de passe) et `conteneur` ; `project_ref` pour un projet Supabase distant |
+| `migrations` | `commande`, et `verification` dont l'exit 0 atteste les migrations à jour ; postgres-docker seulement, Supabase rejoue `supabase/migrations` |
+| `donnees` | `commande` du produit (seed synthétique ou extrait), `nature` (`synthetique` ou `extrait`), `source` exigée pour un extrait |
+| `verification.tables` | les tables dont le compte de lignes doit être non nul (`schema.table` admis) |
+
+La production se déclare dans `bases[]` (son adresse suffit), ou s'écarte par `aucune_production:
+"<motif>"`. `racine`, facultatif et relatif à la déclaration, est le dossier d'où partent les commandes
+déclarées ; elles reçoivent `PGHOST`, `PGPORT`, `PGDATABASE` et `PGUSER` de la cible, jamais de mot de passe.
+
+**Refus, en plan comme en exécution, chacun journalisé :**
+
+- exit 2 `[OPS HORS CONTRAT]` : déclaration introuvable, illisible ou porteuse d'un mot de passe ; cible
+  absente ; environnement absent, hors vocabulaire ou `production` ; production ni déclarée ni écartée ;
+  cible qui partage le serveur (hôte:port), le conteneur ou le projet Supabase d'une base production ou
+  d'environnement non déclaré ; base de maintenance ; `--executer` sur Supabase, sur un hôte non local,
+  vers un démon Docker distant, sur un conteneur arrêté ou un port non publié ;
+- exit 1 `[OPS REFUS]` : déclaration incomplète ou identifiant SQL non conforme, ou geste exécuté en
+  échec. Une base vidée dont la suite échoue reste vide ou partielle jusqu'au passage suivant, et le
+  message le dit.
+
+Une base dont l'environnement n'est pas dit est traitée comme la production. `localhost`, `127.0.0.1` et
+`::1` désignent le même serveur.
+
+**Supabase : plan seulement dans ce lot.** Chaque commande du plan cite sa page officielle, lue le
+29/10/2026. En local : `supabase start`, puis `supabase db reset --local --no-seed`. Pour un projet
+distant : `supabase link --project-ref <ref>`, puis `supabase db reset --linked --no-seed`. La
+vérification joue `supabase migration list --local` ou `--linked`. `--no-seed` laisse le chargement à la
+commande déclarée. Sur un projet lié, la remise à zéro exécute un script qui supprime « all user created
+entities in the remote database » : elle reste un geste humain sous GO (R-38), comme les autres gestes
+distants de la forge.
+
+**Journal.** `journal.jsonl`, posé à côté de la déclaration, suit le contrat ledger : refus
+(`base_reinitialisation_refusee`), une ligne par étape exécutée (`base_reinitialisation_etape`), réussite
+avec ses comptes (`base_reinitialisation`) ou échec nommé (`base_reinitialisation_echec`). O3 connaît ces
+types ; O4 ne les lit pas.
+
+**Preuve.** `node oracles/self-test.mjs` joue la paire de fixtures : la cible production et la cible non
+déclarée sont refusées en exit 2, et le plan d'une qualification Postgres sort vert. Il rejoue aussi chaque
+remède qu'un refus nomme. L'exercice réel se joue à la demande : `FORGE_OPS_EXERCICE_DOCKER=1 node
+oracles/self-test.mjs` crée un conteneur `postgres:16-alpine` jetable, le réinitialise deux fois, rejoue
+trois échecs types, puis le détruit. Il ne télécharge aucune image.
+
+**Ce qui n'est pas jugé :**
+
+- la vérité de la déclaration : une base déclarée « qualification » qui sert la production passe ;
+- la cible réelle des commandes déclarées : la forge les exécute sans les lire, et la vérification sur la
+  cible fait échouer une commande qui aurait écrit ailleurs, sans l'empêcher d'y avoir écrit ;
+- la qualité des données au-delà des comptes non nuls, et la pseudonymisation d'un extrait, dont seule la
+  source est exigée ;
+- les rôles et les autres bases du serveur, que `DROP DATABASE` ne touche pas ;
+- toute exécution Supabase.
 
 ## Un travail planifié s'exerce (O-8, TF-0527)
 

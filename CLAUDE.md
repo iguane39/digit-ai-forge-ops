@@ -74,6 +74,19 @@ journal immuable et horodaté (auteur, version, cible, résultat). » `ops.mjs d
 `canary` restent les gestes d'une cible LOCALE (staging sur le poste), qui n'est pas un
 environnement géré.
 
+## Réinitialiser une base hors production (TF-2013)
+
+| Verbe | Commande | Effet |
+|---|---|---|
+| **reinitialiser-base** | `node scripts/ops.mjs reinitialiser-base <declaration.json> <cible> [--executer] [--sortie plan.json]` | lit la déclaration `forge-ops/bases@1` du produit et rend le **plan** ordonné (vider, rejouer les migrations, charger les données, vérifier) sans rien exécuter ; `--executer` le joue, et seulement sur une cible `postgres-docker` d'un Docker local |
+
+**Jamais la production.** Une cible `production`, d'environnement non déclaré, ou qui partage le serveur,
+le conteneur ou le projet Supabase d'une base production est refusée en exit 2, en plan comme en
+exécution. La production se déclare, ou s'écarte par `aucune_production` motivé. Supabase : plan
+seulement, commandes officielles lues le 29/10/2026 ; la remise à zéro d'un projet distant (`--linked`)
+reste un geste humain sous GO (R-38). Chaque geste exécuté ou refusé entre au `journal.jsonl` posé à
+côté de la déclaration. Format, refus et non-jugé : README, section du même nom.
+
 ## Contrat de la cible d'exploitation
 
 ```
@@ -180,7 +193,10 @@ la recommandation ne déclenche rien ; le rollback reste un geste humain via
 mise à jour, restaurée — chaque état validé par l'oracle (fixture verte), et chaque défaut
 type prouvé refusé (fixtures rouges : healthcheck en échec, journal corrompu, pointeur
 fantôme, restauration sans précédent, canary dégradé, dérive O-6, écart d'empreinte O-7
-(voies deployer et canary), mesures hors seuils SLO). À rejouer après toute modification.
+(voies deployer et canary), mesures hors seuils SLO, base production ou non déclarée à
+réinitialiser). L'exercice réel de `reinitialiser-base` sur un conteneur Postgres jetable se joue à
+la demande : `FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs`. À rejouer après toute
+modification.
 
 ## Langue
 

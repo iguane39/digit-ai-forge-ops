@@ -1,0 +1,38 @@
+{
+ "format": "forge-ops/bases@1",
+ "produit": "produit-exemple",
+ "racine": "..",
+ "bases": [
+  {
+   "nom": "qualif",
+   "environnement": "qualification",
+   "moteur": "postgres-docker",
+   "adresse": { "hote": "localhost", "port": 55432, "base": "app_qualif", "utilisateur": "postgres", "conteneur": "produit-exemple-pg-qualif" },
+   "migrations": { "commande": "npm run db:migrate", "verification": "npm run db:migrate:status" },
+   "donnees": { "nature": "synthetique", "commande": "npm run db:seed" },
+   "verification": { "tables": ["clients", "commandes"] }
+  },
+  {
+   "nom": "dev-supabase",
+   "environnement": "developpement",
+   "moteur": "supabase-local",
+   "adresse": { "hote": "127.0.0.1", "port": 54322, "base": "postgres" },
+   "donnees": { "nature": "synthetique", "commande": "npm run db:seed:local" },
+   "verification": { "tables": ["public.clients"] }
+  },
+  {
+   "nom": "qualif-supabase",
+   "environnement": "qualification",
+   "moteur": "supabase-distant",
+   "adresse": { "project_ref": "qualifexemple0000000" },
+   "donnees": { "nature": "extrait", "source": "extrait pseudonymisé du 2026-10-01, forge/donnees/extrait-qualif.sql", "commande": "npm run db:seed:extrait" },
+   "verification": { "tables": ["public.clients"] }
+  },
+  {
+   "nom": "production",
+   "environnement": "production",
+   "moteur": "supabase-distant",
+   "adresse": { "project_ref": "prodexemple000000000", "url": "postgresql://postgres@db.produit-exemple.invalid:5432/postgres" }
+  }
+ ]
+}

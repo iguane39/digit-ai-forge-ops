@@ -10,7 +10,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
@@ -1292,6 +1292,251 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
     ok(o19(pCasse).verdict === "FAIL", "O19 borne : déclaration illisible -> FAIL, jamais un PASS par défaut");
   } finally {
     fs.rmSync(tmp19, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+}
+
+// ── TF-2013 (décision R-58 (a) du 29/10/2026) : RÉINITIALISER UNE BASE HORS PRODUCTION ─────────────────────
+// Le trou : aucune forge ne savait vider et reconstruire une base de développement ou de qualification à la
+// demande. Le verbe rend le PLAN par défaut, refuse en exit 2 une cible production, non déclarée ou qui partage
+// l'adresse d'une production — en plan comme en exécution —, journalise chaque refus et chaque geste, et
+// n'exécute que sur une cible postgres-docker d'un Docker local. Hors ligne ici, sauf un refus qui interroge le
+// Docker local en lecture ; l'exercice réel sur un conteneur jetable se joue à la demande :
+// FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
+{
+  console.log("");
+  const dirRB = path.join(ici, "..", "fixtures", "reinitialiser-base");
+  const tmpRB = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2013-"));
+  const rb = (...args) => spawnSync(process.execPath, [ops, "reinitialiser-base", ...args], { encoding: "utf8" });
+  const poser = (dossier, doc) => {
+    const d = path.join(tmpRB, dossier);
+    fs.mkdirSync(d, { recursive: true });
+    const f = path.join(d, "BASES.json");
+    fs.writeFileSync(f, JSON.stringify(doc, null, 1) + "\n", "utf8");
+    return f;
+  };
+  const copie = (fixture, dossier, modifier) => {
+    const doc = JSON.parse(fs.readFileSync(path.join(dirRB, fixture), "utf8"));
+    if (modifier) modifier(doc);
+    return poser(dossier, doc);
+  };
+  const journalRB = (f) => { const j = path.join(path.dirname(f), "journal.jsonl");
+    return fs.existsSync(j) ? fs.readFileSync(j, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l)) : []; };
+  const planDe = (r) => { try { return JSON.parse(r.stdout); } catch { return null; } };
+  const etapeDe = (p, nom) => (p?.etapes || []).find(e => e.etape === nom) || { commandes: [], attendu: "" };
+  const qualif = (d) => d.bases.find(b => b.nom === "qualif");
+  try {
+    // VERTE — le plan d'une cible de qualification Postgres : ordonné, complet, sans rien exécuter.
+    const fVerte = copie("verte.json", "verte");
+    const rV = rb(fVerte, "qualif");
+    const pV = planDe(rV);
+    ok(rV.status === 0 && pV?.format === "forge-ops/reinitialisation-base@1" && pV.cible === "qualif" && pV.environnement === "qualification" && pV.moteur === "postgres-docker",
+      `TF-2013 · VERTE — plan de la cible de qualification Postgres rendu, exit 0 (obtenu exit ${rV.status})`);
+    ok(JSON.stringify((pV?.etapes || []).map(e => `${e.ordre}:${e.etape}`)) === JSON.stringify(["1:vider", "2:migrations", "3:donnees", "4:verification"]),
+      "TF-2013 · le plan est ordonné : vider, rejouer les migrations, charger les données, vérifier");
+    const vider = etapeDe(pV, "vider").commandes;
+    ok(vider.length === 2 && vider.every(c => c.startsWith("docker exec produit-exemple-pg-qualif psql -v ON_ERROR_STOP=1 -U postgres -d postgres -c "))
+        && vider[0].includes('"DROP DATABASE IF EXISTS \\"app_qualif\\" WITH (FORCE)"') && vider[1].includes('"CREATE DATABASE \\"app_qualif\\""'),
+      "TF-2013 · vider = DROP DATABASE … WITH (FORCE) puis CREATE DATABASE, deux commandes jouées depuis la base de maintenance");
+    const verif = etapeDe(pV, "verification").commandes;
+    ok(etapeDe(pV, "migrations").commandes[0] === "npm run db:migrate" && etapeDe(pV, "donnees").commandes[0] === "npm run db:seed"
+        && verif[0] === "npm run db:migrate:status" && ["clients", "commandes"].every(t => verif.some(c => c.endsWith(`-d app_qualif -t -A -c "SELECT count(*) FROM ${t}"`))),
+      "TF-2013 · migrations et données sont les commandes DÉCLARÉES ; la vérification joue l'état des migrations et compte chaque table déclarée");
+    ok(/PostgreSQL 18\.6\), lue le 29\/10\/2026/.test(etapeDe(pV, "vider").attendu) && Array.isArray(pV?.non_juge) && pV.non_juge.length >= 4,
+      "TF-2013 · le plan cite sa source datée et déclare son non-jugé");
+    ok(journalRB(fVerte).length === 0, "TF-2013 · un plan n'exécute rien : aucune ligne de journal");
+
+    // ROUGES — production, environnement non déclaré, cible absente, serveur de la production.
+    const fRouge = copie("rouge.json", "rouge");
+    const rProd = rb(fRouge, "production");
+    ok(rProd.status === 2 && /^\[OPS HORS CONTRAT\]/.test(rProd.stderr) && /environnement production/.test(rProd.stderr) && rProd.stdout === "",
+      `TF-2013 · ROUGE — cible production refusée en plan : exit 2, raison nommée, aucun plan rendu (obtenu exit ${rProd.status})`);
+    const rProdExec = rb(fRouge, "production", "--executer");
+    ok(rProdExec.status === 2 && /environnement production/.test(rProdExec.stderr),
+      `TF-2013 · ROUGE — la même cible avec --executer : refus exit 2 avant tout geste (obtenu exit ${rProdExec.status})`);
+    const rSansEnv = rb(fRouge, "sans-environnement");
+    ok(rSansEnv.status === 2 && /environnement non déclaré/.test(rSansEnv.stderr),
+      `TF-2013 · ROUGE — cible sans environnement déclaré refusée, exit 2 (obtenu exit ${rSansEnv.status})`);
+    const rAbsente = rb(fRouge, "inconnue");
+    ok(rAbsente.status === 2 && /cible non déclarée/.test(rAbsente.stderr) && /« inconnue »/.test(rAbsente.stderr),
+      `TF-2013 · ROUGE — cible absente de la déclaration refusée, exit 2 (obtenu exit ${rAbsente.status})`);
+    const rServeur = rb(fRouge, "qualif-sur-serveur-de-prod");
+    ok(rServeur.status === 2 && /même serveur db\.produit-exemple\.invalid:5432 que « production »/.test(rServeur.stderr),
+      `TF-2013 · ROUGE — base de qualification sur le serveur de la production (adresse lue dans l'url) refusée, exit 2 (obtenu exit ${rServeur.status})`);
+    const jRouge = journalRB(fRouge);
+    ok(jRouge.length === 5 && jRouge.every((e, i) => e.seq === i + 1 && e.type === "base_reinitialisation_refusee" && e.code === 2 && !!e.raison)
+        && jRouge[0].mode === "plan" && jRouge[1].mode === "execution",
+      `TF-2013 · chaque refus est journalisé : seq 1 à 5, mode plan ou exécution, raison (obtenu ${jRouge.length} ligne(s))`);
+    // Une entrée d'environnement non déclaré est gardée comme la production ; localhost et 127.0.0.1 sont un même serveur.
+    const fVoisine = copie("rouge.json", "voisine", d => d.bases.push({ ...JSON.parse(JSON.stringify(d.bases[1])), nom: "dev-voisine", environnement: "developpement",
+      adresse: { hote: "127.0.0.1", port: 55433, base: "app_dev2", utilisateur: "postgres", conteneur: "produit-exemple-pg-dev2" } }));
+    const rVoisine = rb(fVoisine, "dev-voisine");
+    ok(rVoisine.status === 2 && /même serveur boucle-locale:55433 que « sans-environnement » \(environnement non déclaré, traité comme la production\)/.test(rVoisine.stderr),
+      `TF-2013 · ROUGE — le serveur d'une base sans environnement déclaré est gardé comme celui de la production (obtenu exit ${rVoisine.status})`);
+    const sansProd = (d) => { d.bases = d.bases.filter(b => b.environnement !== "production"); };
+    const rSansProd = rb(copie("verte.json", "sans-production", sansProd), "qualif");
+    ok(rSansProd.status === 2 && /aucune cible production déclarée/.test(rSansProd.stderr),
+      `TF-2013 · ROUGE — production ni déclarée ni écartée : le garde-fou n'a rien à comparer, refus exit 2 (obtenu exit ${rSansProd.status})`);
+    const prodUrl = (url) => (d) => { d.bases.find(b => b.nom === "production").adresse.url = url; };
+    const rSecret = rb(copie("verte.json", "secret", prodUrl("postgresql://postgres:motdepasse@db.produit-exemple.invalid:5432/postgres")), "qualif");
+    ok(rSecret.status === 2 && /mot de passe en clair dans la déclaration \(bases\[3\]\.adresse\.url\)/.test(rSecret.stderr),
+      `TF-2013 · ROUGE — un mot de passe dans la déclaration, même sur une autre cible, la fait refuser et son chemin est NOMMÉ (obtenu exit ${rSecret.status})`);
+    const rSys = rb(copie("verte.json", "systeme", d => { qualif(d).adresse.base = "postgres"; }), "qualif");
+    ok(rSys.status === 2 && /base de maintenance/.test(rSys.stderr),
+      `TF-2013 · ROUGE — la base de maintenance postgres n'est jamais une cible, exit 2 (obtenu exit ${rSys.status})`);
+    const rInc = rb(copie("verte.json", "incomplete", d => { delete qualif(d).donnees.commande; delete qualif(d).migrations.verification; }), "qualif");
+    ok(rInc.status === 1 && /^\[OPS REFUS\]/.test(rInc.stderr) && /déclaration incomplète/.test(rInc.stderr) && /donnees\.commande/.test(rInc.stderr) && /migrations\.verification/.test(rInc.stderr),
+      `TF-2013 · ROUGE — déclaration incomplète : refus exit 1 qui NOMME chaque champ manquant (obtenu exit ${rInc.status})`);
+    const rIdent = rb(copie("verte.json", "identifiant", d => { qualif(d).verification.tables = ["clients; DROP TABLE commandes"]; }), "qualif");
+    ok(rIdent.status === 1 && /identifiant non conforme/.test(rIdent.stderr) && /verification\.tables\[0\]/.test(rIdent.stderr),
+      `TF-2013 · ROUGE — un nom de table qui n'est pas un identifiant SQL simple est refusé, exit 1 (obtenu exit ${rIdent.status})`);
+    fs.mkdirSync(path.join(tmpRB, "sans-declaration"));
+    const fIntrouvable = path.join(tmpRB, "sans-declaration", "BASES.json");
+    const rIntrouvable = rb(fIntrouvable, "qualif");
+    ok(rIntrouvable.status === 2 && /déclaration introuvable/.test(rIntrouvable.stderr) && journalRB(fIntrouvable).length === 1,
+      `TF-2013 · ROUGE — déclaration introuvable : refus exit 2, journalisé dans son dossier (obtenu exit ${rIntrouvable.status})`);
+    const rSansDossier = rb(path.join(tmpRB, "dossier-absent", "BASES.json"), "qualif");
+    ok(rSansDossier.status === 2 && /refus NON journalisé/.test(rSansDossier.stderr) && !fs.existsSync(path.join(tmpRB, "dossier-absent")),
+      `TF-2013 · ROUGE — dossier de la déclaration absent : refus exit 2, non journalisé et DIT, aucun dossier créé (obtenu exit ${rSansDossier.status})`);
+    fs.mkdirSync(path.join(tmpRB, "illisible"));
+    fs.writeFileSync(path.join(tmpRB, "illisible", "BASES.json"), "{ pas du json", "utf8");
+    ok(rb(path.join(tmpRB, "illisible", "BASES.json"), "qualif").status === 2, "TF-2013 · ROUGE — déclaration illisible : refus exit 2, jamais un plan par défaut");
+
+    // TF-1013 — chaque correction que nomme un refus, jouée, rend le plan.
+    const remede = (fixture, dossier, modifier, nom) => rb(copie(fixture, dossier, modifier), nom).status;
+    ok(remede("rouge.json", "remede-env", d => { d.bases[1].environnement = "developpement"; }, "sans-environnement") === 0,
+      "TF-2013 · remède joué : `environnement` déclaré (developpement) -> plan rendu, exit 0 (TF-1013)");
+    ok(remede("rouge.json", "remede-serveur", d => { d.bases[2].adresse.url = "postgresql://app@localhost:55434/app_qualif"; }, "qualif-sur-serveur-de-prod") === 0,
+      "TF-2013 · remède joué : base de qualification déclarée sur un autre serveur -> plan rendu, exit 0 (TF-1013)");
+    ok(remede("verte.json", "remede-production", d => { sansProd(d); d.aucune_production = "produit en conception : aucune base de production n'existe au 29/10/2026"; }, "qualif") === 0,
+      "TF-2013 · remède joué : `aucune_production` motivé -> plan rendu, exit 0 (TF-1013)");
+    ok(remede("verte.json", "remede-secret", prodUrl("postgresql://postgres@db.produit-exemple.invalid:5432/postgres"), "qualif") === 0,
+      "TF-2013 · remède joué : mot de passe retiré de l'url -> plan rendu, exit 0 (TF-1013)");
+    ok(remede("verte.json", "remede-incomplete", d => { delete qualif(d).donnees.commande; delete qualif(d).migrations.verification;
+      qualif(d).donnees.commande = "npm run db:seed"; qualif(d).migrations.verification = "npm run db:migrate:status"; }, "qualif") === 0,
+      "TF-2013 · remède joué : champs manquants complétés -> plan rendu, exit 0 (TF-1013)");
+    ok(remede("verte.json", "remede-identifiant", d => { qualif(d).verification.tables = ["public.clients"]; }, "qualif") === 0,
+      "TF-2013 · remède joué : identifiant simple (schema.table admis) -> plan rendu, exit 0 (TF-1013)");
+    // Un champ vide ne masque pas l'url, et un rôle au nom composé passe : il n'entre jamais dans le SQL.
+    const pUrl = planDe(rb(copie("verte.json", "url-et-role", d => { qualif(d).adresse = { hote: "", url: "postgresql://app-qualif@localhost:55440/app_qualif2", conteneur: "produit-exemple-pg-qualif2" }; }), "qualif"));
+    ok((pUrl?.prealables?.[1] || "").includes("PGHOST=localhost PGPORT=55440 PGDATABASE=app_qualif2 PGUSER=app-qualif")
+        && etapeDe(pUrl, "vider").commandes[0]?.includes("-U app-qualif -d postgres"),
+      "TF-2013 · adresse en url (hôte vide ignoré) et rôle au nom composé : plan rendu avec les coordonnées lues dans l'url");
+
+    // SUPABASE — plan seulement : commandes officielles sourcées et datées, variante liée sous GO humain.
+    const fSupa = copie("verte.json", "supabase");
+    const pSl = planDe(rb(fSupa, "dev-supabase")), pSd = planDe(rb(fSupa, "qualif-supabase"));
+    ok(etapeDe(pSl, "vider").commandes[0] === "supabase db reset --local --no-seed" && (pSl?.prealables || []).some(l => l.startsWith("supabase start "))
+        && etapeDe(pSl, "verification").commandes[0] === "supabase migration list --local" && etapeDe(pSl, "donnees").commandes[0] === "npm run db:seed:local",
+      "TF-2013 · plan supabase-local : supabase start, db reset --local --no-seed, données déclarées, migration list --local");
+    ok(etapeDe(pSd, "vider").commandes[0] === "supabase db reset --linked --no-seed" && /^GESTE HUMAIN SOUS GO \(R-38\)/.test(etapeDe(pSd, "vider").attendu)
+        && (pSd?.prealables?.[0] || "").startsWith("supabase link --project-ref qualifexemple0000000 ") && etapeDe(pSd, "verification").commandes[0] === "supabase migration list --linked",
+      "TF-2013 · plan supabase-distant : variante liée (--linked) marquée geste humain sous GO (R-38), sur le projet déclaré");
+    const textesSupabase = JSON.stringify([pSl, pSd]);
+    ok(["supabase-db-reset", "supabase-migration-list", "supabase-start", "supabase-link", "supabase-status", "seeding-your-database"].every(s => textesSupabase.includes(`${s}, lue le 29/10/2026`)),
+      "TF-2013 · chaque commande Supabase cite sa page officielle et sa date de lecture");
+    const jetonsLibres = (p) => [...new Set(JSON.stringify({ prealables: p?.prealables, etapes: p?.etapes }).match(/<[A-Z][A-Z0-9_]*>/g) || [])].filter(j => !(p?.placeholders || []).includes(j));
+    ok([pV, pSl, pSd].every(p => p && jetonsLibres(p).length === 0), "TF-2013 · tout jeton <MAJUSCULES> d'un plan figure dans ses placeholders (même règle que TF-1685)");
+    const rSlExec = rb(fSupa, "dev-supabase", "--executer"), rSdExec = rb(fSupa, "qualif-supabase", "--executer");
+    ok(rSlExec.status === 2 && /plan seulement/.test(rSlExec.stderr) && rSdExec.status === 2 && /geste humain sous GO \(R-38\)/.test(rSdExec.stderr),
+      `TF-2013 · ROUGE — --executer sur Supabase refusé exit 2 : local en plan seulement, distant geste humain sous GO (obtenu ${rSlExec.status}/${rSdExec.status})`);
+
+    // EXÉCUTION refusée hors d'une cible postgres-docker locale, avant tout geste.
+    const fHote = copie("verte.json", "hote-distant", d => { qualif(d).adresse.hote = "db-qualif.produit-exemple.invalid"; });
+    const rHote = rb(fHote, "qualif", "--executer");
+    ok(rHote.status === 2 && /non local/.test(rHote.stderr) && rb(fHote, "qualif").status === 0,
+      `TF-2013 · ROUGE — --executer sur un hôte non local refusé exit 2 ; la même cible garde son plan (obtenu exit ${rHote.status})`);
+    const fAbsent = copie("verte.json", "conteneur-absent", d => { qualif(d).adresse.conteneur = `forge-ops-tf2013-absent-${randomBytes(4).toString("hex")}`; });
+    const rAbsent = rb(fAbsent, "qualif", "--executer");
+    ok(rAbsent.status === 2 && /^\[OPS HORS CONTRAT\]/.test(rAbsent.stderr) && journalRB(fAbsent).every(e => e.type === "base_reinitialisation_refusee"),
+      `TF-2013 · ROUGE — conteneur introuvable (ou Docker absent) : refus exit 2, aucun geste journalisé (obtenu exit ${rAbsent.status} : ${String(rAbsent.stderr).trim().slice(0, 90)})`);
+
+    // JOURNAL — au contrat ledger lu par O3, même partagé avec une cible d'exploitation ; O4 ne lit pas ces types.
+    const cibleExpl = path.join(tmpRB, "cible-exploitation");
+    run(ops, ["deployer", fx("app-verte"), cibleExpl]);
+    fs.copyFileSync(path.join(dirRB, "rouge.json"), path.join(cibleExpl, "BASES.json"));
+    rb(path.join(cibleExpl, "BASES.json"), "production");
+    const ajouter = (type) => { const l = fs.readFileSync(path.join(cibleExpl, "journal.jsonl"), "utf8").split("\n").filter(Boolean);
+      fs.appendFileSync(path.join(cibleExpl, "journal.jsonl"), JSON.stringify({ seq: JSON.parse(l[l.length - 1]).seq + 1, ts: new Date().toISOString(), type, cible: "qualif" }) + "\n", "utf8"); };
+    ["base_reinitialisation_etape", "base_reinitialisation", "base_reinitialisation_echec"].forEach(ajouter);
+    ok(journalDe(cibleExpl).some(e => e.type === "base_reinitialisation_refusee") && verdict(cibleExpl) === "PASS",
+      "TF-2013 · O1-O4 PASS sur une cible dont le journal porte les quatre types du verbe (refus, étape, réussite, échec)");
+    ajouter("base_type_inconnu");
+    ok(verdict(cibleExpl) === "FAIL", "TF-2013 · ROUGE — un type inconnu au même journal -> O3 FAIL : les types restent une liste fermée");
+    const typesDe = (f) => { const m = fs.readFileSync(f, "utf8").match(/^const TYPES = \[([^\]]*)\]/m); return m ? [...m[1].matchAll(/"([a-z_]+)"/g)].map(x => x[1]) : []; };
+    const tOps = typesDe(ops), tOracle = typesDe(oracle);
+    ok(["base_reinitialisation_refusee", "base_reinitialisation_etape", "base_reinitialisation", "base_reinitialisation_echec"].every(t => tOps.includes(t))
+        && tOps.every(t => tOracle.includes(t)),
+      `TF-2013 · tout type que ops.mjs écrit est connu d'O3 (${tOps.length} types dans ops.mjs, ${tOracle.length} dans oracle-ops.mjs)`);
+
+    // EXERCICE RÉEL, à la demande : un conteneur postgres:16-alpine jetable, créé puis détruit par ce banc.
+    // Jamais par défaut (le banc reste hors ligne), jamais de téléchargement (image absente : SKIP dit).
+    if (process.env.FORGE_OPS_EXERCICE_DOCKER !== "1") {
+      console.log("  [SKIP] TF-2013 · exercice réel non demandé : FORGE_OPS_EXERCICE_DOCKER=1 le joue sur un conteneur postgres:16-alpine jetable, créé puis détruit");
+    } else {
+      const IMAGE = "postgres:16-alpine";
+      const docker = (...args) => spawnSync("docker", args, { encoding: "utf8", timeout: 120000 });
+      if (docker("image", "inspect", IMAGE).status !== 0) {
+        console.log(`  [SKIP] TF-2013 · image ${IMAGE} absente du poste : l'exercice ne télécharge rien`);
+      } else {
+        const nomC = `forge-ops-tf2013-${randomBytes(3).toString("hex")}`;
+        try {
+          const cree = docker("run", "-d", "--rm", "--name", nomC, "-e", `POSTGRES_PASSWORD=${randomBytes(12).toString("hex")}`, "-e", "POSTGRES_DB=app", "-p", "127.0.0.1::5432", IMAGE);
+          let pret = false;
+          for (let i = 0; i < 120 && cree.status === 0 && !pret; i++) {
+            pret = docker("exec", nomC, "pg_isready", "-h", "127.0.0.1", "-U", "postgres", "-d", "app").status === 0;
+            if (!pret) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+          }
+          const port = Number((String(docker("port", nomC, "5432").stdout).match(/:(\d+)\s*$/m) || [])[1]);
+          ok(cree.status === 0 && pret && Number.isInteger(port), `TF-2013 · exercice : conteneur jetable ${nomC} (${IMAGE}) créé, prêt, port publié ${port}`);
+          const sql = (q) => String(docker("exec", nomC, "psql", "-U", "postgres", "-d", "app", "-t", "-A", "-c", q).stdout).trim();
+          sql("CREATE TABLE marqueur (x int)");
+          const psqlC = `docker exec ${nomC} psql -v ON_ERROR_STOP=1 -U postgres -d app`;
+          const declaration = ({ donnees, migrations, port: p = port } = {}) => ({ format: "forge-ops/bases@1", produit: "produit-exemple", bases: [
+            { nom: "qualif-exercice", environnement: "qualification", moteur: "postgres-docker",
+              adresse: { hote: "127.0.0.1", port: p, base: "app", utilisateur: "postgres", conteneur: nomC },
+              migrations: migrations || {
+                commande: `${psqlC} -c "CREATE TABLE schema_migrations (version text PRIMARY KEY)" -c "CREATE TABLE clients (id int PRIMARY KEY, nom text NOT NULL)" -c "INSERT INTO schema_migrations VALUES ('001')"`,
+                verification: `${psqlC} -t -A -c "SELECT 1/((SELECT count(*) FROM schema_migrations) = 1)::int"` },
+              donnees: { nature: "synthetique", commande: donnees || `${psqlC} -c "INSERT INTO clients VALUES (1, 'Client-A'), (2, 'Client-B'), (3, 'Client-C')"` },
+              verification: { tables: ["clients"] } },
+            { nom: "production", environnement: "production", adresse: { hote: "db.produit-exemple.invalid", port: 5432, base: "app" } } ] });
+          // VERTE : vider (la table posée avant disparaît), migrer, charger, vérifier — puis rejouer.
+          const fEx = poser("exercice-vert", declaration());
+          const rEx = rb(fEx, "qualif-exercice", "--executer");
+          const jEx = journalRB(fEx);
+          ok(rEx.status === 0 && /\[OPS OK\] base « qualif-exercice » réinitialisée \(qualification, postgres-docker\)/.test(rEx.stdout),
+            `TF-2013 · exercice VERT — --executer sur la base jetable : exit 0 (obtenu exit ${rEx.status}${rEx.status ? ` — ${String(rEx.stderr).trim().slice(0, 200)}` : ""})`);
+          ok(JSON.stringify(jEx.map(e => e.etape || e.type)) === JSON.stringify(["vider", "migrations", "donnees", "verification", "base_reinitialisation"])
+              && jEx.slice(0, 4).every(e => e.type === "base_reinitialisation_etape" && e.verdict === "ok") && jEx[jEx.length - 1]?.comptes?.clients === 3,
+            `TF-2013 · exercice : chaque étape exécutée est journalisée, puis la réussite avec ses comptes (obtenu ${jEx.map(e => e.etape || e.type).join(", ")})`);
+          ok(sql("SELECT count(*) FROM pg_tables WHERE tablename = 'marqueur'") === "0" && sql("SELECT count(*) FROM clients") === "3",
+            "TF-2013 · exercice : la table posée avant a disparu (base vidée) et les 3 lignes synthétiques sont chargées");
+          const rRejeu = rb(fEx, "qualif-exercice", "--executer");
+          ok(rRejeu.status === 0 && sql("SELECT count(*) FROM clients") === "3", "TF-2013 · exercice : rejoué, le verbe revide puis recharge (3 lignes, jamais 6)");
+          // ROUGES : données jamais chargées, migration en échec, port qui n'est pas celui du conteneur.
+          const fVide = poser("exercice-sans-donnees", declaration({ donnees: `${psqlC} -c "SELECT 1"` }));
+          const rVide = rb(fVide, "qualif-exercice", "--executer");
+          const jVide = journalRB(fVide);
+          ok(rVide.status === 1 && /échec à l'étape verification/.test(rVide.stderr) && /table clients : 0 ligne/.test(rVide.stderr)
+              && jVide[jVide.length - 1]?.type === "base_reinitialisation_echec" && jVide[jVide.length - 1]?.etape === "verification",
+            `TF-2013 · exercice ROUGE — données non chargées : vérification en échec, exit 1, table nommée, échec journalisé (obtenu exit ${rVide.status})`);
+          const fMig = poser("exercice-migration-ko", declaration({ migrations: { commande: `${psqlC} -c "CREATE TABLE ("`, verification: `${psqlC} -c "SELECT 1"` } }));
+          const rMig = rb(fMig, "qualif-exercice", "--executer");
+          const jMig = journalRB(fMig);
+          ok(rMig.status === 1 && /échec à l'étape migrations/.test(rMig.stderr) && /La base a été supprimée/.test(rMig.stderr) && !jMig.some(e => e.etape === "donnees"),
+            `TF-2013 · exercice ROUGE — migration en échec : arrêt à l'étape migrations, données jamais jouées, état de la base dit (obtenu exit ${rMig.status})`);
+          const fPort = poser("exercice-port-faux", declaration({ port: port === 65535 ? 65534 : port + 1 }));
+          const rPort = rb(fPort, "qualif-exercice", "--executer");
+          ok(rPort.status === 2 && /ne publie pas le port déclaré/.test(rPort.stderr) && journalRB(fPort).every(e => e.type === "base_reinitialisation_refusee"),
+            `TF-2013 · exercice ROUGE — port déclaré qui n'est pas celui du conteneur : refus exit 2 avant tout geste (obtenu exit ${rPort.status})`);
+        } finally {
+          docker("rm", "-f", nomC);
+          ok(String(docker("ps", "-a", "--filter", `name=${nomC}`, "--format", "{{.Names}}").stdout).trim() === "", `TF-2013 · exercice : conteneur ${nomC} détruit`);
+        }
+      }
+    }
+  } finally {
+    fs.rmSync(tmpRB, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
 }
 

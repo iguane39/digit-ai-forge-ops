@@ -8,17 +8,20 @@
 //   node ops.mjs restaurer <cible>
 //   node ops.mjs etat <cible> [--sortie fichier.json]
 //   node ops.mjs canary <dossier-build> <cible> [--seuils fichier.json]
+//   node ops.mjs reinitialiser-base <declaration.json> <cible> [--executer] [--sortie plan.json]
 //
 // Contrat de la cible : releases/<ts>/ + COURANT (pointeur texte) + journal.jsonl
 // (append-only, contrat ledger forge-agents : seq strictement croissant depuis 1).
-// Hors contrat : une cible conteneur Docker (restaurer sort en exit 2 avec le geste manuel, TF-1805).
+// Hors contrat : une cible conteneur Docker (restaurer sort en exit 2 avec le geste manuel, TF-1805) ;
+// une base de production ou non déclarée (reinitialiser-base sort en exit 2, TF-2013).
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { hacherFichier } from "./lib-empreinte.mjs";
 
-const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation"];
+const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation",
+  "base_reinitialisation_refusee", "base_reinitialisation_etape", "base_reinitialisation", "base_reinitialisation_echec"];
 
 function fail(msg) { console.error(`[OPS REFUS] ${msg}`); process.exit(1); }
 
@@ -562,6 +565,363 @@ function plan(cible, build, sortie) {
   else console.log(json);
 }
 
+// ─────────── RÉINITIALISER UNE BASE HORS PRODUCTION (TF-2013, décision R-58 (a) du 29/10/2026) ───────────
+// LE TROU, mesuré le 29/10/2026 : aucune forge ne savait vider et reconstruire une base de développement
+// ou de qualification à la demande. `restaurer` ne repointe que des releases de FICHIERS ; le plan
+// `supabase` ne pousse que des migrations vers l'avant et laisse la restauration (PITR) en dernier
+// recours humain.
+// LE VERBE lit une déclaration `forge-ops/bases@1` écrite par le produit (un fichier, même posture que la
+// déclaration de sauvegarde d'O-19) et rend par défaut le PLAN ordonné : vider, rejouer les migrations,
+// charger les données (commande déclarée par le produit : seed synthétique ou extrait déclaré), vérifier
+// (migrations à jour, comptes de lignes non nuls). Rien ne s'exécute sans `--executer`, et `--executer` ne
+// vise qu'une cible `postgres-docker` servie par un démon Docker LOCAL. Supabase : plan seulement,
+// commandes lues dans la documentation officielle le 29/10/2026 ; la remise à zéro d'un projet distant
+// (`--linked`) reste un geste humain sous GO (R-38).
+// REFUS, en plan comme en exécution, chacun journalisé dans `journal.jsonl` à côté de la déclaration :
+//   exit 2 (hors contrat) : déclaration introuvable, illisible ou porteuse d'un mot de passe ; cible
+//     absente ; environnement absent, hors vocabulaire ou `production` ; production ni déclarée ni
+//     écartée par un motif ; cible qui partage le serveur (hôte:port), le conteneur ou le projet Supabase
+//     d'une cible production ou d'environnement non déclaré ; base de maintenance ; exécution hors d'une
+//     cible postgres-docker locale (hôte, démon, conteneur démarré, port publié) ;
+//   exit 1 : déclaration incomplète pour le geste demandé, ou geste exécuté en échec.
+const FORMAT_BASES = "forge-ops/bases@1";
+const ENVIRONNEMENTS_BASE = ["developpement", "qualification", "production"];
+const MOTEURS_BASE = ["postgres-docker", "supabase-local", "supabase-distant"];
+const NATURES_DONNEES = ["synthetique", "extrait"];
+// `vider` se connecte à la base de maintenance `postgres` pour supprimer puis recréer la cible : la
+// maintenance et les modèles ne sont jamais une cible.
+const BASES_SYSTEME = ["postgres", "template0", "template1"];
+const IDENTIFIANT_SQL = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const TABLE_SQL = /^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/;
+const BOUCLE_LOCALE = ["localhost", "127.0.0.1", "::1", "[::1]"];
+// Aucun credential ne transite par la forge : une clé de secret renseignée, une url `://u:p@` ou un
+// `PGPASSWORD=` dans la déclaration la font refuser — le mot de passe vient de l'environnement du run.
+const CLE_SECRET = /^(mot_de_passe|password|passwd|pwd|secret|jeton|token)$/i;
+const SECRET_EN_CLAIR = /:\/\/[^\s:@\/]*:[^\s@\/]+@|\bPGPASSWORD\s*=/i;
+const DELAI_COMMANDE_BASE_MS = 600000; // 10 min par commande
+const SOURCES_BASE = {
+  db_reset: "https://supabase.com/docs/reference/cli/supabase-db-reset, lue le 29/10/2026",
+  migration_list: "https://supabase.com/docs/reference/cli/supabase-migration-list, lue le 29/10/2026",
+  start: "https://supabase.com/docs/reference/cli/supabase-start, lue le 29/10/2026",
+  link: "https://supabase.com/docs/reference/cli/supabase-link, lue le 29/10/2026",
+  status: "https://supabase.com/docs/reference/cli/supabase-status, lue le 29/10/2026",
+  seed: "https://supabase.com/docs/guides/local-development/seeding-your-database, lue le 29/10/2026",
+  drop_database: "https://www.postgresql.org/docs/current/sql-dropdatabase.html (PostgreSQL 18.6), lue le 29/10/2026",
+};
+const NON_JUGE_BASE = [
+  "la VÉRITÉ de la déclaration : une base déclarée « qualification » qui sert en réalité la production passe ; la production déclarée est la seule barrière d'adresse",
+  "la CIBLE des commandes déclarées : la forge les exécute sans les lire ; elle leur passe PGHOST, PGPORT, PGDATABASE et PGUSER de la cible et vérifie SUR la cible (état des migrations, comptes), ce qui fait échouer une commande qui aurait écrit ailleurs sans l'empêcher d'y avoir écrit",
+  "la QUALITÉ des données chargées au-delà des comptes non nuls (cohérence, volumétrie), et la pseudonymisation d'un extrait : sa source est exigée, jamais jugée",
+  "les objets de niveau serveur : DROP DATABASE ne supprime ni les rôles ni les autres bases du serveur",
+  "Supabase : aucune exécution dans ce lot ; la remise à zéro d'un projet distant reste un geste humain sous GO (R-38)",
+];
+
+const afficherArgv = (argv) => argv.map(x => /[\s"]/.test(x) ? `"${x.replace(/"/g, '\\"')}"` : x).join(" ");
+const texteDeclare = (v) => typeof v === "string" && v.trim() !== "";
+
+// Les chemins de la déclaration qui portent un secret en clair (clé de secret renseignée, url avec mot
+// de passe, PGPASSWORD=) : la déclaration entière est refusée, pas seulement la cible demandée.
+function secretsDeclares(v, ou = "") {
+  if (typeof v === "string") return SECRET_EN_CLAIR.test(v) ? [ou] : [];
+  if (Array.isArray(v)) return v.flatMap((x, i) => secretsDeclares(x, `${ou}[${i}]`));
+  if (v && typeof v === "object") return Object.entries(v).flatMap(([k, x]) => {
+    const chemin = ou ? `${ou}.${k}` : k;
+    return (CLE_SECRET.test(k) && x !== null && x !== "" ? [chemin] : []).concat(secretsDeclares(x, chemin));
+  });
+  return [];
+}
+
+// Les coordonnées d'une adresse : champs explicites, sinon lus dans `url` (sans mot de passe) ; un champ
+// vide compte comme absent. Le port manquant d'un hôte déclaré est celui de PostgreSQL par défaut, 5432.
+function coordonneesBase(a) {
+  const champ = (v) => (v === "" || v === null ? undefined : v);
+  const c = { hote: champ(a.hote), port: champ(a.port), base: champ(a.base), utilisateur: champ(a.utilisateur) };
+  if (texteDeclare(a.url)) {
+    const u = new URL(a.url.trim()); // illisible : levée, traitée par l'appelant
+    c.hote ??= u.hostname || undefined;
+    c.port ??= u.port ? Number(u.port) : undefined;
+    c.base ??= decodeURIComponent(u.pathname.replace(/^\//, "")) || undefined;
+    c.utilisateur ??= u.username ? decodeURIComponent(u.username) : undefined;
+  }
+  if (c.hote !== undefined && c.port === undefined) c.port = 5432;
+  return c;
+}
+
+// Les identités d'une adresse : serveur (hôte:port, la boucle locale sous un seul nom), conteneur, projet
+// Supabase. Deux cibles qui en partagent une désignent la même base ou le même serveur, et une remise à
+// zéro ne s'exécute jamais là où la production est servie.
+function identitesBase(a) {
+  const ids = [];
+  const c = coordonneesBase(a);
+  if (texteDeclare(String(c.hote ?? ""))) {
+    const port = Number(c.port);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`port illisible « ${c.port} »`);
+    const h = String(c.hote).trim().toLowerCase();
+    ids.push(`serveur ${BOUCLE_LOCALE.includes(h) ? "boucle-locale" : h}:${port}`);
+  }
+  if (texteDeclare(a.conteneur)) ids.push(`conteneur ${a.conteneur.trim().toLowerCase()}`);
+  if (texteDeclare(a.project_ref)) ids.push(`projet Supabase ${a.project_ref.trim().toLowerCase()}`);
+  return ids;
+}
+
+// Tout refus est journalisé à côté de la déclaration quand son dossier existe, puis sort avec son code.
+// Un journal illisible n'efface jamais le refus : il se dit, et le code reste celui du refus.
+function refuserBase(ctx, code, raison) {
+  let trace = "refus NON journalisé : dossier de la déclaration introuvable";
+  if (fs.existsSync(ctx.dossier)) {
+    try {
+      const e = journalAppend(ctx.dossier, "base_reinitialisation_refusee",
+        { declaration: ctx.declaration, cible: ctx.nom, mode: ctx.mode, code, raison });
+      trace = `refus journalisé (seq ${e.seq}, ${path.join(ctx.dossier, "journal.jsonl")})`;
+    } catch (err) { trace = `refus NON journalisé : ${String(err.message).slice(0, 80)}`; }
+  }
+  console.error(`${code === 2 ? "[OPS HORS CONTRAT]" : "[OPS REFUS]"} reinitialiser-base « ${ctx.nom} » : ${raison}. Rien n'a été exécuté ; ${trace}.`);
+  process.exit(code);
+}
+
+// Le démon que la CLI vise : DOCKER_HOST s'il est posé, sinon le contexte courant. Local = tube nommé,
+// socket unix ou TCP sur la boucle locale.
+function dockerLocal() {
+  let hote = process.env.DOCKER_HOST;
+  if (!hote) {
+    const r = spawnSync("docker", ["context", "inspect", "--format", "{{.Endpoints.docker.Host}}"], { encoding: "utf8", timeout: 30000 });
+    if (r.status !== 0) return { ok: false, raison: `démon Docker indéterminé (docker context inspect : ${r.error ? r.error.code : `exit ${r.status}`}) : l'exécution exige un Docker local joignable` };
+    hote = r.stdout.trim();
+  }
+  const local = /^(npipe|unix):\/\//i.test(hote) || /^tcp:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?\/?$/i.test(hote);
+  return local ? { ok: true, hote } : { ok: false, raison: `démon Docker distant (${hote}) : --executer ne vise qu'un Docker local` };
+}
+
+// Le plan ordonné. Chaque étape porte ses actions : `argv` (commande construite par la forge, jouée sans
+// shell) ou `shell` (commande déclarée par le produit, passée au shell du poste) ; le plan rendu n'en
+// montre que l'affichage.
+function planBase(doc, cible, ctx) {
+  const a = cible.adresse, c = coordonneesBase(a), m = cible.moteur, tables = cible.verification.tables;
+  const racine = path.resolve(ctx.dossier, texteDeclare(doc.racine) ? doc.racine.trim() : ".");
+  const d = cible.donnees, distant = m === "supabase-distant";
+  const etapeDonnees = { etape: "donnees", actions: [{ affichage: d.commande.trim(), shell: d.commande.trim() }],
+    attendu: `exit 0 : données ${d.nature === "extrait" ? `extraites (source déclarée : ${d.source.trim()})` : "synthétiques"} chargées par la commande du produit${distant ? " ; sur un projet distant, sous le même GO humain que l'étape 1 (R-38)" : ""}` };
+  let prealables, etapes, execution, placeholders = [];
+  if (m === "postgres-docker") {
+    const mig = cible.migrations;
+    const psql = (base, ...options) => ["docker", "exec", a.conteneur.trim(), "psql", "-v", "ON_ERROR_STOP=1", "-U", c.utilisateur, "-d", base, ...options];
+    const action = (argv) => ({ affichage: afficherArgv(argv), argv });
+    prealables = [
+      `conteneur ${a.conteneur.trim()} démarré sur le Docker LOCAL et publiant le port ${c.port} : contrôlé avant toute exécution (docker context inspect, docker inspect, docker port) ; la forge n'en crée aucun`,
+      `commandes déclarées jouées depuis ${racine}, avec PGHOST=${c.hote} PGPORT=${c.port} PGDATABASE=${c.base} PGUSER=${c.utilisateur} de la cible (aucun mot de passe : il vient de l'environnement du run)`,
+    ];
+    etapes = [
+      { etape: "vider", actions: [
+        action(psql("postgres", "-c", `DROP DATABASE IF EXISTS "${c.base}" WITH (FORCE)`)),
+        action(psql("postgres", "-c", `CREATE DATABASE "${c.base}"`)) ],
+        attendu: `base ${c.base} supprimée puis recréée vide ; connexion à la base de maintenance postgres, car DROP DATABASE « cannot be executed while you are connected to the target database » ; FORCE : « Attempt to terminate all existing connections to the target database. » ; deux commandes, car « DROP DATABASE cannot be executed inside a transaction block » ; source : ${SOURCES_BASE.drop_database}` },
+      { etape: "migrations", actions: [{ affichage: mig.commande.trim(), shell: mig.commande.trim() }],
+        attendu: "exit 0 : toutes les migrations rejouées sur la base vide" },
+      etapeDonnees,
+      { etape: "verification", actions: [
+        { affichage: mig.verification.trim(), shell: mig.verification.trim(), role: "migrations" },
+        ...tables.map(t => ({ ...action(psql(c.base, "-t", "-A", "-c", `SELECT count(*) FROM ${t}`)), table: t })) ],
+        attendu: `migrations à jour (exit 0 de la commande déclarée) ; comptes de lignes non nuls : ${tables.join(", ")}` },
+    ];
+    execution = "`--executer` joue ce plan sur le Docker local, après contrôle du démon (local), du conteneur (démarré) et du port déclaré (publié) ; sans `--executer`, rien ne s'exécute";
+  } else {
+    const portee = distant ? "--linked" : "--local";
+    const url = distant ? "<URL_BASE_DISTANTE>" : "<URL_BASE_LOCALE>";
+    placeholders = [url];
+    prealables = distant ? [
+      `supabase link --project-ref ${a.project_ref.trim()}   # « Link your local development project to a hosted Supabase project. » ; identité du run (jeton, mot de passe de la base) fournie par l'environnement, jamais dans ce plan ; source : ${SOURCES_BASE.link}`,
+      `${url} : adresse de connexion de la base du projet ${a.project_ref.trim()}, fournie par l'environnement du run, jamais une valeur dans ce plan`,
+    ] : [
+      `supabase start   # « Starts the Supabase local development stack. » ; prérequis de db reset : « Requires the local development stack to be started by running \`supabase start\`. » ; la pile exige supabase/config.toml : « Requires \`supabase/config.toml\` to be created in your current working directory by running \`supabase init\`. » ; sources : ${SOURCES_BASE.start} ; ${SOURCES_BASE.db_reset}`,
+      `supabase status   # « Shows status of the Supabase local development stack. » ; sa ligne « DB URL: postgresql://… » donne ${url}, l'adresse des comptes de l'étape 4 ; source : ${SOURCES_BASE.status}`,
+    ];
+    etapes = [
+      { etape: "vider", actions: [{ affichage: `supabase db reset ${portee} --no-seed` }],
+        attendu: distant
+          ? `GESTE HUMAIN SOUS GO (R-38), jamais exécuté par la forge : « a SQL script is executed to identify and drop all user created entities in the remote database » ; « Resets the linked project with local migrations. » ; les rôles restent : « any custom roles created through the dashboard or \`supabase/roles.sql\` will not be deleted by remote reset. » ; --no-seed : les données sont l'étape 3 ; source : ${SOURCES_BASE.db_reset}`
+          : `« Resets the local database to a clean state. » puis rejoue les migrations : « Resets the local database with local migrations. » ; --no-seed (« Skip running the seed script after reset. ») : les données sont l'étape 3, la commande du produit ; sans lui, supabase/seed.sql ou les sql_paths de [db.seed] seraient joués en plus : « Seed files are executed the first time you run \`supabase start\` and every time you run \`supabase db reset\`. » ; sources : ${SOURCES_BASE.db_reset} ; ${SOURCES_BASE.seed}` },
+      { etape: "migrations", actions: [],
+        attendu: `rejouées par l'étape 1 : supabase db reset applique les migrations du dossier supabase/migrations ; aucune commande de plus ; source : ${SOURCES_BASE.db_reset}` },
+      etapeDonnees,
+      { etape: "verification", actions: [
+        { affichage: `supabase migration list ${portee}` },
+        ...tables.map(t => ({ affichage: `psql "${url}" -t -A -c "SELECT count(*) FROM ${t}"`, table: t })) ],
+        attendu: `migrations à jour : chaque migration de supabase/migrations figure aussi côté base (« Lists migrations applied to the ${distant ? "linked project" : "local database"}. » ; le tableau d'exemple de la page laisse vide la cellule d'une migration présente d'un seul côté) ; comptes de lignes non nuls : ${tables.join(", ")} ; source : ${SOURCES_BASE.migration_list}` },
+    ];
+    execution = distant
+      ? "GESTE HUMAIN sous GO (R-38) : `--executer` est refusé (exit 2), la forge ne réinitialise jamais un projet Supabase distant"
+      : "plan seulement dans ce lot : `--executer` est refusé (exit 2), les commandes se jouent dans la session du produit";
+  }
+  return {
+    interne: { etapes, racine, coordonnees: c },
+    doc: {
+      format: "forge-ops/reinitialisation-base@1",
+      verbe: "reinitialiser-base",
+      declaration: ctx.declaration,
+      produit: doc.produit ?? null,
+      cible: cible.nom,
+      environnement: cible.environnement,
+      moteur: m,
+      execution,
+      garde_fous: [
+        "environnement developpement ou qualification seulement : production ou non déclaré, refus exit 2, en plan comme en exécution",
+        "la cible ne partage ni le serveur (hôte:port), ni le conteneur, ni le projet Supabase d'une cible production ou d'environnement non déclaré",
+        "aucun credential dans la déclaration ni dans ce plan",
+        "exécution sur `--executer` seulement, cible postgres-docker d'un Docker local ; chaque geste exécuté ou refusé est journalisé",
+      ],
+      placeholders,
+      prealables,
+      etapes: etapes.map((e, i) => ({ ordre: i + 1, etape: e.etape, commandes: e.actions.map(x => x.affichage), attendu: e.attendu })),
+      non_juge: NON_JUGE_BASE,
+    },
+  };
+}
+
+// L'exécution : étapes dans l'ordre, chacune journalisée ; une étape de construction s'arrête au premier
+// échec ; la vérification compte TOUTES les tables avant de conclure.
+function executerBase(ctx, cible, p) {
+  const { etapes, racine, coordonnees: c } = p.interne;
+  if (!fs.existsSync(racine)) refuserBase(ctx, 1, `racine des commandes déclarées introuvable : ${racine}`);
+  const env = { ...process.env, PGHOST: String(c.hote), PGPORT: String(c.port), PGDATABASE: c.base, PGUSER: c.utilisateur };
+  const jouer = (x) => x.argv
+    ? spawnSync(x.argv[0], x.argv.slice(1), { encoding: "utf8", timeout: DELAI_COMMANDE_BASE_MS })
+    : spawnSync(x.shell, { shell: true, cwd: racine, env, encoding: "utf8", timeout: DELAI_COMMANDE_BASE_MS });
+  const extrait = (r) => (r.error ? r.error.message : String(r.stderr || r.stdout || "").trim()).slice(0, 200);
+  const debut = Date.now(), comptes = {};
+  let detruite = false;
+  for (const [i, e] of etapes.entries()) {
+    const t0 = Date.now(), ecarts = [];
+    for (const x of e.actions) {
+      const r = jouer(x);
+      if (x.table) {
+        const sortie = String(r.stdout || "").trim(), n = Number(sortie);
+        comptes[x.table] = r.status === 0 && sortie !== "" && Number.isInteger(n) ? n : null;
+        if (r.status !== 0) ecarts.push(`table ${x.table} : compte impossible (exit ${r.status ?? r.signal}) — ${extrait(r)}`);
+        else if (comptes[x.table] === null) ecarts.push(`table ${x.table} : compte illisible (« ${sortie.slice(0, 40)} »)`);
+        else if (n === 0) ecarts.push(`table ${x.table} : 0 ligne, les données ne sont pas chargées sur la cible déclarée`);
+        continue;
+      }
+      if (r.status === 0) { if (e.etape === "vider") detruite = true; continue; }
+      ecarts.push(`${x.role === "migrations" ? "migrations en retard ou état illisible" : "commande en échec"} (exit ${r.status ?? r.signal}) : ${x.affichage} — ${extrait(r)}`);
+      if (e.etape !== "verification") break;
+    }
+    const duree_ms = Date.now() - t0;
+    journalAppend(ctx.dossier, "base_reinitialisation_etape", { declaration: ctx.declaration, cible: ctx.nom, ordre: i + 1, etape: e.etape,
+      verdict: ecarts.length ? "echec" : "ok", duree_ms, commandes: e.actions.map(x => x.affichage),
+      ...(e.etape === "verification" ? { comptes } : {}), ...(ecarts.length ? { ecarts } : {}) });
+    console.log(`  [BASE ${ecarts.length ? "STOP" : "OK"}] ${i + 1}/${etapes.length} ${e.etape} — ${(duree_ms / 1000).toFixed(1)} s${ecarts.length ? ` — ${ecarts.join(" ; ")}` : ""}`);
+    if (ecarts.length) {
+      journalAppend(ctx.dossier, "base_reinitialisation_echec", { declaration: ctx.declaration, cible: ctx.nom, etape: e.etape, raison: ecarts.join(" ; ") });
+      fail(`reinitialiser-base « ${ctx.nom} » : échec à l'étape ${e.etape} — ${ecarts.join(" ; ")}`
+        + (detruite ? ". La base a été supprimée : elle reste absente, vide ou partielle jusqu'au prochain passage réussi" : ""));
+    }
+  }
+  const fin = journalAppend(ctx.dossier, "base_reinitialisation", { declaration: ctx.declaration, cible: ctx.nom,
+    environnement: cible.environnement, moteur: cible.moteur, comptes, duree_ms: Date.now() - debut });
+  console.log(`[OPS OK] base « ${ctx.nom} » réinitialisée (${cible.environnement}, ${cible.moteur}) : migrations à jour ; `
+    + `${Object.entries(comptes).map(([t, n]) => `${t}=${n}`).join(", ")} — journal seq ${fin.seq}`);
+}
+
+function reinitialiserBase(declaration, nom, executer, sortie) {
+  const ctx = { declaration, dossier: path.dirname(declaration), nom, mode: executer ? "execution" : "plan" };
+  const horsContratBase = (raison) => refuserBase(ctx, 2, raison);
+  const refusBase = (raison) => refuserBase(ctx, 1, raison);
+
+  // 1. La déclaration : lisible, au format, sans secret.
+  if (!fs.existsSync(declaration)) horsContratBase(`déclaration introuvable (${declaration}) : une cible non déclarée ne se réinitialise pas`);
+  let doc = null;
+  try { doc = JSON.parse(fs.readFileSync(declaration, "utf8").replace(/^﻿/, "")); }
+  catch { horsContratBase(`déclaration illisible (JSON invalide), attendu le format ${FORMAT_BASES}`); }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc) || doc.format !== FORMAT_BASES)
+    horsContratBase(`format inconnu « ${doc?.format} » (attendu ${FORMAT_BASES})`);
+  const secrets = [...new Set(secretsDeclares(doc))];
+  if (secrets.length) horsContratBase(`mot de passe en clair dans la déclaration (${secrets.join(", ")}) : aucun credential ne transite par la forge — retirer le mot de passe, il vient de l'environnement du run`);
+  const bases = (Array.isArray(doc.bases) ? doc.bases : []).filter(b => b && typeof b === "object");
+
+  // 2. La cible : déclarée une fois, et jamais en production.
+  const homonymes = bases.filter(b => b.nom === nom);
+  if (!homonymes.length) horsContratBase(`cible non déclarée : aucune entrée « ${nom} » dans bases[] (déclarées : ${bases.map(b => b.nom).filter(Boolean).join(", ") || "aucune"})`);
+  if (homonymes.length > 1) horsContratBase(`cible « ${nom} » déclarée ${homonymes.length} fois : laquelle viser n'est pas dit`);
+  const cible = homonymes[0];
+  const env = cible.environnement;
+  if (!texteDeclare(env)) horsContratBase("environnement non déclaré — déclarer `environnement` : developpement | qualification ; une base dont l'environnement n'est pas dit est traitée comme la production");
+  if (!ENVIRONNEMENTS_BASE.includes(env)) horsContratBase(`environnement « ${env} » hors vocabulaire (developpement | qualification | production) : traité comme la production`);
+  if (env === "production") horsContratBase("environnement production : une base de production ne se vide jamais par la forge, ni en plan ni en exécution ; sa remise en état passe par la restauration de ses sauvegardes (O-19), geste humain");
+
+  // 3. L'adresse : la production est déclarée (ou écartée par un motif), et la cible ne partage rien avec
+  // elle. Une entrée d'environnement non déclaré ou hors vocabulaire est gardée comme la production.
+  const productions = bases.filter(b => b.environnement === "production");
+  if (!productions.length && String(doc.aucune_production ?? "").trim().length < 10)
+    horsContratBase("aucune cible production déclarée : le garde-fou d'adresse n'a rien à comparer — déclarer la production dans bases[] (son adresse suffit) ou `aucune_production: \"<motif>\"` ; le silence n'est pas une réponse");
+  const a = cible.adresse;
+  if (!a || typeof a !== "object" || Array.isArray(a)) horsContratBase("adresse non déclarée : rien ne prouve que la cible n'est pas la production");
+  let ids = [];
+  try { ids = identitesBase(a); } catch (err) { horsContratBase(`adresse illisible (${err.message})`); }
+  if (!ids.length) horsContratBase("adresse sans identité comparable (ni hote ou url, ni conteneur, ni project_ref) : rien ne prouve que la cible n'est pas la production");
+  for (const g of bases.filter(b => b !== cible && !["developpement", "qualification"].includes(b.environnement))) {
+    const qualite = g.environnement === "production" ? "environnement production" : "environnement non déclaré, traité comme la production";
+    const nomG = texteDeclare(g.nom) ? g.nom : "(base sans nom)";
+    let idsG = [];
+    try { idsG = identitesBase(g.adresse && typeof g.adresse === "object" ? g.adresse : {}); }
+    catch (err) { horsContratBase(`adresse illisible pour « ${nomG} » (${qualite}) : ${err.message}`); }
+    if (!idsG.length) horsContratBase(`« ${nomG} » (${qualite}) n'a pas d'adresse comparable : le garde-fou ne peut pas prouver que « ${nom} » n'est pas elle`);
+    const commune = ids.find(i => idsG.includes(i));
+    if (commune) horsContratBase(`même ${commune} que « ${nomG} » (${qualite}) : une remise à zéro ne s'exécute jamais là où la production est servie — déclarer une base de ${env} sur un autre serveur`);
+  }
+
+  // 4. Le moteur, puis la complétude de ce que le plan joue.
+  const m = cible.moteur;
+  if (!MOTEURS_BASE.includes(m)) horsContratBase(`moteur « ${m} » hors vocabulaire (${MOTEURS_BASE.join(" | ")})`);
+  const c = coordonneesBase(a), manques = [];
+  if (m === "postgres-docker") {
+    if (!texteDeclare(String(c.hote ?? ""))) manques.push("adresse.hote (ou adresse.url)");
+    if (!texteDeclare(a.conteneur)) manques.push("adresse.conteneur");
+    if (!texteDeclare(c.base)) manques.push("adresse.base");
+    if (!texteDeclare(c.utilisateur)) manques.push("adresse.utilisateur");
+    if (!texteDeclare(cible.migrations?.commande)) manques.push("migrations.commande");
+    if (!texteDeclare(cible.migrations?.verification)) manques.push("migrations.verification (commande dont l'exit 0 atteste les migrations à jour)");
+  }
+  if (m === "supabase-distant" && !texteDeclare(a.project_ref)) manques.push("adresse.project_ref");
+  if (!texteDeclare(cible.donnees?.commande)) manques.push("donnees.commande");
+  if (!NATURES_DONNEES.includes(cible.donnees?.nature)) manques.push("donnees.nature (synthetique | extrait)");
+  if (cible.donnees?.nature === "extrait" && !texteDeclare(cible.donnees?.source)) manques.push("donnees.source (d'où vient l'extrait)");
+  const tables = cible.verification?.tables;
+  if (!Array.isArray(tables) || !tables.length) manques.push("verification.tables (au moins une table au compte de lignes non nul)");
+  if (manques.length) refusBase(`déclaration incomplète — compléter : ${manques.join(", ")}`);
+  // La base entre dans le SQL de `vider` et les tables dans celui des comptes : identifiants simples
+  // seulement. L'utilisateur ne passe que par `-U` et PGUSER, jamais par le SQL : il n'est pas contraint.
+  const malformes = [
+    ...(m === "postgres-docker" && !IDENTIFIANT_SQL.test(String(c.base)) ? [["adresse.base", c.base]] : []),
+    ...tables.map((t, i) => [`verification.tables[${i}]`, t]).filter(([, t]) => typeof t !== "string" || !TABLE_SQL.test(t)),
+  ];
+  if (malformes.length) refusBase(`identifiant non conforme, nom SQL simple attendu (schema.table admis pour une table) : ${malformes.map(([k, v]) => `${k} « ${v} »`).join(", ")}`);
+  if (m === "postgres-docker" && BASES_SYSTEME.includes(c.base.toLowerCase()))
+    horsContratBase(`base « ${c.base} » : base de maintenance ou modèle de PostgreSQL, que vider supprimerait depuis elle-même — déclarer une base dédiée`);
+
+  // 5. Le plan : rendu par défaut ; écrit dans `--sortie` en plan comme avant une exécution.
+  const p = planBase(doc, cible, ctx);
+  const json = JSON.stringify(p.doc, null, 2);
+  if (sortie) { fs.writeFileSync(sortie, json + "\n", "utf8"); console.log(`[OPS OK] plan de réinitialisation « ${nom} » écrit : ${sortie}`); }
+  if (!executer) { if (!sortie) console.log(json); return; }
+
+  // 6. L'exécution : postgres-docker sur un Docker local seulement.
+  if (m === "supabase-local") horsContratBase("Supabase local : plan seulement dans ce lot — ses commandes se jouent dans la session du produit");
+  if (m === "supabase-distant") horsContratBase("projet Supabase distant : sa remise à zéro est un geste humain sous GO (R-38), jamais exécuté par la forge — le plan donne la commande");
+  if (!BOUCLE_LOCALE.includes(String(c.hote).trim().toLowerCase()))
+    horsContratBase(`hôte « ${c.hote} » non local : --executer ne vise qu'une base du poste (127.0.0.1, localhost ou ::1) ; ailleurs, le plan seulement`);
+  const dk = dockerLocal();
+  if (!dk.ok) horsContratBase(dk.raison);
+  const conteneur = a.conteneur.trim();
+  const etat = spawnSync("docker", ["inspect", "--format", "{{.State.Running}}", conteneur], { encoding: "utf8", timeout: 30000 });
+  if (etat.status !== 0 || String(etat.stdout).trim() !== "true")
+    horsContratBase(`conteneur « ${conteneur} » absent ou arrêté sur le Docker local (${dk.hote}) : la forge n'exécute que sur un conteneur déclaré et démarré, elle n'en crée aucun`);
+  const pub = spawnSync("docker", ["port", conteneur], { encoding: "utf8", timeout: 30000 });
+  const ports = [...String(pub.stdout || "").matchAll(/->\s*\S*:(\d+)\s*$/gm)].map(x => Number(x[1]));
+  if (!ports.includes(Number(c.port)))
+    horsContratBase(`le conteneur « ${conteneur} » ne publie pas le port déclaré ${c.port} (publiés : ${ports.join(", ") || "aucun"}) : l'adresse déclarée et le conteneur ne désignent pas la même base`);
+  executerBase(ctx, cible, p);
+}
+
 const argv = process.argv.slice(2);
 const iSortie = argv.indexOf("--sortie");
 const sortieOpt = iSortie >= 0 ? argv[iSortie + 1] : null;
@@ -569,6 +929,10 @@ if (iSortie >= 0) argv.splice(iSortie, 2);
 const iSeuils = argv.indexOf("--seuils");
 const fichierSeuils = iSeuils >= 0 ? argv[iSeuils + 1] : null;
 if (iSeuils >= 0) argv.splice(iSeuils, 2);
+// TF-2013 : `--executer` est le seul drapeau qui fait agir reinitialiser-base ; sans lui, le plan.
+const iExecuter = argv.indexOf("--executer");
+const executerOpt = iExecuter >= 0;
+if (iExecuter >= 0) argv.splice(iExecuter, 1);
 const [verbe, a, b] = argv;
 // TF-0245 : tout chemin reçu est résolu en absolu ICI, une seule fois — jamais de
 // rustine en aval. healthcheck et mesurerPalier s'exécutent avec cwd=releaseDir : un
@@ -576,11 +940,13 @@ const [verbe, a, b] = argv;
 // refus à tort journalisé deploiement_refuse). Constaté aussi en amont : fs.cpSync
 // échoue en relatif (EIO, node 25 / Windows). Exception : la cible de `plan` est un nom
 // de plateforme (railway, gcp…), pas un chemin, et son build reste textuel — le plan
-// s'exécute dans un autre environnement.
+// s'exécute dans un autre environnement. De même, la cible de `reinitialiser-base` est un
+// nom de la déclaration, pas un chemin.
 const abs = p => (p ? path.resolve(p) : p);
 if (verbe === "deployer") { if (!b) fail("usage : deployer <build> <cible>"); deployer(abs(a), abs(b)); }
 else if (verbe === "restaurer") { if (!a) fail("usage : restaurer <cible>"); restaurer(abs(a)); }
 else if (verbe === "etat") { if (!a) fail("usage : etat <cible> [--sortie fichier.json]"); etat(abs(a), abs(sortieOpt)); }
 else if (verbe === "plan") { if (!b) fail("usage : plan <cible> <build> [--sortie plan.json]"); plan(a, b, abs(sortieOpt)); }
 else if (verbe === "canary") { if (!b) fail("usage : canary <build> <cible> [--seuils fichier.json]"); canary(abs(a), abs(b), abs(fichierSeuils)); }
-else fail("verbe inconnu — deployer | restaurer | etat | plan | canary");
+else if (verbe === "reinitialiser-base") { if (!b) fail("usage : reinitialiser-base <declaration.json> <cible> [--executer] [--sortie plan.json]"); reinitialiserBase(abs(a), b, executerOpt, abs(sortieOpt)); }
+else fail("verbe inconnu — deployer | restaurer | etat | plan | canary | reinitialiser-base");

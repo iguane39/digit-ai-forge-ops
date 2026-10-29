@@ -82,7 +82,10 @@ const NON_JUGE = [
   "cible dont pointeur/historique sont tenus par une plateforme externe (fichier PLATEFORME) : preuve d'exécution laissée à O-5 (plan) et aux verdicts propres de la plateforme (TF-0844)",
   "O16 : la VÉRITÉ des réponses et des preuves de clôture d'un nettoyage — l'oracle juge qu'elles sont écrites, jamais qu'elles sont justes ; et un nettoyage raconté sans frontmatter `nettoyage_infrastructure:` ni titre qui le déclare n'est pas détecté (TF-1120)",
 ];
-const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation"];
+// TF-2013 : les quatre types de `ops.mjs reinitialiser-base` (refus, étape, réussite, échec) sont des types
+// connus d'O3 ; O4 ne les lit pas, il ne suit que deploiement, restauration et canary_promotion.
+const TYPES = ["deploiement", "deploiement_refuse", "restauration", "canary_etape", "canary_promotion", "canary_annulation",
+  "base_reinitialisation_refusee", "base_reinitialisation_etape", "base_reinitialisation", "base_reinitialisation_echec"];
 
 const args = process.argv.slice(2);
 // TF-0281 (propagation de TF-0245) : la cible est résolue en absolu ICI, une seule fois.
