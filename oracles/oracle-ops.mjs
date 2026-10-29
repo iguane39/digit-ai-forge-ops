@@ -1045,6 +1045,18 @@ const _EXCLUS_O20 = new Set(["node_modules", ".git", ".venv", "venv", "dist", "b
   "coverage", "tests", "test", "e2e", "fixtures", ".terraform"]);
 const _FICHIER_LU_O20 = /(\.(md|sh|bash|zsh|ps1|psm1|cmd|bat|mk|mjs|cjs|js|ts|py|ya?ml|txt)$)|^(Makefile|justfile|Taskfile)$/i;
 const _COMPOSE_O20 = /^(docker-)?compose(\.[\w.-]+)?\.ya?ml$/i;
+// Un fichier de test cite des commandes en données de test, il ne lance rien : il n'est pas lu (même borne
+// qu'O-8). Une ligne de commentaire de code non plus : elle cite, elle ne commande pas.
+const _FICHIER_TEST_O20 = /(^|[._-])(test|tests|spec)([._-]|$)/i;
+const _COMMENTAIRE_O20 = /^\s*(\/\/|\/\*|\*|#|<#|rem\s|::)/i;
+// Un nom de conteneur : lettres, chiffres, « _ », « . », « - » (un mot de prose n'en est pas un).
+const _NOM_CONTENEUR_O20 = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
+// Une commande commence une instruction : en tête de ligne, après un opérateur de shell, une invite « $ », un
+// `run:` de workflow ou un tiret de liste YAML ; dans du code, en tête de chaîne. « relancer : docker start
+// (voir le guide) » au milieu d'une phrase n'est pas une commande.
+const _DEBUT_SHELL_O20 = /(^|&&|\|\||[;|(`&$]|\$\(|\bsudo|\bexec|\bcall|\brun:|^\s*-|\bthen|\bdo|\belse)\s*$/;
+const _DEBUT_CODE_O20 = /["'`]$/;
+const _CODE_O20 = /\.(mjs|cjs|js|ts|py)$/i;
 
 // Découpe une commande en mots, guillemets simples et doubles respectés ; s'arrête à un opérateur de
 // shell (&&, ||, ;, |, >, <) ou à un accent grave (fin d'un code en ligne Markdown).
@@ -1203,7 +1215,7 @@ if (args.includes("--conteneurs-a-etat")) {
       const q = path.join(dir, nom);
       let st; try { st = fs.statSync(q); } catch { continue; }
       if (st.isDirectory()) parcourir(q, prof + 1);
-      else if (st.size < 2_000_000 && (_FICHIER_LU_O20.test(nom) || _COMPOSE_O20.test(nom))) fichiers.push(q);
+      else if (st.size < 2_000_000 && (_FICHIER_LU_O20.test(nom) || _COMPOSE_O20.test(nom)) && !(_FICHIER_TEST_O20.test(nom) && !_COMPOSE_O20.test(nom))) fichiers.push(q);
     }
   })(racine20, 0);
 
@@ -1246,12 +1258,14 @@ if (args.includes("--conteneurs-a-etat")) {
       let ligne = brutes[n];
       const debut = n;
       if (estMd && /^\s*(```|~~~)/.test(ligne)) { dansBloc = !dansBloc; continue; }
+      if (!estMd && _COMMENTAIRE_O20.test(ligne)) continue;
       while (/(\\|`|\^)\s*$/.test(ligne) && n + 1 < brutes.length && !(estMd && !dansBloc)) { ligne = ligne.replace(/(\\|`|\^)\s*$/, " ") + brutes[++n].trim(); }
       const segments = !estMd || dansBloc ? [ligne] : [...ligne.matchAll(/`([^`]+)`/g)].map(x => x[1]);
       for (const segment of segments) {
       const re = /\bdocker(?:\.exe)?\s+(?:container\s+)?(run|start|restart)\s+([^\n]*)/g;
       let m;
       while ((m = re.exec(segment))) {
+        if (!(_CODE_O20.test(f) ? _DEBUT_CODE_O20 : _DEBUT_SHELL_O20).test(segment.slice(0, m.index))) continue;
         const mots = _motsCommandeO20(m[2]);
         const ou = `${rel(f)}:${debut + 1}`;
         if (m[1] === "run") { const r = _lireRunO20(mots); runs.push({ ou, ...r, image: _imageO20(r.image) }); }
@@ -1277,10 +1291,12 @@ if (args.includes("--conteneurs-a-etat")) {
 
   // (1) Le volume, sur le chemin exact des données de travail.
   const sansLigne = [];
+  let etatJuges = 0, startsJuges = 0;
   const jugerMontages = (c, genre) => {
     const decl = ligneDe(c.nom || c.conteneur, c.image) || (c.conteneur ? ligneDe(c.conteneur, null) : null);
     const ref = c.image.depot ? entreeRef(c.image) : null;
     if (!decl && !ref) return;
+    etatJuges++;
     const chemins = cheminsDonnees(decl, c.image);
     const qui = `${genre} ${c.image.brut || "(image non résolue)"}${c.nom ? ` (${c.nom})` : ""}`;
     if (!decl) sansLigne.push({ qui, ou: c.ou });
@@ -1304,7 +1320,8 @@ if (args.includes("--conteneurs-a-etat")) {
   // (2) Un conteneur démarré a sa commande de création écrite.
   const crees = new Set([...runs.map(r => r.nom), ...services.flatMap(s => [s.nom, s.conteneur])].filter(Boolean).map(_norm));
   for (const s of starts) for (const nom of s.noms) {
-    if (/[$%]/.test(nom)) continue;
+    if (/[$%]/.test(nom) || !_NOM_CONTENEUR_O20.test(nom)) continue;
+    startsJuges++;
     if (crees.has(_norm(nom)) || ligneDe(nom, null)) continue;
     add("majeur", "O20", `docker ${s.verbe} ${nom} : la commande qui CRÉE ce conteneur n'est écrite nulle part (aucun docker run --name ${nom}, aucun service compose, aucune ligne de la table « Composants à état ») — s'il porte un état, son volume ne peut pas être vérifié, et le conteneur ne se recrée pas à l'identique (TF-1986)`, s.ou);
   }
@@ -1336,6 +1353,12 @@ if (args.includes("--conteneurs-a-etat")) {
     else for (const s of sansLigne) add("majeur", "O20", `${s.qui} : composant à état lancé sans ligne dans la table « Composants à état » de ${path.basename(declPath)} (TF-1986)`, s.ou);
   }
   const durs20 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  // Des commandes Docker lues, mais aucune d'une image à état, aucun docker start, aucune ligne déclarée : rien
+  // n'a été jugé, et un PASS affirmerait une conformité vide.
+  if (!durs20.length && !etatJuges && !startsJuges && !declaration.lignes.length) {
+    add("info", "O20", `${runs.length} docker run et ${services.length} service(s) compose lus, aucun d'une image à état reconnue (référentiel ou table) — rien à juger`, racine20);
+    fin20("SKIP", 2);
+  }
   fin20(durs20.length ? "FAIL" : "PASS", durs20.length ? 1 : 0);
 }
 

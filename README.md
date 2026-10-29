@@ -271,8 +271,11 @@ Les 3 règles nomment chaque écart à sa ligne :
 
 Une image est reconnue à état par cette table ou par le référentiel daté `references/CONTENEURS-A-ETAT.json`
 (postgres, mysql, mariadb, mongo, redis, opendronemap/nodeodm, lus le 29/10/2026 dans la documentation de
-chaque image). Exemple complet : `fixtures/o20-conteneurs-a-etat/verte/`. Sans conteneur ni déclaration :
-SKIP. Un fichier compose que le lecteur refuse (ancre, alias) rend FAIL, jamais un PASS silencieux.
+chaque image). Exemple complet : `fixtures/o20-conteneurs-a-etat/verte/`. Sans composant à état reconnu ni
+déclaration : SKIP, jamais un PASS vide. Un fichier compose que le lecteur refuse (ancre, alias) rend FAIL,
+jamais un PASS silencieux. Une commande citée ne se lit pas : fichier de test (`*.test.*`, `self-test.*`),
+ligne de commentaire, ou commande au milieu d'une phrase. Une commande commence une ligne, suit un opérateur de
+shell ou un `run:`, ou ouvre une chaîne de code.
 
 **Ce qui n'est pas jugé :** les volumes des plateformes gérées (Railway, Container Apps, Cloud Run) ; une image
 hors référentiel et absente de la table ; une image résolue par une variable ; la vérité du chemin déclaré ;

@@ -1647,6 +1647,21 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
     ok(rAn.verdict === "FAIL" && (rAn.findings || []).some(f => f.sev === "majeur" && /non lu par le lecteur/.test(f.msg)),
       "O20 borne : fichier compose que le lecteur refuse (ancre) -> FAIL dit, jamais un PASS silencieux");
     ok(o20(path.join(tmp20, "racine-absente")).verdict === "SKIP", "O20 borne : racine introuvable -> SKIP");
+    // Faux positifs fermés (rejeu d'O-20 sur forge-ops elle-même, 29/10/2026 : 26 constats, tous dans des citations) :
+    // un fichier de test, une ligne de commentaire et un mot de prose après « docker start » ne sont pas des commandes ;
+    // une chaîne de code qui lance un conteneur, si.
+    poser("citations/lancer.test.mjs", 'const cas = "docker run -d --name base-t postgres:16";\n');
+    poser("citations/notes.sh", "# docker run -d --name base-c postgres:16\n# docker start nodeodm\n");
+    poser("citations/outil.mjs", "const aide = \"relancer : docker start (voir le guide)\";\n");
+    const rCit = o20(path.join(tmp20, "citations"));
+    ok(rCit.verdict === "SKIP" && !(rCit.findings || []).some(f => f.sev === "bloquant" || f.sev === "majeur"),
+      `O20 : fichier de test, commentaire de script et mot de prose après docker start -> aucun constat, SKIP (obtenu ${rCit.verdict})`);
+    poser("code/lancer.mjs", 'execSync("docker run -d --name base-code postgres:16");\n');
+    const rCode = o20(path.join(tmp20, "code"));
+    ok(rCode.verdict === "FAIL" && (rCode.findings || []).some(f => f.sev === "bloquant" && f.where === "lancer.mjs:1" && /SANS -v ni --mount/.test(f.msg)),
+      "O20 : une chaîne de code qui lance un postgres sans volume reste jugée -> bloquant à sa ligne");
+    poser("sans-etat/lancer.sh", "docker run -d --name web nginx:1.27\n");
+    ok(o20(path.join(tmp20, "sans-etat")).verdict === "SKIP", "O20 borne : des docker run d'images sans état seulement -> SKIP, jamais un PASS vide");
   } finally {
     fs.rmSync(tmp20, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   }
