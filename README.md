@@ -225,6 +225,8 @@ trois échecs types, puis le détruit. Il ne télécharge aucune image.
 - la qualité des données au-delà des comptes non nuls, et la pseudonymisation d'un extrait, dont seule la
   source est exigée ;
 - les rôles et les autres bases du serveur, que `DROP DATABASE` ne touche pas ;
+- la portabilité des commandes déclarées : elles passent au shell du poste (`cmd.exe` sous Windows,
+  `/bin/sh` ailleurs), où une même commande peut se lire autrement ;
 - toute exécution Supabase.
 
 ## Un travail planifié s'exerce (O-8, TF-0527)

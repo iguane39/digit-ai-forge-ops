@@ -613,6 +613,7 @@ const NON_JUGE_BASE = [
   "la CIBLE des commandes déclarées : la forge les exécute sans les lire ; elle leur passe PGHOST, PGPORT, PGDATABASE et PGUSER de la cible et vérifie SUR la cible (état des migrations, comptes), ce qui fait échouer une commande qui aurait écrit ailleurs sans l'empêcher d'y avoir écrit",
   "la QUALITÉ des données chargées au-delà des comptes non nuls (cohérence, volumétrie), et la pseudonymisation d'un extrait : sa source est exigée, jamais jugée",
   "les objets de niveau serveur : DROP DATABASE ne supprime ni les rôles ni les autres bases du serveur",
+  "la PORTABILITÉ des commandes déclarées : elles passent au shell du poste (cmd.exe sous Windows, /bin/sh ailleurs), où une même commande peut se lire autrement",
   "Supabase : aucune exécution dans ce lot ; la remise à zéro d'un projet distant reste un geste humain sous GO (R-38)",
 ];
 
