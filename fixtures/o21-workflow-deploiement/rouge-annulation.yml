@@ -1,0 +1,29 @@
+# Fixture ROUGE O-21 (TF-2003) : garde et environnement en place, mais un push suivant annule le
+# déploiement en cours (cancel-in-progress: true).
+name: deploiement
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: deploiement-production
+  cancel-in-progress: true
+jobs:
+  garde-go:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/environments/production" > env.json
+          jq -e '[.protection_rules[]? | select((.reviewers // []) | length > 0)] | length > 0' env.json
+          jq -e '[.protection_rules[]? | select(.prevent_self_review == true)] | length > 0' env.json
+  deployer:
+    needs: garde-go
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: supabase db push --linked

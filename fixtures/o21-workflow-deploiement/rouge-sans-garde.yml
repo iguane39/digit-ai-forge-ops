@@ -1,0 +1,21 @@
+# Fixture ROUGE O-21 (TF-2003) : le job vise l'environnement production, mais rien ne prouve que cet
+# environnement porte des relecteurs requis — un environnement jamais réglé est créé sans règle.
+name: deploiement
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: deploiement-production
+  cancel-in-progress: false
+jobs:
+  deployer:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
+      - run: npx wrangler versions deploy 1111aaaa@100% --yes

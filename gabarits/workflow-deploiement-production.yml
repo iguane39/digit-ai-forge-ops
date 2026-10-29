@@ -1,0 +1,73 @@
+# Gabarit forge-ops (TF-2003) : déploiement de PRODUCTION par GitHub Actions, où le GO humain (R-38)
+# est l'approbation de l'environnement « production ». À copier dans .github/workflows/ du produit,
+# chaque <JETON> remplacé, puis à faire juger :
+#   node <forge-ops>/oracles/oracle-ops.mjs --workflow-deploiement .github/workflows/deploiement-production.yml
+# Faits de la plateforme, sources et dates de lecture : references/WORKFLOW-DEPLOIEMENT.md de forge-ops.
+#
+# Réglages GitHub à poser AVANT le premier run (geste humain, réglage du dépôt) : environnement
+# « production » avec Required reviewers, Prevent self-review et Deployment branches restreintes à la
+# branche de production. Côté cloud, la confiance OIDC vise le sujet
+# repo:<ORGANISATION>/<DEPOT>:environment:production.
+name: deploiement-production
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploiement-production
+  cancel-in-progress: false
+
+jobs:
+  garde-go:
+    name: Garde du GO humain
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: L'environnement production exige une approbation humaine
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONNEMENT: production
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/environments/${ENVIRONNEMENT}" > environnement.json
+          jq -e '[.protection_rules[]? | select((.reviewers // []) | length > 0)] | length > 0' environnement.json > /dev/null \
+            || { echo "::error::${ENVIRONNEMENT} sans relecteur requis : le GO humain n'existe pas (R-38)"; exit 1; }
+          jq -e '[.protection_rules[]? | select(.prevent_self_review == true)] | length > 0' environnement.json > /dev/null \
+            || { echo "::error::${ENVIRONNEMENT} : Prevent self-review non coché, l'auteur du run approuverait son propre déploiement"; exit 1; }
+          jq -e '.deployment_branch_policy != null' environnement.json > /dev/null \
+            || { echo "::error::${ENVIRONNEMENT} : aucune restriction de branche, toute branche peut demander le déploiement"; exit 1; }
+
+  deployer:
+    name: Déployer en production, après approbation
+    needs: garde-go
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@<SHA_ACTIONS_CHECKOUT>
+      - name: Connexion au cloud par OIDC, sans secret long
+        uses: azure/login@<SHA_AZURE_LOGIN>
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Provision, phase provision du plan forge-ops
+        run: |
+          <COMMANDES_PROVISION>
+      - name: Déploiement, phase deploiement du plan forge-ops
+        run: |
+          <COMMANDES_DEPLOIEMENT>
+      - name: Healthcheck, phase healthcheck du plan forge-ops
+        run: |
+          <COMMANDES_HEALTHCHECK>
+      - name: Retour arrière sur échec, phase rollback du plan forge-ops
+        if: failure()
+        run: |
+          <COMMANDES_ROLLBACK>

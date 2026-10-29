@@ -1,0 +1,31 @@
+# Fixture ROUGE O-21 (TF-2003) : id-token: write au niveau du workflow — un job sans porte pourrait
+# demander un jeton du cloud.
+name: deploiement
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  id-token: write
+concurrency:
+  group: deploiement-production
+jobs:
+  garde-go:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/environments/production" > env.json
+          jq -e '[.protection_rules[]? | select((.reviewers // []) | length > 0)] | length > 0' env.json
+          jq -e '[.protection_rules[]? | select(.prevent_self_review == true)] | length > 0' env.json
+  deployer:
+    needs: garde-go
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: https://exemple.invalid
+    steps:
+      - run: railway up --ci

@@ -1,0 +1,17 @@
+# Fixture ROUGE O-21 (TF-2003) : le job déploie sans référencer d'environnement, donc sans porte
+# d'approbation. Valeurs inventées.
+name: deploiement
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: deploiement-production
+  cancel-in-progress: false
+jobs:
+  deployer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@0123456789abcdef0123456789abcdef01234567
+      - run: az containerapp update --name app-exemple --resource-group rg-exemple --image registre.exemple/app:1.2.3

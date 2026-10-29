@@ -1614,5 +1614,90 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
     `O20 : référentiel daté, chaque image (${ref20.images.length}) et chaque fait Docker (${ref20.faits_docker.length}) cite sa source et sa date de lecture`);
 }
 
+// ── O21 (TF-2003, étude du pilot du 28/10/2026, ligne G3) : LE GO HUMAIN EST UNE APPROBATION D'ENVIRONNEMENT ─────
+// Le fait : les plans donnaient les commandes, jamais le workflow qui les porte, et un environnement GitHub nommé
+// mais jamais réglé est créé SANS règle au premier run. Avant O-21, `--workflow-deploiement` n'existait pas : le
+// fichier était lu comme une cible (O1/O3). Chaque rouge échoue pour UNE raison, la sienne.
+{
+  console.log("");
+  const o21 = (fichier, ...extra) => { try { return JSON.parse(run(oracle, ["--workflow-deploiement", fichier, "--json-only", ...extra])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const fx21 = (f) => path.join(ici, "..", "fixtures", "o21-workflow-deploiement", f);
+  const gabarit21 = path.join(ici, "..", "gabarits", "workflow-deploiement-production.yml");
+  const durs = (r) => (r.findings || []).filter(f => f.regle === "O21" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const seul = (r, sev, motif) => durs(r).length === 1 && durs(r)[0].sev === sev && motif.test(durs(r)[0].msg);
+  const rG = o21(gabarit21);
+  ok(rG.verdict === "PASS" && durs(rG).length === 0 && (rG.findings || []).some(f => /GO gardé par le job « garde-go »/.test(f.msg)),
+    `O21 : le gabarit gabarits/workflow-deploiement-production.yml -> PASS, son GO gardé par le job garde-go (obtenu ${rG.verdict})`);
+  const rE = o21(fx21("rouge-sans-environnement.yml"));
+  ok(rE.verdict === "FAIL" && seul(rE, "bloquant", /déploie sans référencer d'environnement/),
+    `O21 : un job qui déploie (az containerapp update) sans environnement -> FAIL, ce seul constat (obtenu ${rE.verdict}, ${durs(rE).length} constat(s))`);
+  const rS = o21(fx21("rouge-sans-garde.yml"));
+  ok(rS.verdict === "FAIL" && seul(rS, "bloquant", /GO humain NON PROUVÉ[\s\S]*will not have any protection rules/),
+    `O21 : environnement production sans garde ni capture -> FAIL, la phrase de la documentation citée (obtenu ${rS.verdict})`);
+  const rA = o21(fx21("rouge-annulation.yml"));
+  ok(rA.verdict === "FAIL" && seul(rA, "bloquant", /cancel-in-progress: true/),
+    `O21 : groupe de concurrence à cancel-in-progress: true -> FAIL, ce seul constat (obtenu ${rA.verdict})`);
+  const rT = o21(fx21("rouge-id-token-workflow.yml"));
+  ok(rT.verdict === "FAIL" && seul(rT, "majeur", /id-token: write posé au niveau du workflow/),
+    `O21 : id-token: write au niveau du workflow -> FAIL, ce seul constat ; environment sous la forme {name, url} reconnu (obtenu ${rT.verdict})`);
+  const rC = o21(fx21("rouge-sans-concurrence.yml"));
+  ok(rC.verdict === "FAIL" && seul(rC, "majeur", /aucun groupe de concurrence/),
+    `O21 : aucun groupe de concurrence -> FAIL, ce seul constat ; needs en liste [garde-go] lu (obtenu ${rC.verdict})`);
+  // TF-1013 : le second remède que nomme le constat (la capture de l'environnement) rend PASS ; une capture
+  // sans relecteur ni restriction de branche est refusée.
+  const rCv = o21(fx21("rouge-sans-garde.yml"), "--protection", fx21("protection-verte.json"));
+  ok(rCv.verdict === "PASS", `O21 : remède joué, capture d'un environnement à relecteur, Prevent self-review et branches restreintes -> PASS (TF-1013 ; obtenu ${rCv.verdict})`);
+  const rCr = o21(fx21("rouge-sans-garde.yml"), "--protection", fx21("protection-rouge.json"));
+  ok(rCr.verdict === "FAIL" && durs(rCr).some(f => f.sev === "bloquant" && /sans relecteur requis/.test(f.msg)) && durs(rCr).some(f => f.sev === "majeur" && /sans restriction de branche/.test(f.msg)),
+    "O21 : capture sans relecteur requis -> bloquant, sans restriction de branche -> majeur");
+  const tmp21 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o21-"));
+  try {
+    const texteG = fs.readFileSync(gabarit21, "utf8");
+    // Le premier remède : retirer la garde du gabarit le rend rouge, la remettre le rend vert.
+    const sansNeeds = path.join(tmp21, "gabarit-sans-garde.yml");
+    fs.writeFileSync(sansNeeds, texteG.replace("    needs: garde-go\n", ""), "utf8");
+    const rN = o21(sansNeeds);
+    ok(texteG.includes("    needs: garde-go\n") && rN.verdict === "FAIL" && seul(rN, "bloquant", /GO humain NON PROUVÉ/),
+      "O21 : le gabarit privé de needs: garde-go -> FAIL ; c'est la garde, et rien d'autre, qui prouve le GO");
+    const prot = JSON.parse(fs.readFileSync(fx21("protection-verte.json"), "utf8"));
+    prot.protection_rules[1].prevent_self_review = false;
+    const pAuto = path.join(tmp21, "auto-approbation.json");
+    fs.writeFileSync(pAuto, JSON.stringify(prot), "utf8");
+    const rAuto = o21(fx21("rouge-sans-garde.yml"), "--protection", pAuto);
+    ok(rAuto.verdict === "FAIL" && seul(rAuto, "majeur", /Prevent self-review/), "O21 : relecteur requis mais auto-approbation permise -> majeur");
+    prot.name = "staging"; prot.protection_rules[1].prevent_self_review = true;
+    const pAutre = path.join(tmp21, "autre-environnement.json");
+    fs.writeFileSync(pAutre, JSON.stringify(prot), "utf8");
+    ok(seul(o21(fx21("rouge-sans-garde.yml"), "--protection", pAutre), "majeur", /capture de l'environnement « staging »/), "O21 : capture d'un autre environnement -> majeur, elle ne prouve rien pour la production");
+    const pProd = path.join(tmp21, "prod-nomme.yml");
+    fs.writeFileSync(pProd, texteG.split("production").join("prod"), "utf8");
+    ok(o21(pProd).verdict === "SKIP" && o21(pProd, "--environnement", "prod").verdict === "PASS",
+      "O21 : un environnement nommé « prod » n'est pas la production par défaut (SKIP) ; --environnement prod le juge (PASS)");
+    const pAncre = path.join(tmp21, "ancre.yml");
+    fs.writeFileSync(pAncre, "jobs:\n  a: &a\n    runs-on: ubuntu-latest\n", "utf8");
+    ok(o21(pAncre).verdict === "FAIL", "O21 borne : workflow que le lecteur refuse (ancre) -> FAIL dit, jamais un PASS silencieux");
+    ok(o21(path.join(tmp21, "absent.yml")).verdict === "SKIP", "O21 borne : workflow introuvable -> SKIP");
+  } finally {
+    fs.rmSync(tmp21, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // Le référentiel est câblé (loi n° 1) et sourcé : chaque source porte sa date de lecture.
+  const doc21 = fs.readFileSync(path.join(ici, "..", "references", "WORKFLOW-DEPLOIEMENT.md"), "utf8");
+  const sources21 = [...doc21.matchAll(/^  - url: (https:\/\/\S+)\r?\n    lu_le: (\d{4}-\d{2}-\d{2})\r?$/gm)];
+  ok(sources21.length >= 9 && sources21.every(m => m[2] === "2026-10-29" && m[1].startsWith("https://docs.github.com/")),
+    `O21 : WORKFLOW-DEPLOIEMENT.md porte ses sources docs.github.com, chacune lue le 29/10/2026 (obtenu ${sources21.length})`);
+  // Un retour à la ligne du Markdown vaut une espace : la citation se compare sur le texte replié.
+  const doc21Plie = doc21.replace(/\s+/g, " ");
+  ok(doc21Plie.includes("will not have any protection rules or secrets configured") && doc21Plie.includes("cannot be combined with `cancel-in-progress: true`")
+      && doc21Plie.includes("The subject claim includes the environment name when the job references an environment."),
+    "O21 : les trois faits qui fondent les règles (environnement créé sans règle, concurrence, sujet OIDC) sont cités mot pour mot");
+  ok(["CLAUDE.md", "README.md"].every(f => { const t = fs.readFileSync(path.join(ici, "..", f), "utf8"); return t.includes("WORKFLOW-DEPLOIEMENT.md") && t.includes("workflow-deploiement-production.yml"); }),
+    "O21 : le référentiel et le gabarit sont appelés par CLAUDE.md et README.md (loi n° 1)");
+  let verdictDoc21 = "ILLISIBLE";
+  try { verdictDoc21 = JSON.parse(run(oracle, [path.join(ici, "..", "references", "WORKFLOW-DEPLOIEMENT.md"), "--json-only"])).verdict; }
+  catch (e) { try { verdictDoc21 = JSON.parse(String(e.stdout)).verdict; } catch { /* reste ILLISIBLE */ } }
+  ok(verdictDoc21 === "PASS", `O21 : WORKFLOW-DEPLOIEMENT.md passe l'oracle de documents (O9, O12, O13, O16) (obtenu ${verdictDoc21})`);
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

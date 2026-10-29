@@ -50,6 +50,11 @@
 //       l'hôte sur le chemin exact de ses données de travail ; chaque `docker start` vise un
 //       conteneur dont la commande de création est écrite ; la table déclare volume et commande de
 //       création de chaque composant à état (TF-1986). Rien à juger : SKIP.
+//   O21 --workflow-deploiement <fichier.yml> [--environnement <nom>] [--protection <capture.json>] :
+//       un job qui déploie référence un environnement ; le job de l'environnement de production
+//       (`production` par défaut) a son GO humain prouvé, par un job de garde qui lit l'environnement
+//       par l'API ou par la capture de `gh api …/environments/<nom>` ; il est couvert par un groupe de
+//       concurrence sans cancel-in-progress: true ; id-token: write ne va qu'à lui (TF-2003).
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -1307,6 +1312,138 @@ if (args.includes("--conteneurs-a-etat")) {
   }
   const durs20 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin20(durs20.length ? "FAIL" : "PASS", durs20.length ? 1 : 0);
+}
+
+// ── O21 · le GO humain d'un déploiement de production par GitHub Actions est une porte d'approbation
+// PROUVÉE (TF-2003, étude du pilot du 28/10/2026, ligne G3) ───────────────────────────────────────
+//
+// LE FAIT. Les plans de forge-ops donnent les commandes, jamais le workflow qui les porte ; D-3 (a) du
+// 17/10/2026 (porte M-16 du pilot) pose le GO humain en porte d'approbation de la chaîne. Sur GitHub,
+// cette porte est un environnement protégé. Or un environnement nommé et jamais réglé est CRÉÉ sans
+// règle au premier run (« the newly created environment will not have any protection rules or secrets
+// configured. », page manage-environments lue le 29/10/2026) : le fichier a l'air protégé et ne l'est pas.
+//
+// CE QUI EST JUGÉ, statique sur le YAML (lecteur scripts/lib-yaml.mjs), plus une capture facultative de
+// l'API, sans aucun appel réseau : (1) un job qui déploie sans référencer d'environnement ; (2) le GO du
+// job de production prouvé par un job de garde qui lit l'environnement par l'API, ou par la capture
+// `--protection` ; (3) un groupe de concurrence sans `cancel-in-progress: true` ; (4) `id-token: write`
+// réservé au job de production. Faits et gabarit : references/WORKFLOW-DEPLOIEMENT.md.
+const _CLI_DEPLOIEMENT_O21 = [
+  /\brailway\s+up\b/, /\bgcloud\s+run\s+(deploy|services\s+update-traffic)\b/,
+  /\baz\s+containerapp\s+(update|ingress\s+traffic\s+set|revision\s+activate)\b/, /\baz\s+webapp\s+deploy\b/,
+  /\baws\s+apprunner\s+update-service\b/, /\bsupabase\s+db\s+push\b(?![^\n]*--dry-run)/, /\bsupabase\s+functions\s+deploy\b/,
+  /\bsupabase\s+secrets\s+set\b/, /\bwrangler\s+deploy\b(?![^\n]*--dry-run)/, /\bwrangler\s+versions\s+(deploy|upload)\b/,
+  /\bwrangler\s+rollback\b/, /\bdatabricks\s+bundle\s+deploy\b/, /\bfab\s+import\b/, /\bkubectl\s+apply\b/,
+  /\bhelm\s+upgrade\b/, /\bterraform\s+apply\b/,
+];
+const _ACTIONS_DEPLOIEMENT_O21 = /^(cloudflare\/wrangler-action|azure\/webapps-deploy|azure\/container-apps-deploy-action|azure\/arm-deploy|google-github-actions\/deploy-cloudrun|aws-actions\/amazon-ecs-deploy-task-definition)@/i;
+const _SRC_ENV_O21 = "docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments, lue le 29/10/2026";
+const _SRC_CONC_O21 = "docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency, lue le 29/10/2026";
+const _SRC_OIDC_O21 = "docs.github.com/en/actions/reference/security/oidc, lue le 29/10/2026";
+if (args.includes("--workflow-deploiement")) {
+  const wfPath = args[args.indexOf("--workflow-deploiement") + 1];
+  const iEnv21 = args.indexOf("--environnement");
+  const envProd = (iEnv21 >= 0 ? String(args[iEnv21 + 1] ?? "") : "production").trim().toLowerCase() || "production";
+  const iProt = args.indexOf("--protection");
+  const protPath = iProt >= 0 ? args[iProt + 1] : null;
+  const DOM21 = "Exploitation : le GO humain d'un déploiement de production GitHub Actions est une approbation d'environnement prouvée (O-21)";
+  const NJ21 = [
+    "les réglages RÉELS de l'environnement, sans capture `--protection` ni garde exécutée : l'oracle lit un fichier, jamais GitHub",
+    "la confiance fédérée côté cloud : son sujet (repo:<org>/<dépôt>:environment:<nom>) se lit dans le cloud, pas dans le workflow",
+    "l'épinglage des actions par SHA et le secret long d'une action de connexion : WF-2 et WF-5 d'oracle-workflows de forge-websec",
+    "la justesse des commandes du plan collées dans les étapes : O-5 juge le plan",
+    "un job qui appelle un workflow réutilisable (`jobs.<id>.uses`) : ses étapes vivent dans l'autre fichier",
+    "un environnement nommé par une expression ${{ … }} : il n'est pas reconnu comme la production",
+    "la garde est LUE, pas exécutée : une garde qui ne fait pas échouer son job (`|| true`, `continue-on-error`) passe la lecture",
+  ];
+  const ou21 = (id) => `${path.basename(String(wfPath))} (job ${id})`;
+  const fin21 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM21, artefact: wfPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O21", msg: `le job de production vise ${envProd}, son GO est prouvé, il ne s'interrompt pas et garde seul le droit de demander un jeton du cloud`, where: wfPath }], non_juge: NJ21 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!wfPath || !fs.existsSync(wfPath)) { add("info", "O21", "workflow introuvable", String(wfPath)); fin21("SKIP", 2); }
+  let wf = null;
+  try { wf = lireYaml(fs.readFileSync(wfPath, "utf8")).valeur; }
+  catch (e) { add("majeur", "O21", `workflow non lu par le lecteur de l'oracle (${String(e.message).slice(0, 90)}${e.ligne ? `, ligne ${e.ligne}` : ""}) : un fichier non lu ne vaut jamais PASS`, String(wfPath)); fin21("FAIL", 1); }
+  const jobs = wf && typeof wf === "object" && wf.jobs && typeof wf.jobs === "object" && !Array.isArray(wf.jobs) ? wf.jobs : null;
+  if (!jobs) { add("info", "O21", "aucun bloc jobs: — rien à juger", String(wfPath)); fin21("SKIP", 2); }
+  const ids = Object.keys(jobs).filter(id => jobs[id] && typeof jobs[id] === "object");
+  const nomEnv = (j) => { const e = j?.environment; if (typeof e === "string") return e; if (e && typeof e === "object" && typeof e.name === "string") return e.name; return null; };
+  const estProd = (j) => (nomEnv(j) || "").trim().toLowerCase() === envProd;
+  const etapes = (j) => (Array.isArray(j?.steps) ? j.steps : []).filter(s => s && typeof s === "object");
+  const deploie = (j) => etapes(j).some(s => (typeof s.run === "string" && _CLI_DEPLOIEMENT_O21.some(re => re.test(s.run)))
+    || (typeof s.uses === "string" && _ACTIONS_DEPLOIEMENT_O21.test(s.uses)));
+  const besoins = (j) => [].concat(j?.needs ?? []).filter(x => typeof x === "string");
+  const dependances = (id) => {
+    const vus = new Set(), pile = [...besoins(jobs[id])];
+    while (pile.length) { const n = pile.pop(); if (vus.has(n) || !jobs[n]) continue; vus.add(n); pile.push(...besoins(jobs[n])); }
+    return [...vus];
+  };
+  // Un job de garde lit l'environnement de production par l'API et teste ses relecteurs et l'auto-approbation.
+  const estGarde = (j) => etapes(j).some(s => {
+    const texte = `${s.run ?? ""}\n${JSON.stringify(s.env ?? {})}`;
+    return /environments\//.test(texte) && /\breviewers\b/.test(texte) && /prevent_self_review/.test(texte) && texte.toLowerCase().includes(envProd);
+  });
+  const idToken = (p) => p === "write-all" || (p && typeof p === "object" && String(p["id-token"] ?? "").trim().toLowerCase() === "write");
+
+  // (1) Un job qui déploie a une porte.
+  for (const id of ids) {
+    if (!deploie(jobs[id])) continue;
+    if (!nomEnv(jobs[id])) add("bloquant", "O21", `job « ${id} » : il déploie sans référencer d'environnement — le GO humain n'a pas de porte où se poser ; poser environment: ${envProd} sur ce job (TF-2003)`, ou21(id));
+    else if (!estProd(jobs[id])) add("info", "O21", `job « ${id} » : il déploie vers l'environnement « ${nomEnv(jobs[id])} », pas vers « ${envProd} » — non jugé comme production (--environnement <nom> pour un autre nom)`, ou21(id));
+  }
+  const prod = ids.filter(id => estProd(jobs[id]));
+  if (!prod.length) {
+    const durs0 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+    if (!durs0.length) add("info", "O21", `aucun job ne référence l'environnement « ${envProd} » — rien à juger comme déploiement de production`, String(wfPath));
+    fin21(durs0.length ? "FAIL" : "SKIP", durs0.length ? 1 : 2);
+  }
+
+  // (2) Le GO est prouvé : une garde dans les dépendances, ou la capture de l'environnement.
+  let capture = null;
+  if (protPath) {
+    try { capture = JSON.parse(fs.readFileSync(protPath, "utf8").replace(/^﻿/, "")); }
+    catch { add("bloquant", "O21", `capture --protection illisible (${protPath}) : attendu la sortie JSON de gh api repos/<org>/<dépôt>/environments/${envProd}`, String(protPath)); }
+  }
+  for (const id of prod) {
+    const gardes = dependances(id).filter(n => estGarde(jobs[n]));
+    if (gardes.length) add("info", "O21", `job « ${id} » : GO gardé par le job « ${gardes[0]} », qui lit l'environnement ${envProd} par l'API et refuse sans relecteur requis`, ou21(id));
+    else if (!capture) add("bloquant", "O21", `job « ${id} » : GO humain NON PROUVÉ — un environnement que personne n'a réglé est créé sans règle au premier run (« the newly created environment will not have any protection rules or secrets configured. », ${_SRC_ENV_O21}) ; mettre dans ses needs le job garde-go de gabarits/workflow-deploiement-production.yml, ou fournir --protection <sortie de gh api repos/<org>/<dépôt>/environments/${envProd}> (TF-2003)`, ou21(id));
+  }
+  if (capture && typeof capture === "object") {
+    const regles = Array.isArray(capture.protection_rules) ? capture.protection_rules : [];
+    const ouCap = path.basename(String(protPath));
+    if (typeof capture.name === "string" && capture.name.trim().toLowerCase() !== envProd)
+      add("majeur", "O21", `capture de l'environnement « ${capture.name} », pas de « ${envProd} » : elle ne prouve rien pour le job de production`, ouCap);
+    if (!regles.some(r => Array.isArray(r?.reviewers) && r.reviewers.length))
+      add("bloquant", "O21", `environnement ${envProd} sans relecteur requis (aucune règle de protection à « reviewers » non vide) : le job part sans approbation humaine, le GO (R-38) n'existe pas ; Settings > Environments > ${envProd} > Required reviewers (« Only one of the required reviewers needs to approve the job for it to proceed. », ${_SRC_ENV_O21}) (TF-2003)`, ouCap);
+    else if (!regles.some(r => r?.prevent_self_review === true))
+      add("majeur", "O21", `environnement ${envProd} sans « Prevent self-review » : l'auteur du run peut approuver son propre déploiement, le GO n'est plus un second regard (${_SRC_ENV_O21}) (TF-2003)`, ouCap);
+    if (capture.deployment_branch_policy === null || capture.deployment_branch_policy === undefined)
+      add("majeur", "O21", `environnement ${envProd} sans restriction de branche (deployment_branch_policy null) : toute branche peut demander un déploiement de production (TF-2003)`, ouCap);
+  }
+
+  // (3) Un déploiement à la fois, jamais interrompu.
+  const annule = (c) => c && typeof c === "object" ? String(c["cancel-in-progress"] ?? "false").trim() : "false";
+  for (const id of prod) {
+    const groupes = [["du job", jobs[id].concurrency], ["du workflow", wf.concurrency]].filter(([, c]) => c !== undefined && c !== null);
+    if (!groupes.length) add("majeur", "O21", `job « ${id} » : aucun groupe de concurrence (ni au job ni au workflow) — deux déploiements de production peuvent se chevaucher (« only a single job or workflow using the same concurrency group will run at a time », ${_SRC_CONC_O21}) ; poser concurrency avec cancel-in-progress: false (TF-2003)`, ou21(id));
+    for (const [niveau, c] of groupes) {
+      const v = annule(c);
+      if (/^true$/i.test(v)) add("bloquant", "O21", `job « ${id} » : groupe de concurrence ${niveau} à cancel-in-progress: true — un déploiement en cours est annulé à mi-chemin par le suivant, la cible reste dans un état que ni N ni N-1 ne décrit (« To also cancel any currently running job or workflow in the same concurrency group, specify cancel-in-progress: true. », ${_SRC_CONC_O21}) ; poser cancel-in-progress: false (TF-2003)`, ou21(id));
+      else if (/\$\{\{/.test(v)) add("info", "O21", `job « ${id} » : cancel-in-progress ${niveau} calculé par une expression (${v}) — non jugé`, ou21(id));
+    }
+  }
+
+  // (4) Le droit de demander un jeton du cloud reste au job qui a passé la porte.
+  if (idToken(wf.permissions))
+    add("majeur", "O21", `id-token: write posé au niveau du workflow : chaque job peut demander un jeton OIDC, y compris ceux qui ne passent par aucune porte d'approbation (« Without id-token: write, the OIDC JWT ID token cannot be requested. », ${_SRC_OIDC_O21}) ; le poser sur le seul job de production (TF-2003)`, path.basename(String(wfPath)));
+  for (const id of ids) {
+    if (prod.includes(id) || !idToken(jobs[id].permissions)) continue;
+    add("majeur", "O21", `job « ${id} » : id-token: write sans référencer l'environnement ${envProd} — son sujet OIDC est la branche (« The subject claim includes the environment name when the job references an environment. », ${_SRC_OIDC_O21}) : une confiance cloud qui l'accepte contourne la porte d'approbation (TF-2003)`, ou21(id));
+  }
+  const durs21 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin21(durs21.length ? "FAIL" : "PASS", durs21.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

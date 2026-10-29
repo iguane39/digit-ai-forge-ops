@@ -1,0 +1,8 @@
+{
+  "id": 1,
+  "name": "production",
+  "protection_rules": [
+    { "id": 11, "node_id": "EXEMPLE", "type": "wait_timer", "wait_timer": 5 }
+  ],
+  "deployment_branch_policy": null
+}

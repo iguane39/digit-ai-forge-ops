@@ -170,6 +170,14 @@ findings,non_juge}`, exit 0/1/2 :
   Mesure fondatrice : un conteneur sans volume, créé par une commande écrite nulle part, a perdu une tâche de
   612 photos au redémarrage de Docker. Lecture seule, aucune commande Docker exécutée.
 
+- **O21** `--workflow-deploiement <fichier.yml> [--environnement <nom>] [--protection <capture.json>]`
+  (TF-2003, étude du pilot du 28/10/2026). Le GO humain d'un déploiement de production par GitHub Actions est
+  l'approbation d'un environnement protégé, et il doit être PROUVÉ : un environnement nommé mais jamais réglé
+  est créé sans règle au premier run. Le gabarit `gabarits/workflow-deploiement-production.yml` porte un job
+  de garde qui lit l'environnement par l'API et refuse sans relecteur requis. O-21 juge aussi la concurrence
+  (jamais `cancel-in-progress: true`) et réserve `id-token: write` au job de production. Faits sourcés et
+  datés : `references/WORKFLOW-DEPLOIEMENT.md`.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les

@@ -75,6 +75,10 @@ node oracles/oracle-ops.mjs --sauvegarde forge/etapes/mep/SAUVEGARDE.json
 # exemple : fixtures/o20-conteneurs-a-etat/verte/ — référentiel des images : references/CONTENEURS-A-ETAT.json
 node oracles/oracle-ops.mjs --conteneurs-a-etat <racine-du-produit> [--composants docs/projet/COMPOSANTS-OPS.md]
 
+# Oracle O-21 : le GO humain d'un déploiement GitHub Actions est l'approbation d'un environnement protégé
+# gabarit : gabarits/workflow-deploiement-production.yml — faits et sources : references/WORKFLOW-DEPLOIEMENT.md
+node oracles/oracle-ops.mjs --workflow-deploiement .github/workflows/deploiement-production.yml [--environnement production] [--protection env.json]
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -132,6 +136,7 @@ FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 | O18 | `--revisions-actives <fichier.json>` : sur une sortie capturée de `az containerapp revision list -o json`, chaque application ne garde actives que ses révisions servies et une N-1 saine à 0 % ; toute révision en trop est nommée avec sa commande de désactivation (TF-1639) |
 | O19 | `--sauvegarde <declaration.json> [--le AAAA-MM-JJ]` : sur une déclaration `forge-ops/sauvegarde@1`, chaque actif de données critique porte RPO, RTO, mécanisme, fréquence (≤ RPO) et configuration de sauvegarde, et un exercice de restauration réussi depuis ≤ 12 mois, de durée ≤ RTO et d'intégrité constatée ; `actifs: []` exige `aucun_actif_critique` motivé (TF-1212 ; CTL-D05-09, CTL-D12-06, CTL-D16-09 du référentiel d'audit) |
 | O20 | `--conteneurs-a-etat <racine> [--composants <COMPOSANTS-OPS.md>]` : chaque `docker run` et chaque service compose d'une image à état monte un volume nommé ou un dossier de l'hôte sur le chemin exact de ses données ; chaque `docker start` vise un conteneur dont la commande de création est écrite ; la table « Composants à état » déclare volume et commande de création (TF-1986) |
+| O21 | `--workflow-deploiement <fichier.yml> [--environnement <nom>] [--protection <capture.json>]` : un job qui déploie référence un environnement ; le job de production a son GO humain prouvé (job de garde qui lit l'environnement par l'API, ou capture de `gh api …/environments/<nom>`) ; il est couvert par un groupe de concurrence sans `cancel-in-progress: true` ; `id-token: write` ne va qu'à lui (TF-2003) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.
@@ -270,6 +275,32 @@ SKIP. Un fichier compose que le lecteur refuse (ancre, alias) rend FAIL, jamais 
 **Ce qui n'est pas jugé :** les volumes des plateformes gérées (Railway, Container Apps, Cloud Run) ; une image
 hors référentiel et absente de la table ; une image résolue par une variable ; la vérité du chemin déclaré ;
 une commande construite dynamiquement dans du code ; un conteneur créé hors des fichiers du produit.
+
+## Le GO humain d'un déploiement GitHub Actions est une approbation d'environnement (O-21, TF-2003)
+
+Les plans donnent les commandes ; le gabarit `gabarits/workflow-deploiement-production.yml` donne le workflow
+qui les porte, et O-21 juge ce workflow. Le GO humain (R-38) y est l'approbation de l'environnement
+`production`, comme le pose la décision D-3 (a) du 17/10/2026 (porte M-16 du pilot).
+
+Le piège qui fonde la règle, lu le 29/10/2026 dans la documentation de GitHub : « Running a workflow that
+references an environment that does not exist will create an environment with the referenced name », et cet
+environnement « will not have any protection rules or secrets configured ». Un workflow peut donc nommer
+`production` et déployer sans approbation. Le gabarit ajoute un job `garde-go` qui lit l'environnement par
+l'API, en lecture seule, et échoue sans relecteur requis, sans « Prevent self-review » ou sans restriction
+de branche. Le job de déploiement en dépend : il est alors sauté.
+
+O-21 nomme 4 écarts : un job qui déploie sans environnement (bloquant), un GO ni gardé ni prouvé par la
+capture `--protection` (bloquant), un déploiement sans groupe de concurrence (majeur) ou interruptible par
+`cancel-in-progress: true` (bloquant), et `id-token: write` donné hors du job de production (majeur).
+
+Faits, citations et sources : `references/WORKFLOW-DEPLOIEMENT.md`. Réglages GitHub à poser avant le premier
+run, par un humain : l'environnement `production` avec relecteurs requis, « Prevent self-review » et branches
+de déploiement restreintes. Sur un dépôt privé, ces règles exigent un plan GitHub Team ou Pro ; le plan du
+compte n'est pas mesuré.
+
+**Ce qui n'est pas jugé :** les réglages réels sans capture ; la confiance fédérée côté cloud ; l'épinglage par
+SHA et le secret long d'une action de connexion (WF-2 et WF-5 de forge-websec) ; une garde lue mais neutralisée
+(`|| true`) ; un workflow réutilisable appelé au niveau du job.
 
 ## Un travail planifié s'exerce (O-8, TF-0527)
 

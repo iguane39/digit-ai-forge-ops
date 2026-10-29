@@ -1,0 +1,10 @@
+{
+  "id": 1,
+  "name": "production",
+  "protection_rules": [
+    { "id": 11, "node_id": "EXEMPLE", "type": "wait_timer", "wait_timer": 5 },
+    { "id": 12, "node_id": "EXEMPLE", "type": "required_reviewers", "prevent_self_review": true,
+      "reviewers": [ { "type": "User", "reviewer": { "login": "relecteur-exemple", "id": 1 } } ] }
+  ],
+  "deployment_branch_policy": { "protected_branches": true, "custom_branch_policies": false }
+}

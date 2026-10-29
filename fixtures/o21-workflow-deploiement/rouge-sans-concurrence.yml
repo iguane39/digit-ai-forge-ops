@@ -1,0 +1,25 @@
+# Fixture ROUGE O-21 (TF-2003) : aucun groupe de concurrence, deux déploiements peuvent se chevaucher.
+name: deploiement
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  garde-go:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          ENVIRONNEMENT: production
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/environments/${ENVIRONNEMENT}" > env.json
+          jq -e '[.protection_rules[]? | select((.reviewers // []) | length > 0)] | length > 0' env.json
+          jq -e '[.protection_rules[]? | select(.prevent_self_review == true)] | length > 0' env.json
+  deployer:
+    needs: [garde-go]
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: gcloud run deploy service-exemple --image registre.exemple/app:1.2.3 --region europe-west1
