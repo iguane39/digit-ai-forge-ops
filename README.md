@@ -6,6 +6,19 @@ elle ne décide rien : le GO de production reste humain, les portes M de l'étap
 (`ETAPE-MEP.md` du pilot, liste à jour sur ce document) restent la vérité de l'étape.
 Née de TF-0040 (trou prouvé : MEP sans forge, déploiement artisanal).
 
+## Utilisation
+
+Cette forge ne se lance pas seule : la Factory la mobilise quand votre demande en a besoin.
+Ouvrez une session Claude Code dans le dossier de votre projet et collez cette phrase, la même
+pour tous les cas d'usage :
+
+```
+Utilise https://github.com/iguane39/digit-ai-factory pour ce projet
+```
+
+La Factory installe ce qui manque, cette forge comprise, puis vous demande ce que vous voulez
+obtenir. Détail : [README de la Factory](https://github.com/iguane39/digit-ai-factory#utiliser-la-factory--une-seule-phrase).
+
 ## Catalogue de services
 
 > Section proposée par la campagne « catalogues » du pilot (2026-08-13) — générée depuis
