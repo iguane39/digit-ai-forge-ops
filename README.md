@@ -46,6 +46,10 @@ node oracles/oracle-ops.mjs <cible> [--json-only]
 # Plan d'un PRODUIT DATA (databricks-bundle | powerbi-workspace) — même doctrine, publication sur GO humain (TF-0865)
 node scripts/ops.mjs plan <cible> <build> --sortie plan.json
 node oracles/oracle-ops.mjs --plan plan.json   # O-5 : 4 phases, rollback réel, zéro credential
+# Plan azure (TF-2129) : région de repli <REGION_REPLI> déclarée, sonde de capacité AVANT tout groupe et tout réseau.
+# Un SKU listé sans restriction (az vm list-skus) ne prouve pas la capacité : SkuNotAvailable -> G-05 de references/GESTES-EXPLOITATION.md
+node scripts/sonder-capacite.mjs plan --region northeurope --repli francecentral --taille Standard_D2s_v5   # imprime les gestes, n'en exécute aucun
+node scripts/sonder-capacite.mjs juger releve-capacite.json   # exit 0 région prouvée · 1 aucune/pas de repli · 2 non prouvée ; exemple : fixtures/sonder-capacite/verte-bascule-sur-repli.json
 
 # Canary local simulé : paliers de trafic croissants, promotion sur critère de config
 node scripts/ops.mjs canary <dossier-build> <cible> [--seuils seuils-canary.json]

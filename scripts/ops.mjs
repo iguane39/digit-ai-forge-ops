@@ -337,8 +337,15 @@ const PLANS = {
   azure: {
     service: "Azure Container Apps",
     fiche: "experts-forge/fiches/expert-ops-azure.md",
-    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>", "<ENV>", "<DOMAINE_ENV>", "<BUILD>", "<BUDGET_MENSUEL>", "<SEUIL_ALERTE_PCT>", "<DESTINATAIRE_ALERTE_COUT>", "<DEBUT_MOIS>"],
+    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>", "<ENV>", "<DOMAINE_ENV>", "<BUILD>", "<BUDGET_MENSUEL>", "<SEUIL_ALERTE_PCT>", "<DESTINATAIRE_ALERTE_COUT>", "<DEBUT_MOIS>", "<REGION_REPLI>", "<TAILLE_MACHINE>"],
     provision: [
+      // TF-2129 (lot Produit-86 20261103d, RO-1) : la region de convention d'une souscription a manque de
+      // capacite (northeurope, 6 echecs 409 SkuNotAvailable le 03/11 entre 21:52 et 21:58) alors qu'`az vm list-skus`
+      // ne declarait aucune restriction ; francecentral a repondu. Un reseau ne se deplace pas d'une region a
+      // l'autre : echouer sur la machine APRES l'avoir cree laisse un reseau orphelin (adresse publique facturee).
+      // La region de repli est donc declaree ICI, et la sonde se joue AVANT le premier groupe et le premier reseau.
+      "SONDE DE CAPACITE avant tout groupe et tout reseau (TF-2129, G-05) : node <FORGE_OPS>/scripts/sonder-capacite.mjs plan --region <REGION> --repli <REGION_REPLI> --taille <TAILLE_MACHINE>   # imprime les gestes de sonde, n'en execute aucun ; <TAILLE_MACHINE> = taille de toute machine ou base a taille de la pile (ignorer si la pile n'en cree aucune) ; un SKU LISTE sans restriction (az vm list-skus) ne prouve PAS la capacite — seul un essai d'allocation la prouve",
+      "VERDICT DE LA SONDE : node <FORGE_OPS>/scripts/sonder-capacite.mjs juger releve-capacite.json   # exit 0 = region retenue prouvee (<REGION>, sinon <REGION_REPLI>) ; exit 1 = aucune region ni repli prouve ; exit 2 = capacite non prouvee, ne rien creer ; la region retenue vaut pour TOUT le run (groupe, reseau, environnement) : si c'est <REGION_REPLI>, poser <REGION> := <REGION_REPLI> avant la ligne suivante, ne rien creer en <REGION>",
       "az group create --name <RG> --location <REGION>",
       // TF-1684 (volet 3 de TF-1639) : sans alerte de cout, une derive reste invisible jusqu'a la
       // facture (34 jours chez Produit-64). `az consumption budget create` ne porte AUCUNE

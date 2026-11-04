@@ -197,6 +197,17 @@ supervision continue · secrets/config d'environnement (jamais transportés par 
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les
 planifications posées hors dépôt (interface web, tâche planifiée d'un serveur).
 
+## Région de repli et sonde de capacité (TF-2129)
+
+Le plan `azure` déclare une région de repli (`<REGION_REPLI>`) et prescrit, avant `az group create`, la
+sonde `node scripts/sonder-capacite.mjs plan|juger`. Un SKU listé sans restriction (`az vm list-skus`)
+ne prouve pas la capacité : le 03/11/2026, northeurope a refusé six fois une machine à deux cœurs
+(409 `SkuNotAvailable`) alors que la liste ne montrait rien, et francecentral a répondu. Seul un essai
+d'allocation prouve ; un réseau ne se déplaçant pas d'une région à l'autre, la sonde précède le premier
+réseau. L'outil n'appelle jamais Azure et ne choisit rien : il propose la région retenue, le run
+l'applique. O-5 refuse un plan azure sans repli ou dont la sonde suit le groupe. Le message
+`SkuNotAvailable` mène à l'entrée G-05 de `references/GESTES-EXPLOITATION.md`.
+
 ## Gestes d'exploitation constatés — `references/GESTES-EXPLOITATION.md`
 
 Les **faits du monde** rencontrés en exploitation, qu'aucune documentation d'éditeur n'énonce et

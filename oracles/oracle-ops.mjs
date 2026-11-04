@@ -11,7 +11,8 @@
 //   O4  rollback prouvable : s'il existe une release antérieure à la courante, elle est
 //       toujours présente (capacité de restauration réelle) ET le dernier événement du
 //       journal désigne la release courante (cohérence pointeur ↔ histoire).
-//   O5  --plan <fichier>       : plan cloud complet (TF-0081, cf. plus bas).
+//   O5  --plan <fichier>       : plan cloud complet (TF-0081, cf. plus bas). Plan azure : région de repli
+//       <REGION_REPLI> déclarée et sonde de capacité (scripts/sonder-capacite.mjs) AVANT `az group create` (TF-2129).
 //   O6  --drift <fichier> <cible> : état déclaré (`ops.mjs etat --sortie`) vs constaté
 //       maintenant — troncature/réécriture du journal, déploiement furtif (TF-0107).
 //   O7  --empreinte <cible> : fichiers de la release COURANTE vs empreinte scellée par
@@ -192,6 +193,19 @@ if (planPath) {
       add("majeur", "O5", "plan supabase : fonctions déployées avant la pose de leurs secrets (`supabase secrets set`) — une fonction appelée avant que son secret existe échoue (TF-2007)", planPath);
     if (!lignes5.some(l => /Deploy to production/.test(l)))
       add("majeur", "O5", "plan supabase : la voie de déploiement n'est pas tranchée face à l'intégration GitHub de Supabase (option « Deploy to production ») — deux voies appliqueraient les mêmes migrations, dont une sans le GO de la chaîne (TF-2007)", planPath);
+  }
+  // TF-2129 (lot Produit-86 20261103d, RO-1) : un plan azure déclare une région de repli et joue la sonde de
+  // capacité AVANT de créer le groupe, donc avant tout réseau (un réseau ne se déplace pas d'une région à l'autre) :
+  //   - le jeton <REGION_REPLI> est déclaré dans `placeholders` ET employé par une commande de provision ;
+  //   - une ligne de provision appelle scripts/sonder-capacite.mjs, avant `az group create`.
+  if (p.cible === "azure" && p.phases && typeof p.phases === "object") {
+    const prov5 = (Array.isArray(p.phases.provision) ? p.phases.provision : []).map(String);
+    const iGroupe = prov5.findIndex(l => /^az\s+group\s+create\b/.test(l.split("#")[0].trim()));
+    const iSonde = prov5.findIndex(l => /sonder-capacite\.mjs/.test(l));
+    if (!(Array.isArray(p.placeholders) && p.placeholders.includes("<REGION_REPLI>")) || !prov5.some(l => l.includes("<REGION_REPLI>")))
+      add("majeur", "O5", "plan azure : aucune région de repli déclarée (jeton <REGION_REPLI> absent des placeholders ou jamais employé en provision) — la région de convention de la souscription peut manquer de capacité (SkuNotAvailable alors que `az vm list-skus` ne montre aucune restriction) et le plan n'a alors aucune issue (TF-2129)", planPath);
+    if (iSonde < 0 || (iGroupe >= 0 && iSonde > iGroupe))
+      add("majeur", "O5", "plan azure : la sonde de capacité (scripts/sonder-capacite.mjs) manque ou suit `az group create` — un réseau créé avant la sonde reste orphelin quand la machine échoue, un réseau ne se déplaçant pas d'une région à l'autre (TF-2129)", planPath);
   }
   const durs5 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin5(durs5.length ? "FAIL" : "PASS", durs5.length ? 1 : 0);

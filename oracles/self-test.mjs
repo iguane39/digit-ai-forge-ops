@@ -1161,6 +1161,112 @@ ok(rWorkerMuet.verdict === "SKIP" && (rWorkerMuet.findings || []).some(f => /EN 
   }
 }
 
+// TF-2129 (lot Produit-86 20261103d, RO-1, G-05) — LA REGION DE REPLI ET LA SONDE DE CAPACITE.
+// Le 03/11, northeurope a refuse six fois une machine a deux coeurs (409 SkuNotAvailable) alors que
+// `az vm list-skus` ne montrait aucune restriction ; francecentral a repondu. Trois choses se jugent :
+//   1) le plan azure DECLARE un repli (<REGION_REPLI>) et joue la sonde AVANT `az group create` (O-5) ;
+//   2) la sonde distingue « SKU liste » de « capacite disponible » : seul un essai d'allocation prouve ;
+//   3) le message SkuNotAvailable mene, dans le runbook (G-05), a ce repli.
+// Hors ligne : l'outil n'appelle jamais Azure ; les captures sont des fixtures.
+{
+  const sonde = path.join(ici, "..", "scripts", "sonder-capacite.mjs");
+  const lancer = (args) => {
+    const r = spawnSync(process.execPath, [sonde, ...args], { encoding: "utf8" });
+    let json = null; try { json = JSON.parse(r.stdout); } catch { /* sortie non JSON : plan ou usage */ }
+    return { code: r.status, json, sortie: String(r.stdout || ""), erreur: String(r.stderr || "") };
+  };
+  const juge = (f) => lancer(["juger", fx(`sonder-capacite/${f}`)]);
+
+  // 1) le plan azure : repli declare, sonde avant le groupe, O-5 PASS ; deux rouges et le remede joue (TF-1013).
+  const tmp2129 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-plan2129-"));
+  try {
+    const pAz = path.join(tmp2129, "plan-azure.json");
+    run(ops, ["plan", "azure", fx("app-verte"), "--sortie", pAz]);
+    const az = JSON.parse(fs.readFileSync(pAz, "utf8"));
+    const pv = az.phases.provision;
+    const iSonde = pv.findIndex(l => /sonder-capacite\.mjs plan /.test(l));
+    const iVerdict = pv.findIndex(l => /sonder-capacite\.mjs juger /.test(l));
+    const iGroupe = pv.findIndex(l => /^az group create /.test(l));
+    ok(az.placeholders.includes("<REGION_REPLI>") && az.placeholders.includes("<TAILLE_MACHINE>") && pv.some(l => l.includes("<REGION_REPLI>")),
+      "TF-2129 · plan azure : la region de repli <REGION_REPLI> et la taille sondee <TAILLE_MACHINE> sont des jetons declares et employes");
+    ok(iSonde >= 0 && iVerdict > iSonde && iGroupe > iVerdict,
+      `TF-2129 · plan azure : sonde -> verdict -> az group create, dans cet ordre (indices ${iSonde}/${iVerdict}/${iGroupe}) : aucun reseau avant la sonde`);
+    ok(/ne prouve PAS la capacite/.test(pv[iSonde] || ""), "TF-2129 · plan azure : la ligne de sonde dit qu'un SKU liste ne prouve pas la capacite");
+    ok(verdictPlan(pAz) === "PASS", "TF-2129 · oracle O-5 PASS sur le plan azure qui declare son repli");
+
+    const constats2129 = (plan) => { const f = path.join(tmp2129, "rouge.json"); fs.writeFileSync(f, JSON.stringify(plan), "utf8");
+      try { return JSON.parse(run(oracle, ["--plan", f, "--json-only"])).findings; }
+      catch (e) { try { return JSON.parse(String(e.stdout)).findings; } catch { return []; } } };
+    const sansSonde = structuredClone(az);
+    // le repli reste declare (jeton employe) : seule la sonde disparait, pour que le constat soit unique
+    sansSonde.phases.provision = pv.map(l => l.replace(/sonder-capacite\.mjs/g, "autre-outil.mjs"));
+    const f1 = constats2129(sansSonde);
+    ok(f1.length === 1 && f1[0].sev === "majeur" && /sonde de capacité .* manque ou suit `az group create`/.test(f1[0].msg),
+      `TF-2129 · ROUGE — plan azure sans sonde : exactement un constat, celui de la sonde (obtenu ${f1.length})`);
+    const sansRepli = structuredClone(az);
+    sansRepli.placeholders = az.placeholders.filter(j => j !== "<REGION_REPLI>");
+    sansRepli.phases.provision = pv.map(l => l.split("<REGION_REPLI>").join("<REGION>"));
+    const f2 = constats2129(sansRepli);
+    ok(f2.length === 1 && f2[0].sev === "majeur" && /aucune région de repli déclarée/.test(f2[0].msg),
+      `TF-2129 · ROUGE — plan azure sans region de repli : exactement un constat, celui du repli (obtenu ${f2.length})`);
+    const apresGroupe = structuredClone(az);
+    apresGroupe.phases.provision = [...pv.filter(l => !/sonder-capacite\.mjs/.test(l)), ...pv.filter(l => /sonder-capacite\.mjs/.test(l))];
+    const f3 = constats2129(apresGroupe);
+    ok(f3.length === 1 && /manque ou suit `az group create`/.test(f3[0].msg),
+      `TF-2129 · ROUGE — sonde posee APRES le groupe (reseau deja cree) : un constat (obtenu ${f3.length})`);
+    // TF-1013 : le remede que le message propose (poser la sonde avant le groupe) est joue et doit PASSER.
+    const remede = structuredClone(sansSonde);
+    remede.phases.provision = pv.slice();   // les lignes de sonde nommees par le constat, reposees avant `az group create`
+    const fr = constats2129(remede);
+    ok(fr.length === 1 && fr[0].sev === "info", "TF-2129 · remede joue : la sonde reposee avant `az group create` rend O-5 PASS (TF-1013)");
+  } finally {
+    fs.rmSync(tmp2129, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+
+  // 2) la sonde : liste et capacite sont deux preuves ; seule la seconde ouvre la region.
+  const vBascule = juge("verte-bascule-sur-repli.json");
+  ok(vBascule.code === 0 && vBascule.json?.verdict === "PASS" && vBascule.json?.region_retenue === "francecentral",
+    `TF-2129 · VERTE — le cas du 03/11 (northeurope listee sans restriction mais refusee SkuNotAvailable, francecentral allouee) : repli retenu (obtenu ${vBascule.code}/${vBascule.json?.region_retenue})`);
+  ok(vBascule.json?.regions?.[0]?.tailles?.every(t => t.etat === "REFUSE_CAPACITE" && /LISTÉE sans restriction/.test(t.msg)),
+    "TF-2129 · le refus de la principale dit que la taille etait LISTEE sans restriction : la liste ne prouvait rien");
+  const vPrincipale = juge("verte-principale-allouee.json");
+  ok(vPrincipale.code === 0 && vPrincipale.json?.region_retenue === "northeurope",
+    `TF-2129 · VERTE — region de convention allouee : pas de bascule (obtenu ${vPrincipale.json?.region_retenue})`);
+  const rListe = juge("rouge-liste-sans-essai.json");
+  ok(rListe.code === 2 && rListe.json?.verdict === "NON_PROUVE" && rListe.json?.region_retenue === null
+    && rListe.json?.regions?.every(r => r.tailles.every(t => t.etat === "LISTEE_SANS_PREUVE")),
+    `TF-2129 · ROUGE — SKU liste sans restriction et aucun essai d'allocation : capacite NON prouvee, aucune region retenue (obtenu ${rListe.code}/${rListe.json?.verdict})`);
+  const rSansRepli = juge("rouge-sans-repli.json");
+  ok(rSansRepli.code === 1 && rSansRepli.json?.verdict === "FAIL" && /aucune région de repli déclarée/.test(rSansRepli.json?.findings?.[0]?.msg || ""),
+    `TF-2129 · ROUGE — relevé sans region de repli : FAIL qui le nomme (obtenu ${rSansRepli.code})`);
+  const rAucune = juge("rouge-aucune-region.json");
+  ok(rAucune.code === 1 && rAucune.json?.verdict === "FAIL" && rAucune.json?.region_retenue === null
+    && rAucune.json?.regions?.[1]?.tailles?.[0]?.etat === "RESTREINTE",
+    `TF-2129 · ROUGE — ni la principale (refusee) ni le repli (restreint) : FAIL, rien a creer (obtenu ${rAucune.code})`);
+  const rQuota = juge("rouge-refus-de-quota.json");
+  ok(rQuota.code === 2 && rQuota.json?.region_retenue === null && rQuota.json?.regions?.[0]?.tailles?.[0]?.etat === "REFUSE_AUTRE",
+    `TF-2129 · ROUGE — refus QuotaExceeded : ce n'est pas la capacite, on ne bascule pas (obtenu ${rQuota.code}/${rQuota.json?.region_retenue})`);
+  const illisible = lancer(["juger", fx("sonder-capacite/inexistant.json")]);
+  ok(illisible.code === 2 && illisible.json?.verdict === "NON_PROUVE", "TF-2129 · borne — relevé introuvable : NON_PROUVE (exit 2), jamais un PASS");
+
+  // le mode plan : les deux regions, une liste ET un essai d'allocation par region, le repli obligatoire et different.
+  const pl = lancer(["plan", "--region", "northeurope", "--repli", "francecentral", "--taille", "Standard_D2s_v5"]);
+  ok(pl.code === 0 && /az vm list-skus --location northeurope/.test(pl.sortie) && /az vm list-skus --location francecentral/.test(pl.sortie)
+    && /az vm create --resource-group sonde-capacite-northeurope .*--size Standard_D2s_v5/.test(pl.sortie) && /az vm create --resource-group sonde-capacite-francecentral /.test(pl.sortie)
+    && /ne prouve PAS la capacité/.test(pl.sortie),
+    "TF-2129 · plan de sonde : par region, la liste (qui ne prouve pas) PUIS l'essai d'allocation (qui prouve)");
+  ok(lancer(["plan", "--region", "northeurope", "--taille", "Standard_D2s_v5"]).code === 2, "TF-2129 · plan de sonde sans repli : refuse (exit 2)");
+  ok(lancer(["plan", "--region", "northeurope", "--repli", "NorthEurope", "--taille", "Standard_D2s_v5"]).code === 2, "TF-2129 · plan de sonde dont le repli est la region principale : refuse (exit 2)");
+
+  // 3) le runbook : le message SkuNotAvailable mene au repli.
+  const gestes = fs.readFileSync(path.join(ici, "..", "references", "GESTES-EXPLOITATION.md"), "utf8");
+  const g05 = (gestes.match(/## G-05 [\s\S]*?(?=\n## G-\d\d |\s*$)/) || [""])[0];
+  ok(/SkuNotAvailable/.test(g05) && /AllocationFailed/.test(g05) && /sonder-capacite\.mjs/.test(g05) && /REGION_REPLI/.test(g05) && /orphelin/.test(g05),
+    "TF-2129 · runbook G-05 : SkuNotAvailable (et AllocationFailed) -> region de repli, sonde nommee, reseau orphelin dit");
+  ok(/SkuNotAvailable/.test(fs.readFileSync(path.join(ici, "..", "README.md"), "utf8")) && /sonder-capacite\.mjs/.test(fs.readFileSync(path.join(ici, "..", "CLAUDE.md"), "utf8")),
+    "TF-2129 · README.md et CLAUDE.md appellent la sonde et le message SkuNotAvailable (loi n° 1 : affordance cablee)");
+}
+
 // G-03 (TF-0611/0613/0610, 25/08) — LES DEUX JUGES DE LA MIGRATION DNS. Leur recette vit dans
 // l'outil lui-meme (`--self-test`, 17 cas, les deux sens sur les trois regles) ; elle est REJOUEE
 // ici pour que l'invariant du depot la couvre — un controle que la recette du depot ne joue pas

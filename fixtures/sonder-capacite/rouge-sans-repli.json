@@ -1,0 +1,14 @@
+{
+  "format": "forge-ops/capacite@1",
+  "tailles": ["Standard_D2s_v5"],
+  "regions": [
+    {
+      "role": "principale",
+      "region": "northeurope",
+      "skus": [
+        { "resourceType": "virtualMachines", "name": "Standard_D2s_v5", "locations": ["northeurope"], "restrictions": [] }
+      ],
+      "allocations": { "Standard_D2s_v5": { "resultat": "refuse", "code": "SkuNotAvailable" } }
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "format": "forge-ops/capacite@1",
+  "tailles": ["Standard_D2s_v5", "Standard_B2s"],
+  "regions": [
+    {
+      "role": "principale",
+      "region": "northeurope",
+      "skus": [
+        { "resourceType": "virtualMachines", "name": "Standard_D2s_v5", "locations": ["northeurope"], "restrictions": [] },
+        { "resourceType": "virtualMachines", "name": "Standard_B2s", "locations": ["northeurope"], "restrictions": [] }
+      ],
+      "allocations": {
+        "Standard_D2s_v5": { "resultat": "refuse", "code": "SkuNotAvailable" },
+        "Standard_B2s": { "resultat": "refuse", "code": "SkuNotAvailable" }
+      }
+    },
+    {
+      "role": "repli",
+      "region": "francecentral",
+      "skus": [
+        { "resourceType": "virtualMachines", "name": "Standard_D2s_v5", "locations": ["francecentral"], "restrictions": [] },
+        { "resourceType": "virtualMachines", "name": "Standard_B2s", "locations": ["francecentral"], "restrictions": [] }
+      ],
+      "allocations": {
+        "Standard_D2s_v5": { "resultat": "alloue" },
+        "Standard_B2s": { "resultat": "alloue" }
+      }
+    }
+  ]
+}
