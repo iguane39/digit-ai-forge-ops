@@ -215,6 +215,14 @@ findings,non_juge}`, exit 0/1/2 :
   fichier `forge-ops/identifiants-test@1`, nomme le compte et la POSITION du défaut, jamais la valeur. Écart à la
   lettre déclaré : minuscule, majuscule et chiffre exigés. Faits : `references/IDENTIFIANTS-DE-TEST.md`. Fixtures :
   `fixtures/o25-identifiants-test/`.
+  **TF-2166 (règle du porteur, 04/11/2026 : « arrête de changer les mdp à chaque fois que tu déploies une nouvelle
+  version. Et remonte cette règle à la Factory. »).** Les identifiants de test remis à l'humain restent stables d'un
+  déploiement à l'autre : `scripts/identifiants-test.mjs assurer` garde les mots de passe existants et ne crée que
+  pour un fichier ou un compte absent ; `renouveler --demande "…"` est le seul geste qui en change un ;
+  `verifier --commande "…"` joue la connexion du produit (secrets dans l'environnement du fils, jamais affichés).
+  `oracle-ops.mjs --identifiants-test <fichier> --journal <journal.jsonl>` refuse un renouvellement sans demande, une
+  création hors fichier ou compte absent, et ce qui n'est pas suivi d'une connexion réussie. Mesure fondatrice : 14
+  déploiements le 04/11, autant de mots de passe à recopier.
 
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·

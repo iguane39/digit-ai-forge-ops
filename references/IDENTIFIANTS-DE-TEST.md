@@ -55,3 +55,49 @@ rendu en SKIP).
 **Ce qui n'est pas jugé.** La force du secret au-delà de sa longueur et de son alphabet. Les autres sosies
 (`5` et `S`, `8` et `B`, `2` et `Z`) restent dans l'alphabet, la liste du lot ne les cite pas. Un jeton d'API
 qu'une machine seule emploie n'est pas un secret recopié par un humain.
+
+## 2. Les mêmes identifiants d'un déploiement à l'autre (TF-2166)
+
+**La règle du porteur, le 04/11/2026**, mot pour mot : « arrête de changer les mdp à chaque fois que tu
+déploies une nouvelle version. Et remonte cette règle à la Factory. » (lot Produit-86 `20261104b`, RP-10,
+ledger seq 422 et 425).
+
+**Le fait.** La chaîne de déploiement d'un produit renouvelait les mots de passe de ses comptes de test à
+chaque déploiement, par une exigence du produit (E-091) posée sur le modèle des runs précédents. Quatorze
+déploiements le 04/11, autant de mots de passe à recopier, 2 connexions refusées du porteur.
+
+**La règle.** Les identifiants de test remis à l'humain restent stables d'un déploiement à l'autre. Ils ne se
+renouvellent que sur demande explicite de l'humain, ou quand leur fichier manque. La chaîne vérifie qu'ils se
+connectent avant de rendre PASS.
+
+**L'outil.** `scripts/identifiants-test.mjs`, sur un fichier `forge-ops/identifiants-test@1` :
+
+| Verbe | Effet |
+|---|---|
+| `assurer <fichier> --comptes a,b` | garde le mot de passe de chaque compte qui en a un ; crée un mot de passe (générateur de la section 1) pour un compte absent ou un fichier absent ; un fichier illisible n'est jamais réécrit (exit 2) |
+| `renouveler <fichier> (--compte a \| --tous) --demande "<mots de l'humain>"` | le seul geste qui change un mot de passe existant ; sans `--demande`, exit 2 ; la demande entre au journal |
+| `verifier <fichier> --commande "<connexion du produit>"` | joue la commande une fois par compte avec `FORGE_OPS_COMPTE` et `FORGE_OPS_MOT_DE_PASSE` dans l'environnement du fils, jamais en argument ; exit 0 si tous se connectent, 1 sinon, 2 sans commande |
+
+Aucune valeur de mot de passe n'apparaît sur la sortie, sur l'erreur ni au journal : le fichier est la remise
+à l'humain. L'outil avertit, sans bloquer, quand le fichier se trouve dans un dépôt git qui ne l'ignore pas.
+
+**Le journal** `identifiants-test.journal.jsonl`, à côté du fichier, est à ajout seul : `identifiants_conserves`,
+`identifiants_crees` (motif `fichier_absent` ou `compte_absent`), `identifiants_renouveles` (motif `demande`
+et la demande), `identifiants_verifies` (`ok` et les comptes refusés).
+
+**Ce que juge O-25 avec `--journal <journal.jsonl>`** (en plus de la section 1) :
+
+- un `identifiants_renouveles` sans motif `demande` ou sans demande écrite est un constat bloquant : c'est le
+  défaut du 04/11 ;
+- un `identifiants_crees` pour un autre motif que `fichier_absent` ou `compte_absent` est un constat bloquant ;
+- des comptes créés ou renouvelés qu'aucune vérification de connexion réussie ne suit sont un constat majeur ;
+  une dernière vérification en échec est un constat bloquant ;
+- un journal introuvable, vide, à `seq` rompu ou à type inconnu est un constat bloquant.
+
+**Ce que la chaîne du produit fait de cette règle.** Elle remplace son étape « renouveler les mots de passe »
+par `assurer` suivi de `verifier`, joue O-25 avec le journal avant de rendre PASS, et ne renouvelle que
+sur une demande de l'humain (`renouveler --demande`).
+
+**Ce qui n'est pas jugé.** Un renouvellement fait hors de l'outil, sans ligne au journal : l'oracle n'a pas
+l'historique du fichier pour comparer ses valeurs d'un déploiement à l'autre. Ce que prouve la commande de
+connexion du produit : l'oracle lit son code de sortie.

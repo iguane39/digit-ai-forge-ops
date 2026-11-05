@@ -1,0 +1,2 @@
+{"seq":1,"ts":"2026-11-04T09:00:00.000Z","type":"identifiants_crees","comptes":["admin-fixture"],"motif":"fichier_absent"}
+{"seq":2,"ts":"2026-11-04T09:00:05.000Z","type":"identifiants_verifies","comptes":["admin-fixture"],"ok":false,"refuses":["admin-fixture"]}

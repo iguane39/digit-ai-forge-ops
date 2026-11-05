@@ -68,9 +68,12 @@
 //       variable avec un `resolver` qui porte `valid=` ; un groupe `upstream` à serveur nommé porte `resolve`
 //       et son resolver dans son bloc ou dans http — sinon l'adresse de l'amont est figée au chargement et
 //       le frontal rend 502 après sa recréation (TF-2165).
-//   O25 --identifiants-test <fichier.json> : sur un fichier `forge-ops/identifiants-test@1`, le mot de passe de
-//       chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni signe — le verdict
-//       nomme le compte et la position du défaut, jamais la valeur (TF-2167).
+//   O25 --identifiants-test <fichier.json> [--journal <journal.jsonl>] : sur un fichier `forge-ops/identifiants-test@1`,
+//       le mot de passe de chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni
+//       signe — le verdict nomme le compte et la position du défaut, jamais la valeur (TF-2167) ; avec le journal
+//       de scripts/identifiants-test.mjs, un mot de passe n'est renouvelé que sur demande de l'humain, n'est créé
+//       que si le fichier ou le compte manque, et ce qui est créé ou renouvelé est suivi d'une connexion réussie
+//       (TF-2166).
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -1928,9 +1931,11 @@ if (args.includes("--identifiants-test")) {
     "les sosies hors de la liste du lot (0 O 1 l I) : 5 et S, 8 et B, 2 et Z, u et v se confondent aussi sur certaines polices ; le générateur ne les exclut pas",
     "que le mot de passe du fichier est celui que le produit accepte : la connexion se prouve par la chaîne (`identifiants-test.mjs verifier`), pas par la lecture du fichier",
     "tout champ autre que `comptes.<nom>.mot_de_passe` : jetons d'API et clés, qu'une machine seule emploie, ne sont pas recopiés par un humain",
+    "TF-2166 : un renouvellement fait HORS d'identifiants-test.mjs (un mot de passe réécrit à la main ou par une autre chaîne) ne laisse aucune ligne au journal : l'oracle juge le journal, il n'a pas d'historique du fichier pour comparer ses valeurs d'un déploiement à l'autre",
+    "TF-2166 : que la commande de connexion passée à `verifier` prouve une vraie connexion : elle est celle du produit, l'oracle lit son exit 0, jamais ce qu'elle fait",
   ];
   const fin25 = (verdict, code) => {
-    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM25, artefact: fichier25 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O25", msg: "chaque mot de passe tient en 20 caractères au moins d'un alphabet sans sosie ni signe", where: fichier25 }], non_juge: NJ25 }, null, jsonOnly ? 0 : 2));
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM25, artefact: fichier25 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O25", msg: "chaque mot de passe tient en 20 caractères au moins d'un alphabet sans sosie ni signe" + (args.includes("--journal") ? " ; au journal, aucun renouvellement sans demande, aucune création hors fichier ou compte absent, chaque création ou renouvellement suivi d'une connexion réussie" : ""), where: fichier25 }], non_juge: NJ25 }, null, jsonOnly ? 0 : 2));
     process.exit(code);
   };
   if (!fichier25 || !fs.existsSync(fichier25)) { add("info", "O25", "fichier des identifiants introuvable", String(fichier25)); fin25("SKIP", 2); }
@@ -1945,6 +1950,46 @@ if (args.includes("--identifiants-test")) {
     if (typeof mdp !== "string" || !mdp) { add("bloquant", "O25", `compte « ${nom} » : aucun mot de passe`, `${path.basename(fichier25)} (${nom})`); continue; }
     const defauts = defautsDuSecret(mdp);
     if (defauts.length) add("bloquant", "O25", `compte « ${nom} » : ${defauts.length} défaut(s) — ${defauts.slice(0, 6).join(" ; ")}${defauts.length > 6 ? ` ; … ${defauts.length - 6} autre(s)` : ""} — un humain lit « l » pour « 1 » et ne dicte pas un signe ; remplacer par \`node scripts/tirer-secret-humain.mjs\` (20 caractères, sans sosie ni signe) (TF-2167)`, `${path.basename(fichier25)} (${nom})`);
+  }
+  // TF-2166 : le journal de scripts/identifiants-test.mjs. Un mot de passe existant ne change que sur demande ; ce qui
+  // est créé ou renouvelé est suivi d'une connexion réussie.
+  const iJournal25 = args.indexOf("--journal");
+  if (iJournal25 >= 0) {
+    const journal25 = args[iJournal25 + 1];
+    const ouJ = String(journal25);
+    if (!journal25 || !fs.existsSync(journal25)) add("bloquant", "O25", `journal ${ouJ} introuvable : sans lui, ni la stabilité des mots de passe ni la connexion ne se prouvent`, ouJ);
+    else {
+      const lignes25 = fs.readFileSync(journal25, "utf8").split("\n").filter(l => l.trim());
+      const TYPES25 = ["identifiants_conserves", "identifiants_crees", "identifiants_renouveles", "identifiants_verifies"];
+      const etat25 = new Map();
+      let attendu25 = 1;
+      lignes25.forEach((ligne, i) => {
+        const ou = `${path.basename(ouJ)}:${i + 1}`;
+        let e = null;
+        try { e = JSON.parse(ligne); } catch { add("bloquant", "O25", `ligne ${i + 1} du journal : JSON invalide`, ou); return; }
+        if (e.seq !== attendu25) add("bloquant", "O25", `ligne ${i + 1} du journal : seq ${e.seq}, attendu ${attendu25} (journal à ajout seul rompu)`, ou);
+        attendu25 = (typeof e.seq === "number" ? e.seq : attendu25) + 1;
+        if (!TYPES25.includes(e.type)) { add("bloquant", "O25", `ligne ${i + 1} du journal : type inconnu « ${e.type} »`, ou); return; }
+        const comptes = Array.isArray(e.comptes) ? e.comptes : [];
+        if (e.type === "identifiants_renouveles") {
+          if (e.motif !== "demande" || !String(e.demande ?? "").trim())
+            add("bloquant", "O25", `ligne ${i + 1} du journal : mot de passe renouvelé (${comptes.join(", ") || "aucun compte nommé"}) sans demande de l'humain (motif « ${e.motif ?? "absent"} », demande ${String(e.demande ?? "").trim() ? "écrite" : "vide"}) — la règle du porteur du 04/11/2026 : « arrête de changer les mdp à chaque fois que tu déploies une nouvelle version » ; un mot de passe existant ne change que sur demande (\`identifiants-test.mjs renouveler … --demande "…"\`) (TF-2166)`, ou);
+          comptes.forEach(c => etat25.set(c, "a_verifier"));
+        } else if (e.type === "identifiants_crees") {
+          if (!["fichier_absent", "compte_absent"].includes(e.motif))
+            add("bloquant", "O25", `ligne ${i + 1} du journal : mots de passe créés (${comptes.join(", ") || "aucun compte nommé"}) pour le motif « ${e.motif ?? "absent"} » — on ne crée un mot de passe que si le fichier ou le compte manque (fichier_absent, compte_absent) (TF-2166)`, ou);
+          comptes.forEach(c => etat25.set(c, "a_verifier"));
+        } else if (e.type === "identifiants_verifies") {
+          const refuses = Array.isArray(e.refuses) ? e.refuses : [];
+          comptes.forEach(c => etat25.set(c, (refuses.includes(c) || (e.ok === false && !refuses.length)) ? "echec" : "ok"));
+        }
+      });
+      if (!lignes25.length) add("bloquant", "O25", "journal vide : aucun passage d'identifiants-test.mjs n'y est tracé", ouJ);
+      const enEchec = [...etat25].filter(([, v]) => v === "echec").map(([c]) => c);
+      const sansPreuve = [...etat25].filter(([, v]) => v === "a_verifier").map(([c]) => c);
+      if (enEchec.length) add("bloquant", "O25", `la dernière vérification de connexion est en ÉCHEC pour ${enEchec.join(", ")} : le mot de passe remis à l'humain ne connecte pas (TF-2166)`, ouJ);
+      if (sansPreuve.length) add("majeur", "O25", `mots de passe créés ou renouvelés pour ${sansPreuve.join(", ")} sans vérification de connexion réussie ensuite — la chaîne ne rend pas PASS avant d'avoir joué \`identifiants-test.mjs verifier\` (TF-2166)`, ouJ);
+    }
   }
   const durs25 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin25(durs25.length ? "FAIL" : "PASS", durs25.length ? 1 : 0);

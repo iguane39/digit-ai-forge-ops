@@ -2268,5 +2268,137 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(verdictDoc25 === "PASS", `O25 : IDENTIFIANTS-DE-TEST.md passe l'oracle de documents (O9, O12, O13, O16) (obtenu ${verdictDoc25})`);
 }
 
+// ── identifiants-test + O25 --journal (TF-2166, lot Produit-86 20261104b RP-10) : LES IDENTIFIANTS DE TEST REMIS À L'HUMAIN ─
+// RESTENT STABLES D'UN DÉPLOIEMENT À L'AUTRE ────────────────────────────────────────────────────────────────────────────
+// La règle du porteur (04/11/2026) : « arrête de changer les mdp à chaque fois que tu déploies une nouvelle version. Et
+// remonte cette règle à la Factory. » Quatorze déploiements le 04/11, autant de mots de passe à recopier.
+{
+  console.log("");
+  const { defautsDuSecret: defautsDuSecretT } = await import("../scripts/lib-secret-humain.mjs");
+  const script26 = path.join(ici, "..", "scripts", "identifiants-test.mjs");
+  const cli26 = (...a) => spawnSync(process.execPath, [script26, ...a], { encoding: "utf8" });
+  const tmp26 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2166-"));
+  const lire26 = f => JSON.parse(fs.readFileSync(f, "utf8"));
+  const journal26 = f => fs.readFileSync(f, "utf8").split("\n").filter(Boolean).map(l => JSON.parse(l));
+  const o25 = (fichier, journal) => { try { return JSON.parse(run(oracle, ["--identifiants-test", fichier, ...(journal ? ["--journal", journal] : []), "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const durs = r => (r.findings || []).filter(f => f.regle === "O25" && (f.sev === "bloquant" || f.sev === "majeur"));
+  try {
+    const f = path.join(tmp26, "identifiants-test.json");
+    const j = path.join(tmp26, "identifiants-test.journal.jsonl");
+    const okMjs = path.join(tmp26, "connexion-ok.mjs");
+    fs.writeFileSync(okMjs, 'process.exit(process.env.FORGE_OPS_COMPTE && (process.env.FORGE_OPS_MOT_DE_PASSE || "").length >= 20 ? 0 : 1);\n', "utf8");
+    const refusMjs = path.join(tmp26, "connexion-refus-lecteur.mjs");
+    fs.writeFileSync(refusMjs, 'console.log("mot de passe lu : " + process.env.FORGE_OPS_MOT_DE_PASSE);\nprocess.exit(process.env.FORGE_OPS_COMPTE === "lecteur" ? 1 : 0);\n', "utf8");
+    const connexion = m => `node "${m}"`;
+
+    // 1. Premier déploiement : le fichier manque, il est créé ; aucune valeur n'est affichée.
+    const a1 = cli26("assurer", f, "--comptes", "admin,lecteur");
+    const doc1 = lire26(f);
+    const valeurs = Object.values(doc1.comptes).map(c => c.mot_de_passe);
+    ok(a1.status === 0 && JSON.parse(a1.stdout).crees.join() === "admin,lecteur" && valeurs.length === 2 && valeurs.every(v => defautsDuSecretT(v).length === 0),
+      `identifiants-test assurer : fichier absent -> deux comptes créés, mots de passe sans sosie ni signe (exit ${a1.status})`);
+    ok(valeurs.every(v => !a1.stdout.includes(v) && !a1.stderr.includes(v)), "identifiants-test assurer : aucune valeur de mot de passe sur la sortie ni sur l'erreur");
+    ok(journal26(j)[0].type === "identifiants_crees" && journal26(j)[0].motif === "fichier_absent" && !JSON.stringify(journal26(j)).includes(valeurs[0]), "identifiants-test assurer : le journal dit crees/fichier_absent et ne porte aucune valeur");
+    // 2. LE CŒUR DE LA RÈGLE : quatorze déploiements de suite, les mots de passe ne bougent pas d'un octet.
+    const avant = fs.readFileSync(f, "utf8");
+    let toutConserve = true;
+    for (let i = 0; i < 14; i++) { const a = cli26("assurer", f, "--comptes", "admin,lecteur"); const r = a.status === 0 ? JSON.parse(a.stdout) : {}; toutConserve &&= r.crees?.length === 0 && r.conserves?.join() === "admin,lecteur"; }
+    ok(toutConserve && fs.readFileSync(f, "utf8") === avant, "identifiants-test : 14 déploiements (assurer) de suite -> le fichier est identique à l'octet, 28 mots de passe conservés");
+    ok(journal26(j).filter(e => e.type === "identifiants_conserves").length === 14, "identifiants-test : chaque déploiement laisse une ligne identifiants_conserves au journal");
+    // 3. Le défaut du 04/11, rejoué : renouveler à chaque déploiement sans demande est REFUSÉ.
+    const r0 = cli26("renouveler", f, "--tous");
+    ok(r0.status === 2 && /--demande/.test(r0.stderr) && fs.readFileSync(f, "utf8") === avant, `identifiants-test renouveler : sans --demande -> exit 2, fichier intact (exit ${r0.status})`);
+    ok(cli26("renouveler", f, "--tous", "--demande", "   ").status === 2 && fs.readFileSync(f, "utf8") === avant, "identifiants-test renouveler : une demande vide est refusée aussi");
+    // 4. Un compte neuf s'ajoute, les existants restent.
+    const a4 = cli26("assurer", f, "--comptes", "admin,lecteur,auditeur");
+    const doc4 = lire26(f);
+    ok(a4.status === 0 && JSON.parse(a4.stdout).crees.join() === "auditeur" && doc4.comptes.admin.mot_de_passe === doc1.comptes.admin.mot_de_passe && doc4.comptes.lecteur.mot_de_passe === doc1.comptes.lecteur.mot_de_passe,
+      "identifiants-test assurer : compte neuf ajouté, les deux mots de passe existants inchangés");
+    ok(journal26(j).at(-1).type === "identifiants_crees" && journal26(j).at(-1).motif === "compte_absent", "identifiants-test assurer : motif compte_absent au journal");
+    // 5. Sur demande, un seul compte change.
+    const r5 = cli26("renouveler", f, "--compte", "lecteur", "--demande", "le porteur : renouvelle le mot de passe du lecteur");
+    const doc5 = lire26(f);
+    ok(r5.status === 0 && doc5.comptes.lecteur.mot_de_passe !== doc4.comptes.lecteur.mot_de_passe && doc5.comptes.admin.mot_de_passe === doc4.comptes.admin.mot_de_passe && doc5.comptes.auditeur.mot_de_passe === doc4.comptes.auditeur.mot_de_passe,
+      `identifiants-test renouveler : sur demande, le seul compte désigné change (exit ${r5.status})`);
+    ok(journal26(j).at(-1).type === "identifiants_renouveles" && journal26(j).at(-1).motif === "demande" && /le porteur/.test(journal26(j).at(-1).demande), "identifiants-test renouveler : la demande entre au journal");
+    ok(!r5.stdout.includes(doc5.comptes.lecteur.mot_de_passe), "identifiants-test renouveler : le nouveau mot de passe n'est pas affiché");
+    ok(cli26("renouveler", f, "--compte", "inconnu", "--demande", "x").status === 2, "identifiants-test renouveler : compte absent du fichier -> exit 2");
+    // 6. Le fichier manque de nouveau : seul cas, avec le compte absent, où l'on recrée.
+    fs.rmSync(f);
+    const a6 = cli26("assurer", f, "--comptes", "admin,lecteur");
+    ok(a6.status === 0 && JSON.parse(a6.stdout).crees.length === 2 && journal26(j).at(-1).motif === "fichier_absent", "identifiants-test assurer : fichier manquant -> recréé, motif fichier_absent");
+    // 7. Un fichier illisible n'est jamais réécrit : ses mots de passe seraient perdus.
+    fs.writeFileSync(f, "{ pas du json", "utf8");
+    const a7 = cli26("assurer", f, "--comptes", "admin");
+    ok(a7.status === 2 && /n'est pas du JSON/.test(a7.stderr) && fs.readFileSync(f, "utf8") === "{ pas du json", `identifiants-test assurer : fichier illisible -> exit 2, fichier intact (exit ${a7.status})`);
+    fs.writeFileSync(f, JSON.stringify({ format: "autre", comptes: {} }), "utf8");
+    ok(cli26("assurer", f, "--comptes", "admin").status === 2, "identifiants-test assurer : fichier d'un autre format -> exit 2, jamais réécrit");
+    ok(cli26("assurer", f).status === 2 && cli26("inconnu", f).status === 2, "identifiants-test : sans --comptes, ou verbe inconnu -> exit 2");
+
+    // 8. verifier : la connexion est jouée par la commande du produit, secrets dans l'environnement, jamais relayés.
+    fs.rmSync(f); fs.rmSync(j);
+    cli26("assurer", f, "--comptes", "admin,lecteur");
+    const v1 = cli26("verifier", f, "--commande", connexion(okMjs));
+    ok(v1.status === 0 && JSON.parse(v1.stdout).verdict === "PASS" && JSON.parse(v1.stdout).connectes.join() === "admin,lecteur", `identifiants-test verifier : tous connectés -> exit 0 (exit ${v1.status})`);
+    const v2 = cli26("verifier", f, "--commande", connexion(refusMjs));
+    const doc8 = lire26(f);
+    ok(v2.status === 1 && Object.keys(JSON.parse(v2.stdout).refuses).join() === "lecteur", `identifiants-test verifier : un compte refusé -> exit 1 qui le nomme (exit ${v2.status})`);
+    ok(Object.values(doc8.comptes).every(c => !v2.stdout.includes(c.mot_de_passe) && !v2.stderr.includes(c.mot_de_passe)), "identifiants-test verifier : la sortie de la commande de connexion, qui écrit le mot de passe, n'est pas relayée");
+    ok(cli26("verifier", f).status === 2 && /sans elle/.test(cli26("verifier", f).stderr), "identifiants-test verifier : sans --commande -> exit 2, la connexion n'est pas prouvée");
+    ok(cli26("verifier", f, "--commande", "commande-qui-n-existe-pas-tf2166").status === 1, "identifiants-test verifier : commande introuvable -> refus (exit 1), jamais un PASS");
+
+    // 9. Le journal d'une chaîne réelle est jugé par O25 : la chaîne qui vérifie passe, celle qui oublie échoue.
+    fs.rmSync(f); fs.rmSync(j);
+    cli26("assurer", f, "--comptes", "admin,lecteur");
+    const sansVerif = o25(f, j);
+    ok(sansVerif.verdict === "FAIL" && durs(sansVerif).length === 1 && durs(sansVerif)[0].sev === "majeur" && /sans vérification de connexion réussie/.test(durs(sansVerif)[0].msg),
+      `O25 --journal : comptes créés sans connexion vérifiée -> FAIL majeur, ce seul constat (obtenu ${sansVerif.verdict}, ${durs(sansVerif).length})`);
+    cli26("verifier", f, "--commande", connexion(okMjs));
+    for (let i = 0; i < 3; i++) { cli26("assurer", f, "--comptes", "admin,lecteur"); cli26("verifier", f, "--commande", connexion(okMjs)); }
+    const rChaine = o25(f, j);
+    ok(rChaine.verdict === "PASS" && durs(rChaine).length === 0, `O25 --journal : création vérifiée puis 3 déploiements qui conservent et vérifient -> PASS (obtenu ${rChaine.verdict})`);
+    cli26("renouveler", f, "--compte", "admin", "--demande", "demande du porteur");
+    ok(o25(f, j).verdict === "FAIL" && durs(o25(f, j))[0]?.sev === "majeur", "O25 --journal : renouvelé sur demande mais pas encore vérifié -> FAIL majeur (la chaîne doit rejouer verifier)");
+    cli26("verifier", f, "--commande", connexion(okMjs));
+    ok(o25(f, j).verdict === "PASS", "O25 remède : renouvellement sur demande, puis verifier -> PASS (TF-1013)");
+
+    // 10. Les journaux rouges et le vert : le défaut du 04/11 est refusé par sa seule raison.
+    const fxJ = n => fx(path.join("o25-identifiants-test", n));
+    const verte = fxJ("verte.json");
+    ok(o25(verte, fxJ("journal-vert.jsonl")).verdict === "PASS", "O25 --journal : création vérifiée, deux déploiements, renouvellement sur demande vérifié -> PASS");
+    const rD = o25(verte, fxJ("journal-rouge-renouvele-au-deploiement.jsonl"));
+    ok(rD.verdict === "FAIL" && durs(rD).length === 1 && durs(rD)[0].sev === "bloquant" && /motif « deploiement »/.test(durs(rD)[0].msg) && /arrête de changer les mdp à chaque fois que tu déploies une nouvelle version/.test(durs(rD)[0].msg),
+      `O25 --journal : mot de passe renouvelé au déploiement -> FAIL bloquant, la règle du porteur citée mot pour mot (obtenu ${rD.verdict}, ${durs(rD).length})`);
+    const rV = o25(verte, fxJ("journal-rouge-sans-verification.jsonl"));
+    ok(rV.verdict === "FAIL" && durs(rV).length === 1 && /lecteur-fixture/.test(durs(rV)[0].msg), `O25 --journal : un compte créé jamais vérifié est nommé (obtenu ${rV.verdict}, ${durs(rV).length})`);
+    const rR = o25(verte, fxJ("journal-rouge-connexion-refusee.jsonl"));
+    ok(rR.verdict === "FAIL" && durs(rR).length === 1 && durs(rR)[0].sev === "bloquant" && /ÉCHEC pour admin-fixture/.test(durs(rR)[0].msg), `O25 --journal : dernière connexion refusée -> FAIL bloquant (obtenu ${rR.verdict}, ${durs(rR).length})`);
+    // Bornes du journal.
+    ok(o25(verte, path.join(tmp26, "absent.jsonl")).verdict === "FAIL", "O25 --journal borne : journal introuvable -> FAIL dit");
+    const vide = path.join(tmp26, "vide.jsonl"); fs.writeFileSync(vide, "", "utf8");
+    ok(o25(verte, vide).verdict === "FAIL", "O25 --journal borne : journal vide -> FAIL dit, jamais un PASS vide");
+    const seqRompu = path.join(tmp26, "seq.jsonl"); fs.writeFileSync(seqRompu, '{"seq":1,"type":"identifiants_conserves","comptes":["a"]}\n{"seq":3,"type":"identifiants_conserves","comptes":["a"]}\n', "utf8");
+    ok(o25(verte, seqRompu).verdict === "FAIL" && /seq 3, attendu 2/.test(durs(o25(verte, seqRompu))[0].msg), "O25 --journal borne : seq rompu -> FAIL");
+    const typeInconnu = path.join(tmp26, "type.jsonl"); fs.writeFileSync(typeInconnu, '{"seq":1,"type":"mots_de_passe_changes","comptes":["a"]}\n', "utf8");
+    ok(o25(verte, typeInconnu).verdict === "FAIL", "O25 --journal borne : type inconnu -> FAIL (liste fermée)");
+    const motifLibre = path.join(tmp26, "motif.jsonl"); fs.writeFileSync(motifLibre, '{"seq":1,"type":"identifiants_crees","comptes":["a"],"motif":"nouvelle_version"}\n{"seq":2,"type":"identifiants_verifies","comptes":["a"],"ok":true,"refuses":[]}\n', "utf8");
+    ok(o25(verte, motifLibre).verdict === "FAIL" && /nouvelle_version/.test(durs(o25(verte, motifLibre))[0].msg), "O25 --journal borne : création pour le motif « nouvelle_version » -> FAIL");
+    ok(o25(verte).verdict === "PASS", "O25 sans --journal : le fichier seul se juge comme avant (TF-2167), PASS");
+  } finally {
+    fs.rmSync(tmp26, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // Loi n° 1 : l'outil et la règle du porteur sont appelés ; la citation est exacte.
+  const lire26t = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire26t(f); return t.includes("identifiants-test.mjs") && t.includes("TF-2166"); }), "TF-2166 : l'outil et la règle sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(lire26t("references/IDENTIFIANTS-DE-TEST.md").replace(/\s+/g, " ").includes("« arrête de changer les mdp à chaque fois que tu déploies une nouvelle version. Et remonte cette règle à la Factory. »"),
+    "TF-2166 : la consigne du porteur est citée mot pour mot au référentiel");
+  ok(/identifiants-test\.mjs/.test(lire26t("oracles/oracle-ops.mjs").split("import fs")[0]) && /--journal/.test(lire26t("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2166 : l'en-tête d'oracle-ops.mjs dit O25 --journal");
+  let verdictDoc26 = "ILLISIBLE";
+  try { verdictDoc26 = JSON.parse(run(oracle, [path.join(ici, "..", "references", "IDENTIFIANTS-DE-TEST.md"), "--json-only"])).verdict; }
+  catch (e) { try { verdictDoc26 = JSON.parse(String(e.stdout)).verdict; } catch { /* reste ILLISIBLE */ } }
+  ok(verdictDoc26 === "PASS", `TF-2166 : IDENTIFIANTS-DE-TEST.md passe l'oracle de documents (O9, O12, O13, O16) (obtenu ${verdictDoc26})`);
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

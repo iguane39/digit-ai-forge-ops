@@ -1,0 +1,6 @@
+{"seq":1,"ts":"2026-11-04T09:00:00.000Z","type":"identifiants_crees","comptes":["admin-fixture","lecteur-fixture"],"motif":"fichier_absent"}
+{"seq":2,"ts":"2026-11-04T09:00:05.000Z","type":"identifiants_verifies","comptes":["admin-fixture","lecteur-fixture"],"ok":true,"refuses":[]}
+{"seq":3,"ts":"2026-11-04T11:00:00.000Z","type":"identifiants_conserves","comptes":["admin-fixture","lecteur-fixture"]}
+{"seq":4,"ts":"2026-11-04T11:00:04.000Z","type":"identifiants_verifies","comptes":["admin-fixture","lecteur-fixture"],"ok":true,"refuses":[]}
+{"seq":5,"ts":"2026-11-04T15:00:00.000Z","type":"identifiants_renouveles","comptes":["lecteur-fixture"],"motif":"demande","demande":"renouvelle le mot de passe du lecteur, il a fuité dans un message"}
+{"seq":6,"ts":"2026-11-04T15:00:03.000Z","type":"identifiants_verifies","comptes":["admin-fixture","lecteur-fixture"],"ok":true,"refuses":[]}
