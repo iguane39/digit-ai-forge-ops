@@ -2094,6 +2094,25 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(rUv.verdict === "PASS" && durs(rUv).length === 0, `O24 : upstream avec resolve, zone et resolver dans son bloc -> PASS (obtenu ${rUv.verdict})`);
   ok(o24(fx24("sans-nom-d-hote.conf")).verdict === "SKIP", "O24 : IP, socket unix, localhost et proxy_pass en commentaire -> SKIP, jamais un PASS vide");
   ok(o24(path.join(base, "absente.conf")).verdict === "SKIP", "O24 borne : configuration introuvable -> SKIP");
+  // TF-2177 : les quatre autres directives d'amont de nginx se jugent comme proxy_pass, une fixture rouge par directive.
+  const autres24 = [
+    ["fastcgi_pass", "rouge-fastcgi-fige.conf", "app:9000"],
+    ["uwsgi_pass", "rouge-uwsgi-fige.conf", "uwsgi://app:3031"],
+    ["scgi_pass", "rouge-scgi-fige.conf", "app:4000"],
+    ["grpc_pass", "rouge-grpc-fige.conf", "grpc://app:50051"],
+  ];
+  for (const [directive, fichier, cible] of autres24) {
+    const r = o24(fx24(fichier));
+    ok(r.verdict === "FAIL" && durs(r).length === 1 && durs(r)[0].sev === "bloquant" && durs(r)[0].msg.startsWith(`${directive} ${cible} :`)
+        && /résolu UNE fois/.test(durs(r)[0].msg) && /host not found in upstream/.test(durs(r)[0].msg) && durs(r)[0].msg.includes(`ngx_http_${directive.replace("_pass", "")}_module.html`),
+      `O24 TF-2177 : ${directive} ${cible} littéral -> FAIL, ce seul constat, qui nomme la directive et sa page nginx (obtenu ${r.verdict}, ${durs(r).length})`);
+  }
+  const rFu = o24(fx24("rouge-fastcgi-upstream-fige.conf"));
+  ok(rFu.verdict === "FAIL" && durs(rFu).length === 1 && /^fastcgi_pass php :/.test(durs(rFu)[0].msg) && /sans le paramètre resolve/.test(durs(rFu)[0].msg),
+    `O24 TF-2177 : fastcgi_pass vers un groupe upstream à serveur nommé sans resolve -> FAIL (obtenu ${rFu.verdict}, ${durs(rFu).length})`);
+  const rAv = o24(fx24("verte-autres-passages-variable.conf"));
+  ok(rAv.verdict === "PASS" && durs(rAv).length === 0, `O24 TF-2177 : les quatre directives par variable, avec un resolver qui porte valid= -> PASS (obtenu ${rAv.verdict})`);
+  ok(o24(fx24("sans-nom-d-hote-autres-passages.conf")).verdict === "SKIP", "O24 TF-2177 : socket unix, IP, localhost, [::1] et grpc_pass unix pour les quatre directives, plus un commentaire -> SKIP, jamais un PASS vide");
   // Jouer le remède que le refus nomme (TF-1013) : le littéral réécrit comme le message le dit doit PASSER.
   const tmp24 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o24-"));
   try {
@@ -2101,6 +2120,25 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
     const remede = path.join(tmp24, "remede.conf");
     fs.writeFileSync(remede, litteral.replace("    listen 80;\n", '    listen 80;\n    resolver 127.0.0.11 valid=10s;\n    set $amont "http://app:8000";\n').replace("proxy_pass http://app:8000;", "proxy_pass $amont;"), "utf8");
     ok(o24(remede).verdict === "PASS", `O24 remède : resolver + set $amont + proxy_pass $amont sur le rouge littéral -> PASS (obtenu ${o24(remede).verdict})`);
+    // TF-2177, le remède que le refus nomme, joué pour chacune des quatre directives : resolver + set $amont + <directive> $amont -> PASS.
+    for (const [directive, fichier, cible] of autres24) {
+      const source = fs.readFileSync(fx24(fichier), "utf8").replace(/\r\n/g, "\n");
+      const corrige = path.join(tmp24, `remede-${directive}.conf`);
+      fs.writeFileSync(corrige, source.replace("    listen 80;\n", `    listen 80;\n    resolver 127.0.0.11 valid=10s;\n    set $amont "${cible}";\n`).replace(`${directive} ${cible};`, `${directive} $amont;`), "utf8");
+      const rC = o24(corrige);
+      ok(rC.verdict === "PASS", `O24 TF-2177 remède : resolver + set $amont + ${directive} $amont sur le rouge littéral -> PASS (obtenu ${rC.verdict})`);
+      // Les deux autres refus de variable valent pour la directive : sans resolver bloquant, sans valid= majeur.
+      const sansResolver = path.join(tmp24, `sans-resolver-${directive}.conf`);
+      fs.writeFileSync(sansResolver, fs.readFileSync(corrige, "utf8").replace("    resolver 127.0.0.11 valid=10s;\n", ""), "utf8");
+      const rSr = o24(sansResolver);
+      ok(rSr.verdict === "FAIL" && durs(rSr).length === 1 && durs(rSr)[0].sev === "bloquant" && durs(rSr)[0].msg.startsWith(`${directive} $amont :`) && /AUCUN resolver/.test(durs(rSr)[0].msg),
+        `O24 TF-2177 borne : ${directive} par variable sans resolver -> FAIL bloquant, qui nomme la directive (obtenu ${rSr.verdict}, ${durs(rSr).length})`);
+      const sansValid = path.join(tmp24, `sans-valid-${directive}.conf`);
+      fs.writeFileSync(sansValid, fs.readFileSync(corrige, "utf8").replace("resolver 127.0.0.11 valid=10s;", "resolver 127.0.0.11;"), "utf8");
+      const rSv = o24(sansValid);
+      ok(rSv.verdict === "FAIL" && durs(rSv).length === 1 && durs(rSv)[0].sev === "majeur" && /sans valid=/.test(durs(rSv)[0].msg),
+        `O24 TF-2177 borne : ${directive} par variable, resolver sans valid= -> FAIL majeur (obtenu ${rSv.verdict}, ${durs(rSv).length})`);
+    }
     // Le dossier de la configuration : le resolver d'un fichier compte pour le proxy_pass d'un autre.
     fs.mkdirSync(path.join(tmp24, "conf.d"));
     fs.writeFileSync(path.join(tmp24, "nginx.conf"), "http {\n    resolver 127.0.0.11 valid=10s;\n    include /etc/nginx/conf.d/*.conf;\n}\n", "utf8");
@@ -2170,6 +2208,35 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
     }
   }
 
+  // EXERCICE TF-2177, à la demande aussi : `nginx -t` juge les mêmes fixtures que l'oracle, pour les quatre autres directives.
+  // Le rouge littéral échoue « host not found in upstream », le remède que l'oracle nomme et le vert passent (sans amont sur le réseau par défaut).
+  if (process.env.FORGE_OPS_EXERCICE_DOCKER !== "1") {
+    console.log("  [SKIP] TF-2177 · exercice nginx -t non demandé : FORGE_OPS_EXERCICE_DOCKER=1 fait passer les fixtures fastcgi, uwsgi, scgi et grpc à nginx:1.30-alpine");
+  } else if (spawnSync("docker", ["image", "inspect", "nginx:1.30-alpine"], { encoding: "utf8", timeout: 120000 }).status !== 0) {
+    console.log("  [SKIP] TF-2177 · image nginx:1.30-alpine absente du poste : l'exercice ne télécharge rien");
+  } else {
+    const dossier77 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2177-"));
+    try {
+      const nginxT = (nom, contenu) => {
+        const p = path.join(dossier77, nom);
+        fs.writeFileSync(p, contenu, "utf8");
+        const r = spawnSync("docker", ["run", "--rm", "-v", `${p.replace(/\\/g, "/")}:/etc/nginx/conf.d/default.conf:ro`, "nginx:1.30-alpine", "nginx", "-t"], { encoding: "utf8", timeout: 120000 });
+        return { status: r.status, sortie: `${r.stdout}${r.stderr}` };
+      };
+      for (const [directive, fichier, cible] of autres24) {
+        const source = fs.readFileSync(fx24(fichier), "utf8").replace(/\r\n/g, "\n");
+        const rouge = nginxT(`rouge-${directive}.conf`, source);
+        ok(rouge.status !== 0 && /host not found in upstream/.test(rouge.sortie), `TF-2177 · exercice ROUGE : nginx -t refuse ${directive} ${cible} littéral (exit ${rouge.status}, « host not found in upstream »)`);
+        const remede = nginxT(`remede-${directive}.conf`, source.replace("    listen 80;\n", `    listen 80;\n    resolver 127.0.0.11 valid=10s;\n    set $amont "${cible}";\n`).replace(`${directive} ${cible};`, `${directive} $amont;`));
+        ok(remede.status === 0, `TF-2177 · exercice VERT : nginx -t accepte le remède ${directive} $amont avec resolver (exit ${remede.status})`);
+      }
+      const vert = nginxT("vert.conf", fs.readFileSync(fx24("verte-autres-passages-variable.conf"), "utf8"));
+      ok(vert.status === 0, `TF-2177 · exercice VERT : nginx -t accepte verte-autres-passages-variable.conf (exit ${vert.status})`);
+    } finally {
+      fs.rmSync(dossier77, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+    }
+  }
+
   // Loi n° 1 : la règle, le gabarit et le référentiel sont appelés ; les faits sont sourcés et datés.
   const lire24 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
   ok(["README.md", "CLAUDE.md"].every(f => { const t = lire24(f); return t.includes("--frontal-nginx") && t.includes("frontal-nginx.conf") && t.includes("RESEAU-ET-FRONTAL-DOCKER.md"); }),
@@ -2177,7 +2244,11 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(/O24 --frontal-nginx/.test(lire24("oracles/oracle-ops.mjs").split("import fs")[0]), "O24 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
   const doc24 = lire24("references/RESEAU-ET-FRONTAL-DOCKER.md");
   const sources24 = [...doc24.matchAll(/^  - url: (https:\/\/nginx\.org\/\S+)\r?\n    lu_le: (\d{4}-\d{2}-\d{2})\r?$/gm)];
-  ok(sources24.length === 3 && sources24.every(m => m[2] === "2026-11-05"), `O24 : trois pages nginx.org sourcées, chacune lue le 05/11/2026 (obtenu ${sources24.length})`);
+  ok(sources24.length === 7 && sources24.every(m => m[2] === "2026-11-05"), `O24 : sept pages nginx.org sourcées (proxy, core, upstream, puis fastcgi, uwsgi, scgi, grpc de TF-2177), chacune lue le 05/11/2026 (obtenu ${sources24.length})`);
+  ok(["fastcgi", "uwsgi", "scgi", "grpc"].every(m => sources24.some(s => s[1] === `https://nginx.org/en/docs/http/ngx_http_${m}_module.html`)),
+    "O24 TF-2177 : la page nginx.org de chacune des quatre autres directives est sourcée");
+  ok(doc24.replace(/\s+/g, " ").includes("Parameter value can contain variables. In this case, if an address is specified as a domain name, the name is searched among the described server groups, and, if not found, is determined using a resolver."),
+    "O24 TF-2177 : la phrase des quatre pages (variable, groupes, resolver) est citée mot pour mot");
   const doc24Plie = doc24.replace(/\s+/g, " ");
   ok(doc24Plie.includes("the name is searched among the described server groups, and, if not found, is determined using a resolver.")
       && doc24Plie.includes("By default, nginx caches answers using the TTL value of a response. An optional valid parameter allows overriding it")

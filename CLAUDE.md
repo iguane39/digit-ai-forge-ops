@@ -206,7 +206,10 @@ findings,non_juge}`, exit 0/1/2 :
   recréée change d'adresse, 502 (1 déploiement en échec le 04/11/2026) ; rejoué sur nginx 1.30-alpine : 502 en
   littéral, 200 avec le gabarit (`FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs`). Gabarit
   `gabarits/frontal-nginx.conf`, faits datés `references/RESEAU-ET-FRONTAL-DOCKER.md`. Statique, nginx n'est
-  pas lancé. Fixtures : `fixtures/o24-frontal-nginx/`.
+  pas lancé. Fixtures : `fixtures/o24-frontal-nginx/`. TF-2177 : l'oracle juge aussi `fastcgi_pass`,
+  `uwsgi_pass`, `scgi_pass` et `grpc_pass`, qui figent leur amont de la même façon (`nginx -t` refuse chacune
+  écrite avec un nom d'hôte, « host not found in upstream », mesuré le 05/11/2026) ; le 502 après recréation
+  n'est rejoué que pour `proxy_pass`.
 
 - **O25** `--identifiants-test <fichier.json>` (TF-2167, lot Produit-86 20261104b RP-11). Un secret qu'un humain
   recopie se tire dans un alphabet sans sosie (0 O 1 l I) ni signe, 20 caractères au moins : générateur commun

@@ -64,10 +64,11 @@
 //   O23 --reseau-docker <pile ou fichier.tf> : chaque `docker_network` à `ipam_config` pose `lifecycle {
 //       ignore_changes = [ipam_config] }` et tient son `subnet` d'un relevé des plages prises (`data
 //       "external"` qui appelle scripts/plages-docker.mjs), jamais d'un CIDR écrit à la main (TF-2164).
-//   O24 --frontal-nginx <fichier.conf ou dossier> : chaque `proxy_pass` vers un nom d'hôte passe par une
-//       variable avec un `resolver` qui porte `valid=` ; un groupe `upstream` à serveur nommé porte `resolve`
-//       et son resolver dans son bloc ou dans http — sinon l'adresse de l'amont est figée au chargement et
-//       le frontal rend 502 après sa recréation (TF-2165).
+//   O24 --frontal-nginx <fichier.conf ou dossier> : chaque `proxy_pass`, `fastcgi_pass`, `uwsgi_pass`,
+//       `scgi_pass` et `grpc_pass` vers un nom d'hôte passe par une variable avec un `resolver` qui porte
+//       `valid=` ; un groupe `upstream` à serveur nommé porte `resolve` et son resolver dans son bloc ou dans
+//       http — sinon l'adresse de l'amont est figée au chargement et le frontal rend 502 après sa recréation
+//       (TF-2165, étendu aux quatre autres directives par TF-2177).
 //   O25 --identifiants-test <fichier.json> [--journal <journal.jsonl>] : sur un fichier `forge-ops/identifiants-test@1`,
 //       le mot de passe de chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni
 //       signe — le verdict nomme le compte et la position du défaut, jamais la valeur (TF-2167) ; avec le journal
@@ -1811,7 +1812,23 @@ if (args.includes("--reseau-docker")) {
 // 1.27.3 et plus : « monitors changes of the IP addresses that correspond to a domain name of the server »,
 // ngx_http_upstream_module, lue le 05/11/2026). Gabarit et faits : gabarits/frontal-nginx.conf,
 // references/RESEAU-ET-FRONTAL-DOCKER.md.
+//
+// TF-2177 (05/11/2026) : les quatre autres directives d'amont de nginx, `fastcgi_pass`, `uwsgi_pass`, `scgi_pass`
+// et `grpc_pass`, portent la même phrase de documentation sur la variable et le resolver, et se jugent par les
+// mêmes règles (1) à (3). Mesuré le 05/11/2026 sur nginx 1.30-alpine : chacune, écrite avec un nom d'hôte en
+// clair, fait échouer `nginx -t` (« host not found in upstream ») ; par une variable et un resolver, il passe.
+// Le 502 après recréation de l'amont n'est rejoué que pour `proxy_pass` (exercice du self-test).
+const _DIRECTIVES_PASSAGE_O24 = ["proxy_pass", "fastcgi_pass", "uwsgi_pass", "scgi_pass", "grpc_pass"];
 const _SRC_PROXY_O24 = "nginx.org/en/docs/http/ngx_http_proxy_module.html, lue le 05/11/2026";
+const _SRC_PASSAGE_O24 = {
+  proxy_pass: _SRC_PROXY_O24,
+  fastcgi_pass: "nginx.org/en/docs/http/ngx_http_fastcgi_module.html, lue le 05/11/2026",
+  uwsgi_pass: "nginx.org/en/docs/http/ngx_http_uwsgi_module.html, lue le 05/11/2026",
+  scgi_pass: "nginx.org/en/docs/http/ngx_http_scgi_module.html, lue le 05/11/2026",
+  grpc_pass: "nginx.org/en/docs/http/ngx_http_grpc_module.html, lue le 05/11/2026",
+};
+// Retire le schéma d'une adresse d'amont (http://, https://, grpc://, grpcs://, uwsgi://, suwsgi://) ; `unix:/…` n'en a pas.
+const _sansSchemaO24 = a => a.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "");
 const _SRC_CORE_O24 = "nginx.org/en/docs/http/ngx_http_core_module.html, lue le 05/11/2026";
 const _SRC_UPSTREAM_O24 = "nginx.org/en/docs/http/ngx_http_upstream_module.html, lue le 05/11/2026";
 function _listerConfNginx(racine) {
@@ -1846,14 +1863,14 @@ if (args.includes("--frontal-nginx")) {
   const DOM24 = "Exploitation : un frontal nginx résout son amont à chaque requête, il ne le fige pas au démarrage (O-24)";
   const NJ24 = [
     "l'exécution de nginx : l'oracle lit des fichiers, il ne lance ni `nginx -t` ni le frontal ; la preuve par le geste est l'exercice FORGE_OPS_EXERCICE_DOCKER=1 de oracles/self-test.mjs",
-    "les autres directives de passage, qui figent leur amont de la même façon (`fastcgi_pass`, `uwsgi_pass`, `scgi_pass`, `grpc_pass`) : seule `proxy_pass` est lue",
+    "le 502 après recréation de l'amont, rejoué seulement pour `proxy_pass` (exercice du self-test) : pour `fastcgi_pass`, `uwsgi_pass`, `scgi_pass` et `grpc_pass`, lues par les mêmes règles, seul le refus de `nginx -t` (« host not found in upstream », mesuré le 05/11/2026) est établi, faute d'un serveur FastCGI, uwsgi, SCGI ou gRPC jetable dans l'exercice",
     "un `resolver` posé dans un AUTRE fichier que le `proxy_pass` quand un seul fichier est passé : passer le dossier de la configuration pour que le résolveur de nginx.conf compte ; un fichier qui porte `include` est dit non jugé sur ce point",
-    "qu'une variable de `proxy_pass` porte bien un nom d'hôte, et qu'elle est définie (`set`, `map`) : `proxy_pass $x;` est lu comme variable, sans suivre sa valeur",
+    "qu'une variable d'une directive de passage (`proxy_pass`, `fastcgi_pass`, `uwsgi_pass`, `scgi_pass`, `grpc_pass`) porte bien un nom d'hôte, et qu'elle est définie (`set`, `map`) : `proxy_pass $x;` est lu comme variable, sans suivre sa valeur",
     "un gabarit rendu par envsubst (`${AMONT}` dans un `.conf.template`) : la forme `${nom}` est une variable nginx valide, elle est lue comme telle, alors qu'envsubst peut la remplacer par un nom littéral avant nginx",
     "la justesse du résolveur : 127.0.0.11 est le DNS embarqué de Docker sur un réseau défini par l'utilisateur, l'oracle n'exige aucune adresse",
   ];
   const fin24 = (verdict, code) => {
-    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM24, artefact: racine24 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O24", msg: "chaque proxy_pass vers un nom d'hôte passe par une variable, avec un resolver qui porte valid=", where: racine24 }], non_juge: NJ24 }, null, jsonOnly ? 0 : 2));
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM24, artefact: racine24 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O24", msg: "chaque directive de passage (proxy_pass, fastcgi_pass, uwsgi_pass, scgi_pass, grpc_pass) vers un nom d'hôte passe par une variable, avec un resolver qui porte valid=", where: racine24 }], non_juge: NJ24 }, null, jsonOnly ? 0 : 2));
     process.exit(code);
   };
   if (!racine24 || !fs.existsSync(racine24)) { add("info", "O24", "configuration nginx introuvable", String(racine24)); fin24("SKIP", 2); }
@@ -1874,22 +1891,24 @@ if (args.includes("--frontal-nginx")) {
   }
   const avecHttp24 = textes24.some(({ t }) => /^[ \t]*http[ \t]*\{/m.test(t));
   const estIp = h => /^\d{1,3}(\.\d{1,3}){3}$/.test(h) || /^\[[0-9a-f:.]+\]$/i.test(h);
-  const hoteDe = adresse => adresse.replace(/^https?:\/\//i, "").split("/")[0].replace(/:\d+$/, "");
+  const hoteDe = adresse => _sansSchemaO24(adresse).split("/")[0].replace(/:\d+$/, "");
   let passages24 = 0;
   for (const { f, t } of textes24) {
     const avecInclude = /^[ \t]*include[ \t]/m.test(t);
     const resolveurs = estDossier24 ? resolveurs24 : resolveursDe(t);
-    for (const m of t.matchAll(/\bproxy_pass[ \t]+([^;]+);/g)) {
-      const cible = m[1].trim();
+    for (const m of t.matchAll(new RegExp(`\\b(${_DIRECTIVES_PASSAGE_O24.join("|")})[ \\t]+([^;]+);`, "g"))) {
+      const directive = m[1];
+      const cible = m[2].trim();
+      const src = _SRC_PASSAGE_O24[directive];
       const ligne = t.slice(0, m.index).split("\n").length;
       const ou = `${path.basename(f)}:${ligne}`;
       const hote = hoteDe(cible);
-      if (/^unix:/i.test(cible.replace(/^https?:\/\//i, "")) || estIp(hote) || /^localhost$/i.test(hote)) continue;
+      if (/^unix:/i.test(_sansSchemaO24(cible)) || estIp(hote) || /^localhost$/i.test(hote)) continue;
       passages24++;
       if (/\$/.test(hote) || /^\$/.test(cible)) {
         if (!resolveurs.length) {
-          if (avecInclude) add("info", "O24", `proxy_pass ${cible} : variable, mais aucun resolver dans ce fichier qui porte \`include\` — le résolveur peut vivre dans un fichier inclus, non lu ici`, ou);
-          else add("bloquant", "O24", `proxy_pass ${cible} : l'amont est une variable et AUCUN resolver n'est déclaré — nginx n'a pas de serveur DNS pour la résoudre et répond 502 à la première requête (« ...determined using a resolver. », ${_SRC_PROXY_O24}) ; poser \`resolver 127.0.0.11 valid=10s;\` comme dans gabarits/frontal-nginx.conf (TF-2165)`, ou);
+          if (avecInclude) add("info", "O24", `${directive} ${cible} : variable, mais aucun resolver dans ce fichier qui porte \`include\` — le résolveur peut vivre dans un fichier inclus, non lu ici`, ou);
+          else add("bloquant", "O24", `${directive} ${cible} : l'amont est une variable et AUCUN resolver n'est déclaré — nginx n'a pas de serveur DNS pour la résoudre et ${directive === "proxy_pass" ? "répond 502 à la première requête" : "la première requête échoue"} (« ...determined using a resolver. », ${src}) ; poser \`resolver 127.0.0.11 valid=10s;\` comme dans gabarits/frontal-nginx.conf (TF-2165)`, ou);
         } else if (!resolveurs.some(r => /\bvalid=/.test(r))) {
           add("majeur", "O24", `resolver ${resolveurs[0]} sans valid= — nginx garde la réponse DNS pour la durée de son TTL (« By default, nginx caches answers using the TTL value of a response. An optional valid parameter allows overriding it », ${_SRC_CORE_O24}) : l'adresse d'un amont recréé n'est reprise qu'à l'expiration de ce TTL ; poser valid=10s comme dans gabarits/frontal-nginx.conf (TF-2165)`, ou);
         }
@@ -1899,14 +1918,17 @@ if (args.includes("--frontal-nginx")) {
       if (groupe) {
         const nommes = groupe.serveurs.filter(s => !estIp(hoteDe(s.adresse)) && !/^unix:/i.test(s.adresse) && !/^localhost$/i.test(hoteDe(s.adresse)));
         const figes = nommes.filter(s => !/\bresolve\b/.test(s.options));
-        if (figes.length) add("bloquant", "O24", `proxy_pass ${cible} : le groupe upstream « ${hote} » nomme ${figes.map(s => s.adresse).join(", ")} sans le paramètre resolve — nginx résout ces noms au chargement et fige leur adresse, 502 après la recréation de l'amont (Produit-86, 04/11/2026) ; passer par une variable (\`set $amont "http://${figes[0].adresse}"; proxy_pass $amont;\` avec \`resolver 127.0.0.11 valid=10s;\`) ou poser \`resolve\` et une \`zone\` (nginx 1.27.3 et plus, ${_SRC_UPSTREAM_O24}) (TF-2165)`, ou);
-        else if (nommes.length && !groupe.resolveur && !(avecHttp24 && resolveurs.length) && !avecInclude) add("bloquant", "O24", `proxy_pass ${cible} : le groupe upstream « ${hote} » porte resolve mais aucun resolver n'est posé dans son bloc ni dans http — un resolver de bloc server ne lui sert pas (« In order for this parameter to work, the resolver directive must be specified in the http block or in the corresponding upstream block. », ${_SRC_UPSTREAM_O24}) ; nginx -t répond « no resolver defined to resolve names at run time in upstream » ; poser \`resolver 127.0.0.11 valid=10s;\` dans le bloc upstream (TF-2165)`, ou);
+        if (figes.length) add("bloquant", "O24", `${directive} ${cible} : le groupe upstream « ${hote} » nomme ${figes.map(s => s.adresse).join(", ")} sans le paramètre resolve — nginx résout ces noms au chargement et fige leur adresse, 502 après la recréation de l'amont (Produit-86, 04/11/2026) ; passer par une variable (\`set $amont "${directive === "proxy_pass" ? "http://" : ""}${figes[0].adresse}"; ${directive} $amont;\` avec \`resolver 127.0.0.11 valid=10s;\`) ou poser \`resolve\` et une \`zone\` (nginx 1.27.3 et plus, ${_SRC_UPSTREAM_O24}) (TF-2165)`, ou);
+        else if (nommes.length && !groupe.resolveur && !(avecHttp24 && resolveurs.length) && !avecInclude) add("bloquant", "O24", `${directive} ${cible} : le groupe upstream « ${hote} » porte resolve mais aucun resolver n'est posé dans son bloc ni dans http — un resolver de bloc server ne lui sert pas (« In order for this parameter to work, the resolver directive must be specified in the http block or in the corresponding upstream block. », ${_SRC_UPSTREAM_O24}) ; nginx -t répond « no resolver defined to resolve names at run time in upstream » ; poser \`resolver 127.0.0.11 valid=10s;\` dans le bloc upstream (TF-2165)`, ou);
         continue;
       }
-      add("bloquant", "O24", `proxy_pass ${cible} : « ${hote} » est résolu UNE fois, au chargement de la configuration, et son adresse est figée — après la recréation de l'amont à une autre adresse, le frontal rend 502 (Produit-86, 04/11/2026 ; rejoué le 05/11/2026 sur nginx 1.30 : 502, et \`nginx -t\` sans l'amont échoue « host not found in upstream ») ; écrire \`resolver 127.0.0.11 valid=10s;\`, \`set $amont "${cible}";\` puis \`proxy_pass $amont;\` comme dans gabarits/frontal-nginx.conf (TF-2165)`, ou);
+      const mesure = directive === "proxy_pass"
+        ? "après la recréation de l'amont à une autre adresse, le frontal rend 502 (Produit-86, 04/11/2026 ; rejoué le 05/11/2026 sur nginx 1.30 : 502, et `nginx -t` sans l'amont échoue « host not found in upstream »)"
+        : `\`nginx -t\` sans l'amont échoue « host not found in upstream » (mesuré le 05/11/2026 sur nginx 1.30-alpine : le nom est résolu au chargement ; le 502 après recréation n'est rejoué que pour proxy_pass) (${src}, TF-2177)`;
+      add("bloquant", "O24", `${directive} ${cible} : « ${hote} » est résolu UNE fois, au chargement de la configuration, et son adresse est figée — ${mesure} ; écrire \`resolver 127.0.0.11 valid=10s;\`, \`set $amont "${cible}";\` puis \`${directive} $amont;\` comme dans gabarits/frontal-nginx.conf (TF-2165)`, ou);
     }
   }
-  if (!passages24) { add("info", "O24", `aucun proxy_pass vers un nom d'hôte parmi ${fichiers24.length} fichier(s) de configuration — rien à juger`, racine24); fin24("SKIP", 2); }
+  if (!passages24) { add("info", "O24", `aucune directive de passage (${_DIRECTIVES_PASSAGE_O24.join(", ")}) vers un nom d'hôte parmi ${fichiers24.length} fichier(s) de configuration — rien à juger`, racine24); fin24("SKIP", 2); }
   const durs24 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin24(durs24.length ? "FAIL" : "PASS", durs24.length ? 1 : 0);
 }

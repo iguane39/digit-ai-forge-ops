@@ -15,6 +15,14 @@ sources:
     lu_le: 2026-11-05
   - url: https://nginx.org/en/docs/http/ngx_http_upstream_module.html
     lu_le: 2026-11-05
+  - url: https://nginx.org/en/docs/http/ngx_http_fastcgi_module.html
+    lu_le: 2026-11-05
+  - url: https://nginx.org/en/docs/http/ngx_http_uwsgi_module.html
+    lu_le: 2026-11-05
+  - url: https://nginx.org/en/docs/http/ngx_http_scgi_module.html
+    lu_le: 2026-11-05
+  - url: https://nginx.org/en/docs/http/ngx_http_grpc_module.html
+    lu_le: 2026-11-05
 ---
 
 # Un réseau Docker posé par Terraform, et le frontal qui le traverse
@@ -118,6 +126,8 @@ lancer nginx :
   un socket unix ne se résolvent pas et sont écartés ;
 - un `proxy_pass` par variable exige un `resolver` : constat bloquant sans lui, constat majeur s'il ne porte
   pas `valid=` ;
+- les quatre autres directives d'amont, `fastcgi_pass`, `uwsgi_pass`, `scgi_pass` et `grpc_pass` (TF-2177),
+  se jugent par ces mêmes règles, avec leur schéma d'adresse (`uwsgi://`, `suwsgi://`, `grpc://`, `grpcs://`) ;
 - un `proxy_pass` vers un groupe `upstream` dont un serveur est un nom d'hôte exige le paramètre `resolve`
   sur ce serveur, avec un `resolver` dans le bloc `upstream` ou dans `http`. Le paramètre est libre depuis
   nginx 1.27.3 (« Prior to version 1.27.3, this parameter was available only as part of our commercial
@@ -125,9 +135,23 @@ lancer nginx :
   posé dans le bloc `server` ne lui sert pas, `nginx -t` répond « no resolver defined to resolve names at run
   time in upstream ».
 
-Fixtures à double sens : `fixtures/o24-frontal-nginx/` (5 rouges, un vert par `resolve`, un cas sans objet
-rendu en SKIP), et le gabarit lui-même passe. Chaque vert et chaque rouge d'`upstream` a été passé à `nginx -t`.
+**Les quatre autres directives (TF-2177).** Les pages `ngx_http_fastcgi_module`, `ngx_http_uwsgi_module`,
+`ngx_http_scgi_module` et `ngx_http_grpc_module`, lues le 05/11/2026, portent chacune la même phrase que celle
+de `proxy_pass` : « Parameter value can contain variables. In this case, if an address is specified as a
+domain name, the name is searched among the described server groups, and, if not found, is determined using a
+resolver. » (pour `grpc_pass`, les variables sont admises depuis la 1.17.8). Mesuré le 05/11/2026 sur
+`nginx:1.30-alpine`, un nom d'hôte absent du réseau : `fastcgi_pass app:9000;`, `uwsgi_pass uwsgi://app:3031;`,
+`scgi_pass app:4000;` et `grpc_pass grpc://app:50051;` font tous échouer `nginx -t` (« host not found in
+upstream "app" »), comme `proxy_pass` ; le groupe `upstream` à serveur nommé échoue de même
+(`upstream "app:9000"`) ; la même configuration par variable, avec `resolver 127.0.0.11 valid=10s;`, passe.
+Le 502 après la recréation de l'amont n'est rejoué que pour `proxy_pass` : l'exercice ne dispose pas d'un
+serveur FastCGI, uwsgi, SCGI ou gRPC jetable, et le dit.
 
-**Ce qui n'est pas jugé.** L'exécution de nginx (c'est le rôle de l'exercice), les autres directives de
-passage (`fastcgi_pass`, `uwsgi_pass`, `scgi_pass`, `grpc_pass`), un `resolver` posé dans un autre fichier que
-le `proxy_pass` quand un seul fichier est passé, et la valeur d'une variable.
+Fixtures à double sens : `fixtures/o24-frontal-nginx/` (5 rouges pour `proxy_pass` et ses groupes, un vert par
+`resolve`, un cas sans objet rendu en SKIP ; pour les quatre autres directives, 4 rouges littéraux, 1 rouge de
+groupe, 1 vert par variable et 1 cas sans objet rendu en SKIP), et le gabarit lui-même passe. Chaque vert et
+chaque rouge a été passé à `nginx -t`.
+
+**Ce qui n'est pas jugé.** L'exécution de nginx (c'est le rôle de l'exercice), le 502 après recréation pour
+les quatre autres directives (seul le refus de `nginx -t` est établi), un `resolver` posé dans un autre
+fichier que la directive de passage quand un seul fichier est passé, et la valeur d'une variable.
