@@ -61,6 +61,9 @@
 //       d'une première exécution RÉELLE (identifiant ou URL de la publication, date et heure de lecture)
 //       et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat
 //       (D-108 (b)). Aucune tâche désignée ou aucune en service : SKIP.
+//   O23 --reseau-docker <pile ou fichier.tf> : chaque `docker_network` à `ipam_config` pose `lifecycle {
+//       ignore_changes = [ipam_config] }` et tient son `subnet` d'un relevé des plages prises (`data
+//       "external"` qui appelle scripts/plages-docker.mjs), jamais d'un CIDR écrit à la main (TF-2164).
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -1658,6 +1661,123 @@ if (args.includes("--mise-en-service")) {
   }
   const durs22 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin22(durs22.length ? "FAIL" : "PASS", durs22.length ? 1 : 0);
+}
+
+// ── O23 · un réseau Docker posé par Terraform relève les plages prises et ne dérive pas (TF-2164) ───
+//
+// LE FAIT (Produit-86, lot 20261104a RO-2, ledger seq 380, 04/11/2026). Deux réseaux Docker posés par
+// Terraform sur le démon du poste : la plage écrite à la main (172.30.0.0/24) était déjà prise (« Pool
+// overlaps »), puis le démon complétait ipam_config (passerelle, adresses auxiliaires) et chaque apply
+// réclamait le remplacement du réseau, en échec tant que des conteneurs y étaient attachés : 3 déploiements
+// en échec entre 10:12 et 10:18. Rejoué le 05/11/2026 sur Terraform 1.12.2 et Docker 29.4.2 : sans
+// `ignore_changes`, le plan qui suit l'apply rend « docker_network.lab must be replaced » (exit 2) ; avec
+// le gabarit, « No changes » (exit 0).
+//
+// CE QUI EST JUGÉ, statique sur les fichiers .tf (aucune commande Terraform, aucun appel au démon) : pour
+// chaque `resource "docker_network"` qui déclare un bloc `ipam_config` : (1) `lifecycle { ignore_changes =
+// [ipam_config] }` (ou `all`) est posé ; (2) `subnet` n'est pas un littéral CIDR : il vient d'un relevé des
+// plages prises (`data "external"` qui appelle scripts/plages-docker.mjs). Un réseau sans `ipam_config`
+// laisse le démon choisir : rien à juger. Gabarit et faits : gabarits/reseau-docker.tf,
+// references/RESEAU-ET-FRONTAL-DOCKER.md.
+const _SRC_LIFECYCLE_O23 = "developer.hashicorp.com/terraform/language/meta-arguments/lifecycle, lue le 05/11/2026";
+// Retire commentaires (#, //, /* */) sans toucher aux chaînes ; les chaînes gardent leur contenu.
+function _hclSansCommentaires(t) {
+  let sortie = "", i = 0, chaine = false;
+  while (i < t.length) {
+    const c = t[i], d = t[i + 1];
+    if (chaine) { sortie += c; if (c === "\\") { sortie += d ?? ""; i += 2; continue; } if (c === '"') chaine = false; i++; continue; }
+    if (c === '"') { chaine = true; sortie += c; i++; continue; }
+    if (c === "#" || (c === "/" && d === "/")) { while (i < t.length && t[i] !== "\n") i++; continue; }
+    if (c === "/" && d === "*") { i += 2; while (i < t.length && !(t[i] === "*" && t[i + 1] === "/")) { if (t[i] === "\n") sortie += "\n"; i++; } i += 2; continue; }
+    sortie += c; i++;
+  }
+  return sortie;
+}
+// Index de l'accolade fermante qui répond à l'accolade ouvrante posée en `ouvrante` (chaînes ignorées).
+function _accoladeFermante(t, ouvrante) {
+  let prof = 0, chaine = false;
+  for (let i = ouvrante; i < t.length; i++) {
+    const c = t[i];
+    if (chaine) { if (c === "\\") i++; else if (c === '"') chaine = false; continue; }
+    if (c === '"') { chaine = true; continue; }
+    if (c === "{") prof++;
+    else if (c === "}" && --prof === 0) return i;
+  }
+  return -1;
+}
+// Les blocs `<mot> "<type>" "<nom>" { … }` d'un texte HCL : { etiquettes, corps, ligne }.
+function _hclBlocs(texteSource, mot) {
+  const t = _hclSansCommentaires(texteSource);
+  const re = new RegExp(`^[ \\t]*${mot}[ \\t]+"([^"]+)"[ \\t]+"([^"]+)"[ \\t]*\\{`, "gm");
+  const blocs = [];
+  for (let m; (m = re.exec(t));) {
+    const ouvrante = m.index + m[0].length - 1;
+    const fermante = _accoladeFermante(t, ouvrante);
+    if (fermante < 0) continue;
+    blocs.push({ type: m[1], nom: m[2], corps: t.slice(ouvrante + 1, fermante), ligne: t.slice(0, m.index).split("\n").length });
+  }
+  return blocs;
+}
+// Les sous-blocs anonymes `<nom> { … }` d'un corps (ipam_config, lifecycle).
+function _hclSousBlocs(corps, nom) {
+  const re = new RegExp(`^[ \\t]*${nom}[ \\t]*\\{`, "gm");
+  const blocs = [];
+  for (let m; (m = re.exec(corps));) {
+    const ouvrante = m.index + m[0].length - 1;
+    const fermante = _accoladeFermante(corps, ouvrante);
+    if (fermante >= 0) blocs.push(corps.slice(ouvrante + 1, fermante));
+  }
+  return blocs;
+}
+if (args.includes("--reseau-docker")) {
+  const racine23 = args[args.indexOf("--reseau-docker") + 1];
+  const DOM23 = "Exploitation : un réseau Docker posé par Terraform relève les plages prises et ne dérive pas (O-23)";
+  const NJ23 = [
+    "la plage RÉELLEMENT libre : l'oracle lit des fichiers .tf, il n'interroge ni le démon ni Terraform ; le relevé est joué par scripts/plages-docker.mjs, à l'apply",
+    "un `subnet` venu d'une variable ou d'un local (`var.x`, `local.x`) : sa valeur se décide hors du fichier, il n'est ni jugé ni refusé",
+    "qu'un `data \"external\"` appelé relevé relève vraiment les plages : l'oracle lit le nom du programme (« plage » ou « docker »), il ne l'exécute pas",
+    "les plages IPv6 et les routes de l'hôte (VPN, réseau d'entreprise) : le relevé ne lit que les réseaux du démon Docker",
+    "un module Terraform appelé de l'extérieur (`module \"x\" { source = … }`) : ses ressources vivent dans l'autre dossier",
+  ];
+  const fin23 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM23, artefact: racine23 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O23", msg: "chaque réseau Docker à ipam_config pose ignore_changes = [ipam_config] et tient sa plage d'un relevé des plages prises", where: racine23 }], non_juge: NJ23 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!racine23 || !fs.existsSync(racine23)) { add("info", "O23", "pile Terraform introuvable", String(racine23)); fin23("SKIP", 2); }
+  const fichiers23 = fs.statSync(racine23).isDirectory() ? listerTf(racine23) : [racine23];
+  const textes23 = fichiers23.map(f => ({ f, t: fs.readFileSync(f, "utf8") }));
+  const donneesExternes = textes23.flatMap(({ t }) => _hclBlocs(t, "data").filter(b => b.type === "external"));
+  let reseaux23 = 0;
+  for (const { f, t } of textes23) {
+    for (const b of _hclBlocs(t, "resource").filter(x => x.type === "docker_network")) {
+      const ou = `${path.basename(f)}:${b.ligne} (docker_network.${b.nom})`;
+      const ipam = _hclSousBlocs(b.corps, "ipam_config");
+      if (!ipam.length) { add("info", "O23", `docker_network.${b.nom} : aucun ipam_config, le démon choisit la plage — rien à juger`, ou); continue; }
+      reseaux23++;
+      const ignore = _hclSousBlocs(b.corps, "lifecycle").map(l => /ignore_changes\s*=\s*(\[[^\]]*\]|all)/.exec(l)?.[1] ?? "").join(" ");
+      if (!/\bipam_config\b|\ball\b/.test(ignore))
+        add("bloquant", "O23", `docker_network.${b.nom} : ipam_config sans lifecycle { ignore_changes = [ipam_config] } — le démon complète la passerelle et les adresses auxiliaires après la création, chaque apply lit un écart et réclame le REMPLACEMENT du réseau, en échec tant que des conteneurs y sont attachés (3 déploiements en échec le 04/11/2026) ; poser \`lifecycle { ignore_changes = [ipam_config] }\` comme dans gabarits/reseau-docker.tf (« Use the ignore_changes argument when a resource is created with references to data that may change in the future, but should not affect the resource after its creation. », ${_SRC_LIFECYCLE_O23}) (TF-2164)`, ou);
+      for (const c of ipam) {
+        const expr = /^[ \t]*subnet[ \t]*=[ \t]*(.+?)[ \t]*$/m.exec(c)?.[1];
+        if (!expr) { add("majeur", "O23", `docker_network.${b.nom} : ipam_config sans subnet — le bloc ne dit pas quelle plage il pose`, ou); continue; }
+        if (/^"\d{1,3}(\.\d{1,3}){3}\/\d{1,2}"$/.test(expr)) {
+          add("bloquant", "O23", `docker_network.${b.nom} : subnet écrit en dur (${expr}) — rien ne dit que la plage est libre sur le démon qui applique : « Pool overlaps » le 04/11/2026 (172.30.0.0/24 déjà prise) ; tirer la plage d'un relevé : data "external" qui appelle scripts/plages-docker.mjs, puis subnet = data.external.plage.result.subnet (gabarits/reseau-docker.tf) (TF-2164)`, ou);
+          continue;
+        }
+        const ext = /^data\.external\.([\w-]+)\./.exec(expr);
+        if (ext) {
+          const d = donneesExternes.find(x => x.nom === ext[1]);
+          if (!d) add("majeur", "O23", `docker_network.${b.nom} : subnet lit data.external.${ext[1]}, qui n'est déclaré dans aucun fichier lu sous ${racine23} — le relevé n'est pas vérifiable`, ou);
+          else if (!/plage|docker/i.test(d.corps)) add("majeur", "O23", `docker_network.${b.nom} : data.external.${ext[1]} n'appelle ni un programme de plages ni Docker (lu : « plage » ou « docker » dans son corps) — ce n'est pas un relevé des plages prises ; employer scripts/plages-docker.mjs`, ou);
+          continue;
+        }
+        add("info", "O23", `docker_network.${b.nom} : subnet = ${expr} — valeur décidée hors du fichier, non jugée`, ou);
+      }
+    }
+  }
+  if (!reseaux23) { add("info", "O23", `aucun docker_network à ipam_config parmi ${fichiers23.length} fichier(s) .tf — rien à juger`, racine23); fin23("SKIP", 2); }
+  const durs23 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin23(durs23.length ? "FAIL" : "PASS", durs23.length ? 1 : 0);
 }
 
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────

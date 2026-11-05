@@ -1960,5 +1960,109 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(/O22 --mise-en-service/.test(lire22("oracles/oracle-ops.mjs").split("import fs")[0]), "O22 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
 }
 
+// ── O23 + plages-docker (TF-2164, lot Produit-86 20261104a RO-2) : UN RÉSEAU DOCKER POSÉ PAR TERRAFORM RELÈVE ───────
+// LES PLAGES PRISES ET NE DÉRIVE PAS ────────────────────────────────────────────────────────────────────────────────
+// Le fait du 04/11/2026 : « Pool overlaps » sur 172.30.0.0/24, puis un remplacement du réseau à chaque apply
+// (ipam_config complété par le démon) : 3 déploiements en échec. Rejoué le 05/11/2026 avec un vrai Terraform :
+// sans ignore_changes, le plan suivant rend « must be replaced » (exit 2) ; avec le gabarit, « No changes » (exit 0).
+{
+  console.log("");
+  const plagesMod = await import("../scripts/plages-docker.mjs");
+  const { lireCidr, enTexte, chevauche, plagesDuReleve, choisirPlage } = plagesMod;
+  const script23 = path.join(ici, "..", "scripts", "plages-docker.mjs");
+  const releve = f => JSON.parse(fs.readFileSync(fx(path.join("plages-docker", f)), "utf8"));
+  const cli23 = (args, input) => spawnSync(process.execPath, [script23, ...args], { encoding: "utf8", input });
+  // La cause, rouge : la plage écrite à la main du 04/11 chevauche la plage prise ; le relevé, lui, en évite le chevauchement.
+  const prises = plagesDuReleve(releve("releve-172-30-pris.json"));
+  ok(chevauche(lireCidr("172.30.0.0/24"), prises.find(p => p.nom === "produit_interne")), "plages-docker : 172.30.0.0/24 écrite à la main chevauche la plage prise du produit (la cause de « Pool overlaps »)");
+  const choix = choisirPlage({ plages: prises, base: "172.30.0.0/16" });
+  ok(choix.subnet === "172.30.2.0/24" && choix.gateway === "172.30.2.1" && choix.source === "libre",
+    `plages-docker : le relevé saute 172.30.0.0/24 (prise) et 172.30.1.0/24 (un /25 y est pris : chevauchement, pas égalité) -> 172.30.2.0/24 (obtenu ${choix.subnet})`);
+  ok(prises.length === 3 && !prises.some(p => /:/.test(p.texte)), "plages-docker : trois plages IPv4 lues ; l'IPv6 et le réseau sans plage sont écartés");
+  // Le réseau déjà posé : sa plage lui revient telle quelle, sinon le plan suivant en choisirait une autre.
+  const deja = choisirPlage({ plages: plagesDuReleve(releve("releve-lab-existant.json")), base: "172.30.0.0/16", nom: "lab" });
+  ok(deja.subnet === "172.30.2.0/24" && deja.source === "existante", `plages-docker : un réseau déjà posé garde sa plage (source existante, obtenu ${deja.source})`);
+  const sansNom = choisirPlage({ plages: plagesDuReleve(releve("releve-lab-existant.json")), base: "172.30.0.0/16" });
+  ok(sansNom.subnet === "172.30.1.0/24", `plages-docker : sans le nom du réseau, la plage du lab compte comme prise (obtenu ${sansNom.subnet})`);
+  // L'arithmétique, bornes comprises : au-delà de 128.0.0.0 un entier signé de 32 bits fausserait tout.
+  ok(lireCidr("192.168.0.0/20").taille === 4096 && enTexte(lireCidr("192.168.230.0/24").debut) === "192.168.230.0" && lireCidr("255.255.255.255/32").taille === 1,
+    "plages-docker : arithmétique IPv4 juste au-delà de 128.0.0.0 et en /32");
+  ok(lireCidr("172.30.0.9/24").debut === lireCidr("172.30.0.0/24").debut && lireCidr("172.30.0.0/33") === null && lireCidr("300.1.1.1/24") === null && lireCidr("fd00::/64") === null,
+    "plages-docker : une adresse hôte se ramène à son réseau ; /33, octet > 255 et IPv6 sont refusés");
+  // La CLI : exits du contrat.
+  const rel = fx(path.join("plages-docker", "releve-172-30-pris.json"));
+  const c1 = cli23(["choisir", "--base", "172.30.0.0/16", "--releve", rel]);
+  ok(c1.status === 0 && JSON.parse(c1.stdout).subnet === "172.30.2.0/24", `plages-docker choisir : exit 0 et plage libre (exit ${c1.status})`);
+  const c2 = cli23(["choisir", "--base", "172.30.0.0/24", "--releve", rel]);
+  ok(c2.status === 1 && /aucune plage \/24 libre dans 172\.30\.0\.0\/24/.test(c2.stderr), `plages-docker choisir : base pleine -> exit 1 qui le dit (exit ${c2.status})`);
+  const c3 = cli23(["choisir", "--releve", path.join(base, "absent.json")]);
+  ok(c3.status === 2 && /introuvable/.test(c3.stderr), `plages-docker choisir : relevé introuvable -> exit 2, jamais un repli sur une plage devinée (exit ${c3.status})`);
+  const c4 = cli23(["--externe", "--releve", rel], JSON.stringify({ nom: "x", base: "172.30.0.0/16", longueur: "24" }));
+  const sortieExt = c4.status === 0 ? JSON.parse(c4.stdout) : {};
+  ok(c4.status === 0 && Object.values(sortieExt).every(v => typeof v === "string") && sortieExt.subnet === "172.30.2.0/24",
+    "plages-docker --externe : la requête de data \"external\" arrive sur l'entrée standard, la réponse ne porte que des chaînes");
+  const c5 = cli23(["--externe", "--releve", rel], JSON.stringify({ base: "pas-un-cidr" }));
+  ok(c5.status === 1 && /base illisible/.test(c5.stderr), `plages-docker --externe : erreur -> exit 1 et message sur l'erreur standard (Terraform l'affiche) (exit ${c5.status})`);
+  ok(cli23(["inconnu"]).status === 2, "plages-docker : verbe inconnu -> exit 2");
+
+  // O23 : paire de fixtures. Le gabarit passe ; chaque rouge échoue pour sa seule raison.
+  const o23 = (cible, ...extra) => { try { return JSON.parse(run(oracle, ["--reseau-docker", cible, "--json-only", ...extra])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const fx23 = d => fx(path.join("o23-reseau-docker", d));
+  const durs = r => (r.findings || []).filter(f => f.regle === "O23" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const gabarit23 = path.join(ici, "..", "gabarits", "reseau-docker.tf");
+  const rG = o23(gabarit23);
+  ok(rG.verdict === "PASS" && durs(rG).length === 0, `O23 : gabarits/reseau-docker.tf -> PASS (relevé des plages + ignore_changes) (obtenu ${rG.verdict})`);
+  const rI = o23(fx23("rouge-sans-ignore"));
+  ok(rI.verdict === "FAIL" && durs(rI).length === 1 && durs(rI)[0].sev === "bloquant" && /ignore_changes = \[ipam_config\]/.test(durs(rI)[0].msg) && /Use the ignore_changes argument/.test(durs(rI)[0].msg),
+    `O23 : ipam_config sans ignore_changes -> FAIL, ce seul constat, la phrase de la documentation citée (obtenu ${rI.verdict}, ${durs(rI).length})`);
+  const rP = o23(fx23("rouge-plage-ecrite"));
+  ok(rP.verdict === "FAIL" && durs(rP).length === 1 && /écrit en dur \("172\.30\.0\.0\/24"\)/.test(durs(rP)[0].msg) && /Pool overlaps/.test(durs(rP)[0].msg),
+    `O23 : subnet écrit en dur (ignore_changes posé) -> FAIL, ce seul constat (obtenu ${rP.verdict}, ${durs(rP).length})`);
+  const rF = o23(fx23("rouge-faux-releve"));
+  ok(rF.verdict === "FAIL" && durs(rF).length === 1 && durs(rF)[0].sev === "majeur", `O23 : data "external" qui ne relève aucune plage -> FAIL majeur (obtenu ${rF.verdict}, ${durs(rF).length})`);
+  const rV = o23(fx23("variable"));
+  ok(rV.verdict === "PASS" && rV.findings.some(f => f.sev === "info" && /var\.plage/.test(f.msg)), "O23 : subnet tiré d'une variable -> PASS, dit non jugé");
+  ok(o23(fx23("sans-ipam")).verdict === "SKIP", "O23 : réseau sans ipam_config -> SKIP, jamais un PASS vide");
+  ok(o23(path.join(base, "absente")).verdict === "SKIP", "O23 borne : pile introuvable -> SKIP");
+  // Jouer le remède que le refus nomme (TF-1013) : chacun doit PASSER.
+  const tmp23 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o23-"));
+  try {
+    const remede1 = path.join(tmp23, "remede-ignore.tf");
+    fs.writeFileSync(remede1, fs.readFileSync(path.join(fx23("rouge-sans-ignore"), "main.tf"), "utf8").replace(/\r\n/g, "\n").replace(/\n  \}\n\}\n$/, "\n  }\n\n  lifecycle {\n    ignore_changes = [ipam_config]\n  }\n}\n"), "utf8");
+    ok(o23(remede1).verdict === "PASS", `O23 remède : poser lifecycle { ignore_changes = [ipam_config] } sur le rouge -> PASS (obtenu ${o23(remede1).verdict})`);
+    const remede2 = path.join(tmp23, "remede-releve.tf");
+    fs.writeFileSync(remede2, fs.readFileSync(gabarit23, "utf8").replace(/\r?\n/g, "\n"), "utf8");
+    ok(o23(remede2).verdict === "PASS", "O23 remède : la plage tirée du relevé, comme le gabarit -> PASS");
+    // Bornes de lecture : un commentaire ne vaut pas la ligne, ignore_changes = all vaut, un sous-bloc imbriqué ne s'y confond pas.
+    const commente = path.join(tmp23, "commente.tf");
+    fs.writeFileSync(commente, 'resource "docker_network" "lab" {\n  name = "lab"\n  ipam_config {\n    subnet = var.p\n  }\n  # lifecycle { ignore_changes = [ipam_config] }\n}\n', "utf8");
+    ok(o23(commente).verdict === "FAIL", "O23 borne : la ligne ignore_changes en commentaire ne compte pas -> FAIL");
+    const tout = path.join(tmp23, "tout.tf");
+    fs.writeFileSync(tout, 'resource "docker_network" "lab" {\n  name = "lab"\n  ipam_config {\n    subnet = var.p\n  }\n  lifecycle {\n    ignore_changes = all\n  }\n}\n', "utf8");
+    ok(o23(tout).verdict === "PASS", "O23 borne : ignore_changes = all est lu comme couvrant ipam_config -> PASS");
+    const deux = path.join(tmp23, "deux.tf");
+    fs.writeFileSync(deux, 'resource "docker_network" "a" {\n  ipam_config {\n    subnet = var.p\n  }\n  lifecycle {\n    ignore_changes = [ipam_config]\n  }\n}\nresource "docker_network" "b" {\n  ipam_config {\n    subnet = var.p\n  }\n}\n', "utf8");
+    const rD = o23(deux);
+    ok(rD.verdict === "FAIL" && durs(rD).length === 1 && /docker_network\.b/.test(durs(rD)[0].msg), "O23 borne : deux réseaux dans un fichier, seul le second sans ignore_changes est nommé");
+  } finally {
+    fs.rmSync(tmp23, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // Loi n° 1 : la règle, le gabarit, le script et le référentiel sont appelés ; les faits sont sourcés et datés.
+  const lire23 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire23(f); return t.includes("--reseau-docker") && t.includes("RESEAU-ET-FRONTAL-DOCKER.md") && t.includes("reseau-docker.tf") && t.includes("plages-docker.mjs"); }),
+    "O23 : le mode, le référentiel, le gabarit et le script de relevé sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(/O23 --reseau-docker/.test(lire23("oracles/oracle-ops.mjs").split("import fs")[0]), "O23 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
+  const doc23 = lire23("references/RESEAU-ET-FRONTAL-DOCKER.md");
+  const sources23 = [...doc23.matchAll(/^  - url: (https:\/\/\S+)\r?\n    lu_le: (\d{4}-\d{2}-\d{2})\r?$/gm)];
+  ok(sources23.length >= 2 && sources23.every(m => m[2] === "2026-11-05"), `O23 : RESEAU-ET-FRONTAL-DOCKER.md porte ses sources, chacune lue le 05/11/2026 (obtenu ${sources23.length})`);
+  ok(doc23.replace(/\s+/g, " ").includes("Use the ignore_changes argument when a resource is created with references to data that may change in the future, but should not affect the resource after its creation."),
+    "O23 : la phrase de la documentation Terraform qui fonde ignore_changes est citée mot pour mot");
+  let verdictDoc23 = "ILLISIBLE";
+  try { verdictDoc23 = JSON.parse(run(oracle, [path.join(ici, "..", "references", "RESEAU-ET-FRONTAL-DOCKER.md"), "--json-only"])).verdict; }
+  catch (e) { try { verdictDoc23 = JSON.parse(String(e.stdout)).verdict; } catch { /* reste ILLISIBLE */ } }
+  ok(verdictDoc23 === "PASS", `O23 : RESEAU-ET-FRONTAL-DOCKER.md passe l'oracle de documents (O9, O12, O13, O16) (obtenu ${verdictDoc23})`);
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

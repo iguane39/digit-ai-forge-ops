@@ -192,6 +192,14 @@ findings,non_juge}`, exit 0/1/2 :
   l'oracle ne tourne pas à l'échéance, c'est le run qui le rejoue. Fixtures :
   `fixtures/o22-mise-en-service-planifiee/`.
 
+- **O23** `--reseau-docker <pile ou fichier.tf>` (TF-2164, lot Produit-86 20261104a RO-2). Un réseau Docker posé
+  par Terraform relève les plages prises avant d'en choisir une (`scripts/plages-docker.mjs`, branché par un
+  `data "external"`) et pose `lifecycle { ignore_changes = [ipam_config] }` d'office. Mesure fondatrice : une
+  plage écrite à la main déjà prise (« Pool overlaps »), puis un remplacement du réseau à chaque apply, 3
+  déploiements en échec le 04/11/2026 ; rejoué avec Terraform 1.12.2 : « must be replaced » sans la ligne, « No
+  changes » avec. Gabarit `gabarits/reseau-docker.tf`, faits datés `references/RESEAU-ET-FRONTAL-DOCKER.md`.
+  Statique, aucun appel au démon. Fixtures : `fixtures/o23-reseau-docker/`, `fixtures/plages-docker/`.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les

@@ -1,0 +1,5 @@
+[
+  { "Name": "bridge", "IPAM": { "Config": [ { "Subnet": "172.17.0.0/16", "Gateway": "172.17.0.1" } ] } },
+  { "Name": "produit_interne", "IPAM": { "Config": [ { "Subnet": "172.30.0.0/24", "Gateway": "172.30.0.1" } ] } },
+  { "Name": "lab", "IPAM": { "Config": [ { "Subnet": "172.30.2.0/24", "Gateway": "172.30.2.1" } ] } }
+]
