@@ -112,6 +112,11 @@ node scripts/plages-docker.mjs lister                                           
 # gabarit : gabarits/frontal-nginx.conf — faits : references/RESEAU-ET-FRONTAL-DOCKER.md ; exercice réel : FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 node oracles/oracle-ops.mjs --frontal-nginx <fichier.conf-ou-dossier-de-configuration>
 
+# Oracle O-25 : les identifiants de test remis à l'humain se recopient sans erreur (TF-2167) — faits : references/IDENTIFIANTS-DE-TEST.md
+# exemple : fixtures/o25-identifiants-test/verte.json ; le remède d'un refus : le générateur commun
+node oracles/oracle-ops.mjs --identifiants-test <identifiants-test.json>
+node scripts/tirer-secret-humain.mjs [--longueur 20] [--nombre 1]   # alphabet sans sosie (0 O 1 l I) ni signe, 20 caractères au moins
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -173,6 +178,7 @@ FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 | O22 | `--mise-en-service <COMPOSANTS-OPS.md> [--le "AAAA-MM-JJ HH:MM"]` : une tâche planifiée ou récurrente déclarée « en service » (« actif », « partagé » ou « en service ») porte l'identifiant ou l'URL d'une première exécution réelle lue, la date et l'heure de lecture, et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat (D-108 (b)) |
 | O23 | `--reseau-docker <pile Terraform ou fichier.tf>` : chaque `docker_network` à `ipam_config` pose `lifecycle { ignore_changes = [ipam_config] }` et tient son `subnet` d'un relevé des plages prises (`data "external"` qui appelle `scripts/plages-docker.mjs`), jamais d'un CIDR écrit à la main ; gabarit `gabarits/reseau-docker.tf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2164) |
 | O24 | `--frontal-nginx <fichier.conf ou dossier>` : chaque `proxy_pass` vers un nom d'hôte passe par une variable, avec un `resolver` qui porte `valid=` ; un groupe `upstream` à serveur nommé porte `resolve` et son resolver dans son bloc ou dans `http` ; gabarit `gabarits/frontal-nginx.conf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2165) |
+| O25 | `--identifiants-test <fichier.json>` : sur un fichier `forge-ops/identifiants-test@1`, le mot de passe de chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni signe ; le constat nomme le compte et la position, jamais la valeur ; générateur `scripts/tirer-secret-humain.mjs`, faits `references/IDENTIFIANTS-DE-TEST.md` (TF-2167) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.

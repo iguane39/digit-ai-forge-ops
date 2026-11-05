@@ -1,0 +1,7 @@
+{
+  "format": "forge-ops/identifiants-test@1",
+  "comptes": {
+    "admin-fixture": { "mot_de_passe": "Qx7_mR2vTz9-WnVb4HcR" },
+    "lecteur-fixture": { "mot_de_passe": "Kd1mQx3pTz9WnVb4HcOl" }
+  }
+}

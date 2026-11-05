@@ -68,6 +68,9 @@
 //       variable avec un `resolver` qui porte `valid=` ; un groupe `upstream` à serveur nommé porte `resolve`
 //       et son resolver dans son bloc ou dans http — sinon l'adresse de l'amont est figée au chargement et
 //       le frontal rend 502 après sa recréation (TF-2165).
+//   O25 --identifiants-test <fichier.json> : sur un fichier `forge-ops/identifiants-test@1`, le mot de passe de
+//       chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni signe — le verdict
+//       nomme le compte et la position du défaut, jamais la valeur (TF-2167).
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -97,6 +100,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { correspond, hacherFichier } from "../scripts/lib-empreinte.mjs";
 import { lireYaml } from "../scripts/lib-yaml.mjs";
+import { defautsDuSecret } from "../scripts/lib-secret-humain.mjs";
 
 const DOM = "Exploitation : cible déployée saine et restaurable";
 const NON_JUGE = [
@@ -1904,6 +1908,47 @@ if (args.includes("--frontal-nginx")) {
   fin24(durs24.length ? "FAIL" : "PASS", durs24.length ? 1 : 0);
 }
 
+// ── O25 · les identifiants de test remis à l'humain se recopient sans erreur (TF-2167) ───
+//
+// LE FAIT (Produit-86, lot 20261104b RP-11, ledger seq 421, 04/11/2026). Le porteur n'a pas pu se connecter avec
+// les mots de passe du fichier des comptes de test : 2 refus 401 (Chrome à 14:59, Firefox à 15:01), alors que
+// les mêmes valeurs passaient par httpx et Playwright. `secrets.token_urlsafe` produisait « _ » et des sosies
+// (1, l). Un correctif et un redéploiement ont suivi.
+//
+// CE QUI EST JUGÉ, sur un fichier `forge-ops/identifiants-test@1` (JSON, aucun appel réseau) : le mot de passe de
+// chaque compte de `comptes` tient en 20 caractères au moins, tirés d'un alphabet sans sosie (0 O 1 l I) ni
+// signe. Le verdict nomme le compte et la POSITION de chaque défaut, jamais la valeur : un secret ne transite
+// pas par un rapport. Le remède est `node scripts/tirer-secret-humain.mjs`. Générateur : scripts/lib-secret-humain.mjs.
+const _FORMAT_IDENTIFIANTS_O25 = "forge-ops/identifiants-test@1";
+if (args.includes("--identifiants-test")) {
+  const fichier25 = args[args.indexOf("--identifiants-test") + 1];
+  const DOM25 = "Exploitation : les identifiants de test remis à l'humain se recopient sans erreur (O-25)";
+  const NJ25 = [
+    "la FORCE du secret au-delà de sa longueur et de son alphabet : ni entropie mesurée, ni dictionnaire de mots de passe courants",
+    "les sosies hors de la liste du lot (0 O 1 l I) : 5 et S, 8 et B, 2 et Z, u et v se confondent aussi sur certaines polices ; le générateur ne les exclut pas",
+    "que le mot de passe du fichier est celui que le produit accepte : la connexion se prouve par la chaîne (`identifiants-test.mjs verifier`), pas par la lecture du fichier",
+    "tout champ autre que `comptes.<nom>.mot_de_passe` : jetons d'API et clés, qu'une machine seule emploie, ne sont pas recopiés par un humain",
+  ];
+  const fin25 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM25, artefact: fichier25 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O25", msg: "chaque mot de passe tient en 20 caractères au moins d'un alphabet sans sosie ni signe", where: fichier25 }], non_juge: NJ25 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier25 || !fs.existsSync(fichier25)) { add("info", "O25", "fichier des identifiants introuvable", String(fichier25)); fin25("SKIP", 2); }
+  let doc25 = null;
+  try { doc25 = JSON.parse(fs.readFileSync(fichier25, "utf8")); }
+  catch { add("bloquant", "O25", "fichier illisible (JSON invalide) : un fichier non lu ne vaut jamais PASS", String(fichier25)); fin25("FAIL", 1); }
+  if (doc25?.format !== _FORMAT_IDENTIFIANTS_O25) { add("info", "O25", `format « ${doc25?.format ?? "absent"} » : attendu ${_FORMAT_IDENTIFIANTS_O25} — rien à juger`, String(fichier25)); fin25("SKIP", 2); }
+  const comptes25 = doc25.comptes && typeof doc25.comptes === "object" ? Object.entries(doc25.comptes) : [];
+  if (!comptes25.length) { add("info", "O25", "aucun compte déclaré — rien à juger", String(fichier25)); fin25("SKIP", 2); }
+  for (const [nom, c] of comptes25) {
+    const mdp = c?.mot_de_passe;
+    if (typeof mdp !== "string" || !mdp) { add("bloquant", "O25", `compte « ${nom} » : aucun mot de passe`, `${path.basename(fichier25)} (${nom})`); continue; }
+    const defauts = defautsDuSecret(mdp);
+    if (defauts.length) add("bloquant", "O25", `compte « ${nom} » : ${defauts.length} défaut(s) — ${defauts.slice(0, 6).join(" ; ")}${defauts.length > 6 ? ` ; … ${defauts.length - 6} autre(s)` : ""} — un humain lit « l » pour « 1 » et ne dicte pas un signe ; remplacer par \`node scripts/tirer-secret-humain.mjs\` (20 caractères, sans sosie ni signe) (TF-2167)`, `${path.basename(fichier25)} (${nom})`);
+  }
+  const durs25 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin25(durs25.length ? "FAIL" : "PASS", durs25.length ? 1 : 0);
+}
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
 // RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a
 // figés dans un fichier de config (latence, taux d'erreur, fenêtre minimale) — aucun défaut

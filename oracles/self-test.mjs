@@ -2185,5 +2185,88 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
     "O24 : les trois phrases nginx qui fondent les règles sont citées mot pour mot");
 }
 
+// ── O25 + secret-humain (TF-2167, lot Produit-86 20261104b RP-11) : UN SECRET QUE L'HUMAIN RECOPIE SE TIRE SANS SOSIE ───
+// NI SIGNE, 20 CARACTÈRES AU MOINS ──────────────────────────────────────────────────────────────────────────────────
+// Le fait du 04/11/2026 : `secrets.token_urlsafe` produisait « _ » et des sosies (1, l) ; le porteur a essuyé 2 refus 401
+// alors que les mêmes valeurs passaient par httpx et Playwright.
+{
+  console.log("");
+  const lib = await import("../scripts/lib-secret-humain.mjs");
+  const { ALPHABET, SOSIES, genererSecret, defautsDuSecret, MINUSCULES, MAJUSCULES, CHIFFRES } = lib;
+  const script25 = path.join(ici, "..", "scripts", "tirer-secret-humain.mjs");
+  const cli25 = (...a) => spawnSync(process.execPath, [script25, ...a], { encoding: "utf8" });
+  ok(ALPHABET.length === 57 && ![...SOSIES].some(c => ALPHABET.includes(c)) && /^[A-Za-z0-9]+$/.test(ALPHABET),
+    `secret-humain : alphabet de 57 symboles alphanumériques sans 0, O, 1, l ni I (obtenu ${ALPHABET.length})`);
+  const tirages = Array.from({ length: 2000 }, () => genererSecret());
+  ok(tirages.every(s => s.length === 20 && [...s].every(c => ALPHABET.includes(c))), "secret-humain : 2000 tirages de 20 caractères, tous dans l'alphabet");
+  ok(tirages.every(s => [...MINUSCULES].some(c => s.includes(c)) && [...MAJUSCULES].some(c => s.includes(c)) && [...CHIFFRES].some(c => s.includes(c))),
+    "secret-humain : chaque tirage porte une minuscule, une majuscule et un chiffre");
+  ok(new Set(tirages).size === 2000 && tirages.every(s => defautsDuSecret(s).length === 0), "secret-humain : 2000 tirages distincts, aucun défaut au jugement");
+  const vus = new Set(tirages.join(""));
+  ok(vus.size === ALPHABET.length, `secret-humain : les 57 symboles sortent tous sur 40000 tirages, aucun biais qui en écarte (obtenu ${vus.size})`);
+  let refus19 = null; try { genererSecret(19); } catch (e) { refus19 = e; }
+  ok(refus19 instanceof RangeError && genererSecret(32).length === 32, "secret-humain : 19 caractères refusés (RangeError), 32 admis");
+  // La cause, rouge : la forme token_urlsafe du 04/11 est refusée, position par position, sans écrire la valeur.
+  const urlsafe = "Qx7_mR2vTz9-WnVb4HcR";
+  const dU = defautsDuSecret(urlsafe);
+  ok(dU.length === 2 && dU[0].startsWith("position 4 :") && dU[1].startsWith("position 12 :"), `secret-humain : « _ » et « - » nommés par leur position (obtenu ${dU.length} défaut(s))`);
+  ok(defautsDuSecret("Kd1mQx3pTz9WnVb4HcOl").length === 3 && defautsDuSecret("Kd7mQx3pTz9W")[0] === "12 caractères, 20 au moins",
+    "secret-humain : les sosies 1, O, l sont nommés ; un secret de 12 caractères l'est par sa longueur");
+  ok(!dU.join(" ").includes(urlsafe) && !dU.join(" ").includes("_") && !dU.join(" ").includes("-"), "secret-humain : le défaut dit la position, jamais le caractère ni la valeur du secret");
+  // La CLI.
+  const c1 = cli25("--nombre", "3");
+  const lignes = c1.stdout.split(/\r?\n/).filter(Boolean);
+  ok(c1.status === 0 && lignes.length === 3 && lignes.every(s => defautsDuSecret(s).length === 0), `secret-humain CLI : 3 secrets valides, un par ligne (exit ${c1.status})`);
+  ok(cli25("--longueur", "24").stdout.trim().length === 24, "secret-humain CLI : --longueur 24");
+  const c3 = cli25("--longueur", "19");
+  ok(c3.status === 2 && /SECRET HORS CONTRAT/.test(c3.stderr) && c3.stdout === "", `secret-humain CLI : 19 caractères -> exit 2, rien sur la sortie (exit ${c3.status})`);
+  ok(cli25("--nombre", "0").status === 2 && cli25("--nombre", "abc").status === 2, "secret-humain CLI : --nombre 0 ou illisible -> exit 2");
+
+  // O25 : paire de fixtures.
+  const o25 = (cible, ...extra) => { try { return JSON.parse(run(oracle, ["--identifiants-test", cible, "--json-only", ...extra])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const fx25 = f => fx(path.join("o25-identifiants-test", f));
+  const durs = r => (r.findings || []).filter(f => f.regle === "O25" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const rV = o25(fx25("verte.json"));
+  ok(rV.verdict === "PASS" && durs(rV).length === 0, `O25 : trois comptes aux mots de passe tirés par secret-humain -> PASS (obtenu ${rV.verdict})`);
+  const rT = o25(fx25("rouge-token-urlsafe.json"));
+  ok(rT.verdict === "FAIL" && durs(rT).length === 2 && /admin-fixture.*position 4.*position 12/.test(durs(rT)[0].msg) && /lecteur-fixture.*position 3.*position 19.*position 20/.test(durs(rT)[1].msg),
+    `O25 : « _ », « - » et sosies -> FAIL, un constat par compte avec ses positions (obtenu ${rT.verdict}, ${durs(rT).length})`);
+  const rC = o25(fx25("rouge-courts.json"));
+  ok(rC.verdict === "FAIL" && durs(rC).length === 1 && /12 caractères, 20 au moins/.test(durs(rC)[0].msg), `O25 : 12 caractères -> FAIL, ce seul constat (obtenu ${rC.verdict}, ${durs(rC).length})`);
+  const sortieBrute = JSON.stringify([rT, rC]);
+  const valeursRouges = [...fs.readFileSync(fx25("rouge-token-urlsafe.json"), "utf8").matchAll(/"mot_de_passe": "([^"]+)"/g)].map(m => m[1]).concat(["Kd7mQx3pTz9W"]);
+  ok(valeursRouges.length === 3 && valeursRouges.every(v => !sortieBrute.includes(v)), "O25 : aucune des 3 valeurs refusées n'apparaît dans le verdict (un secret ne transite pas par un rapport)");
+  ok(o25(fx25("sans-format.json")).verdict === "SKIP", "O25 : fichier sans le format forge-ops/identifiants-test@1 -> SKIP, il n'est pas de ce contrat");
+  const tmp25 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o25-"));
+  try {
+    ok(o25(path.join(tmp25, "absent.json")).verdict === "SKIP", "O25 borne : fichier introuvable -> SKIP");
+    const casse = path.join(tmp25, "casse.json"); fs.writeFileSync(casse, "{ pas du json", "utf8");
+    ok(o25(casse).verdict === "FAIL", "O25 borne : JSON illisible -> FAIL dit, jamais un PASS silencieux");
+    const sansMdp = path.join(tmp25, "sans-mdp.json"); fs.writeFileSync(sansMdp, JSON.stringify({ format: "forge-ops/identifiants-test@1", comptes: { admin: {} } }), "utf8");
+    ok(o25(sansMdp).verdict === "FAIL", "O25 borne : un compte sans mot de passe -> FAIL");
+    const vide = path.join(tmp25, "vide.json"); fs.writeFileSync(vide, JSON.stringify({ format: "forge-ops/identifiants-test@1", comptes: {} }), "utf8");
+    ok(o25(vide).verdict === "SKIP", "O25 borne : aucun compte déclaré -> SKIP, jamais un PASS vide");
+    // Jouer le remède que le refus nomme (TF-1013) : chaque mot de passe remplacé par la sortie de secret-humain doit PASSER.
+    const rouge = JSON.parse(fs.readFileSync(fx25("rouge-token-urlsafe.json"), "utf8"));
+    for (const nom of Object.keys(rouge.comptes)) rouge.comptes[nom].mot_de_passe = cli25().stdout.trim();
+    const remede = path.join(tmp25, "remede.json"); fs.writeFileSync(remede, JSON.stringify(rouge), "utf8");
+    ok(o25(remede).verdict === "PASS", `O25 remède : le rouge dont chaque mot de passe vient de tirer-secret-humain.mjs -> PASS (obtenu ${o25(remede).verdict})`);
+  } finally {
+    fs.rmSync(tmp25, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // Loi n° 1 : la règle, le générateur et le référentiel sont appelés ; l'écart à la lettre est déclaré.
+  const lire25 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire25(f); return t.includes("--identifiants-test") && t.includes("tirer-secret-humain.mjs") && t.includes("IDENTIFIANTS-DE-TEST.md"); }),
+    "O25 : le mode, le générateur et le référentiel sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(/O25 --identifiants-test/.test(lire25("oracles/oracle-ops.mjs").split("import fs")[0]), "O25 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
+  const doc25 = lire25("references/IDENTIFIANTS-DE-TEST.md");
+  ok(/Écart à la lettre, déclaré\./.test(doc25) && doc25.includes("minuscule, une majuscule et un chiffre"), "O25 : l'écart à la lettre (minuscule, majuscule, chiffre exigés) est déclaré au référentiel");
+  let verdictDoc25 = "ILLISIBLE";
+  try { verdictDoc25 = JSON.parse(run(oracle, [path.join(ici, "..", "references", "IDENTIFIANTS-DE-TEST.md"), "--json-only"])).verdict; }
+  catch (e) { try { verdictDoc25 = JSON.parse(String(e.stdout)).verdict; } catch { /* reste ILLISIBLE */ } }
+  ok(verdictDoc25 === "PASS", `O25 : IDENTIFIANTS-DE-TEST.md passe l'oracle de documents (O9, O12, O13, O16) (obtenu ${verdictDoc25})`);
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

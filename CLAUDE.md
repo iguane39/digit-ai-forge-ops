@@ -208,6 +208,14 @@ findings,non_juge}`, exit 0/1/2 :
   `gabarits/frontal-nginx.conf`, faits datés `references/RESEAU-ET-FRONTAL-DOCKER.md`. Statique, nginx n'est
   pas lancé. Fixtures : `fixtures/o24-frontal-nginx/`.
 
+- **O25** `--identifiants-test <fichier.json>` (TF-2167, lot Produit-86 20261104b RP-11). Un secret qu'un humain
+  recopie se tire dans un alphabet sans sosie (0 O 1 l I) ni signe, 20 caractères au moins : générateur commun
+  `scripts/lib-secret-humain.mjs`, commande `node scripts/tirer-secret-humain.mjs`. Mesure fondatrice : `secrets.token_urlsafe`
+  produisait « _ » et des sosies, le porteur a essuyé 2 refus 401 alors que httpx et Playwright passaient. O-25 juge un
+  fichier `forge-ops/identifiants-test@1`, nomme le compte et la POSITION du défaut, jamais la valeur. Écart à la
+  lettre déclaré : minuscule, majuscule et chiffre exigés. Faits : `references/IDENTIFIANTS-DE-TEST.md`. Fixtures :
+  `fixtures/o25-identifiants-test/`.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les
