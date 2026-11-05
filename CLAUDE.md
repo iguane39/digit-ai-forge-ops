@@ -200,6 +200,14 @@ findings,non_juge}`, exit 0/1/2 :
   changes » avec. Gabarit `gabarits/reseau-docker.tf`, faits datés `references/RESEAU-ET-FRONTAL-DOCKER.md`.
   Statique, aucun appel au démon. Fixtures : `fixtures/o23-reseau-docker/`, `fixtures/plages-docker/`.
 
+- **O24** `--frontal-nginx <fichier.conf ou dossier>` (TF-2165, lot Produit-86 20261104a RO-3). Un frontal
+  nginx résout son amont à chaque requête : `resolver 127.0.0.11 valid=10s;`, l'amont dans une variable,
+  `proxy_pass $amont;`. Mesure fondatrice : `proxy_pass http://app:8000;` résolu une fois, l'application
+  recréée change d'adresse, 502 (1 déploiement en échec le 04/11/2026) ; rejoué sur nginx 1.30-alpine : 502 en
+  littéral, 200 avec le gabarit (`FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs`). Gabarit
+  `gabarits/frontal-nginx.conf`, faits datés `references/RESEAU-ET-FRONTAL-DOCKER.md`. Statique, nginx n'est
+  pas lancé. Fixtures : `fixtures/o24-frontal-nginx/`.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les

@@ -2064,5 +2064,126 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(verdictDoc23 === "PASS", `O23 : RESEAU-ET-FRONTAL-DOCKER.md passe l'oracle de documents (O9, O12, O13, O16) (obtenu ${verdictDoc23})`);
 }
 
+// ── O24 (TF-2165, lot Produit-86 20261104a RO-3) : UN FRONTAL NGINX RÉSOUT SON AMONT À CHAQUE REQUÊTE ──────────────────
+// Le fait du 04/11/2026 : `proxy_pass http://app:8000;` résolu une fois ; l'application recréée change d'adresse, le
+// frontal rend 502. Rejoué le 05/11/2026 sur nginx 1.30-alpine : littéral 502, gabarit 200 (exercice ci-dessous).
+{
+  console.log("");
+  const o24 = (cible, ...extra) => { try { return JSON.parse(run(oracle, ["--frontal-nginx", cible, "--json-only", ...extra])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const fx24 = f => fx(path.join("o24-frontal-nginx", f));
+  const durs = r => (r.findings || []).filter(f => f.regle === "O24" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const gabarit24 = path.join(ici, "..", "gabarits", "frontal-nginx.conf");
+  const rG = o24(gabarit24);
+  ok(rG.verdict === "PASS" && durs(rG).length === 0, `O24 : gabarits/frontal-nginx.conf -> PASS (variable, resolver 127.0.0.11 valid=10s) (obtenu ${rG.verdict})`);
+  const rL = o24(fx24("rouge-amont-fige.conf"));
+  ok(rL.verdict === "FAIL" && durs(rL).length === 1 && durs(rL)[0].sev === "bloquant" && /résolu UNE fois/.test(durs(rL)[0].msg) && /host not found in upstream/.test(durs(rL)[0].msg),
+    `O24 : proxy_pass http://app:8000 littéral -> FAIL, ce seul constat (obtenu ${rL.verdict}, ${durs(rL).length})`);
+  const rR = o24(fx24("rouge-sans-resolver.conf"));
+  ok(rR.verdict === "FAIL" && durs(rR).length === 1 && durs(rR)[0].sev === "bloquant" && /AUCUN resolver/.test(durs(rR)[0].msg) && /determined using a resolver/.test(durs(rR)[0].msg),
+    `O24 : variable sans resolver -> FAIL, la phrase de la documentation citée (obtenu ${rR.verdict}, ${durs(rR).length})`);
+  const rV = o24(fx24("rouge-resolver-sans-valid.conf"));
+  ok(rV.verdict === "FAIL" && durs(rV).length === 1 && durs(rV)[0].sev === "majeur" && /sans valid=/.test(durs(rV)[0].msg),
+    `O24 : resolver sans valid= -> FAIL majeur, ce seul constat (obtenu ${rV.verdict}, ${durs(rV).length})`);
+  const rU = o24(fx24("rouge-upstream-fige.conf"));
+  ok(rU.verdict === "FAIL" && durs(rU).length === 1 && /sans le paramètre resolve/.test(durs(rU)[0].msg), `O24 : groupe upstream qui nomme son serveur sans resolve -> FAIL (obtenu ${rU.verdict}, ${durs(rU).length})`);
+  const rS = o24(fx24("rouge-upstream-resolver-dans-server.conf"));
+  ok(rS.verdict === "FAIL" && durs(rS).length === 1 && /un resolver de bloc server ne lui sert pas/.test(durs(rS)[0].msg),
+    `O24 : resolve avec un resolver seulement dans server -> FAIL, comme nginx -t (obtenu ${rS.verdict}, ${durs(rS).length})`);
+  const rUv = o24(fx24("verte-upstream-resolve.conf"));
+  ok(rUv.verdict === "PASS" && durs(rUv).length === 0, `O24 : upstream avec resolve, zone et resolver dans son bloc -> PASS (obtenu ${rUv.verdict})`);
+  ok(o24(fx24("sans-nom-d-hote.conf")).verdict === "SKIP", "O24 : IP, socket unix, localhost et proxy_pass en commentaire -> SKIP, jamais un PASS vide");
+  ok(o24(path.join(base, "absente.conf")).verdict === "SKIP", "O24 borne : configuration introuvable -> SKIP");
+  // Jouer le remède que le refus nomme (TF-1013) : le littéral réécrit comme le message le dit doit PASSER.
+  const tmp24 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o24-"));
+  try {
+    const litteral = fs.readFileSync(fx24("rouge-amont-fige.conf"), "utf8").replace(/\r\n/g, "\n");
+    const remede = path.join(tmp24, "remede.conf");
+    fs.writeFileSync(remede, litteral.replace("    listen 80;\n", '    listen 80;\n    resolver 127.0.0.11 valid=10s;\n    set $amont "http://app:8000";\n').replace("proxy_pass http://app:8000;", "proxy_pass $amont;"), "utf8");
+    ok(o24(remede).verdict === "PASS", `O24 remède : resolver + set $amont + proxy_pass $amont sur le rouge littéral -> PASS (obtenu ${o24(remede).verdict})`);
+    // Le dossier de la configuration : le resolver d'un fichier compte pour le proxy_pass d'un autre.
+    fs.mkdirSync(path.join(tmp24, "conf.d"));
+    fs.writeFileSync(path.join(tmp24, "nginx.conf"), "http {\n    resolver 127.0.0.11 valid=10s;\n    include /etc/nginx/conf.d/*.conf;\n}\n", "utf8");
+    fs.writeFileSync(path.join(tmp24, "conf.d", "front.conf"), fs.readFileSync(fx24("rouge-sans-resolver.conf"), "utf8"), "utf8");
+    ok(o24(path.join(tmp24, "conf.d", "front.conf")).verdict === "FAIL", "O24 borne : le même front.conf passé SEUL, sans le resolver de nginx.conf -> FAIL");
+    ok(o24(path.join(tmp24, "conf.d")).verdict === "FAIL" && o24(tmp24).verdict === "PASS", "O24 borne : le dossier de la configuration entière, le resolver de http { } compte -> PASS");
+    // Un commentaire qui cite le défaut ne compte pas ; une variable en ${…} se lit comme variable.
+    const comm = path.join(tmp24, "commentaire.conf");
+    fs.writeFileSync(comm, '# proxy_pass http://app:8000;\nserver {\n    resolver 127.0.0.11 valid=10s;\n    location / { proxy_pass http://${AMONT}; }\n}\n', "utf8");
+    ok(o24(comm).verdict === "PASS", "O24 borne : le défaut cité en commentaire ne compte pas ; ${AMONT} est lu comme variable");
+  } finally {
+    fs.rmSync(tmp24, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+
+  // EXERCICE RÉEL, à la demande : réseau jetable, application, frontal ; l'application est recréée à une autre adresse.
+  // Jamais par défaut (le banc reste hors ligne), jamais de téléchargement (image absente : SKIP dit).
+  if (process.env.FORGE_OPS_EXERCICE_DOCKER !== "1") {
+    console.log("  [SKIP] TF-2165 · exercice réel non demandé : FORGE_OPS_EXERCICE_DOCKER=1 recrée une application derrière un frontal nginx:1.30-alpine jetable (littéral 502, gabarit 200)");
+  } else {
+    const IMAGES = ["nginx:1.30-alpine", "python:3.12-slim"];
+    const docker = (...a) => spawnSync("docker", a, { encoding: "utf8", timeout: 120000 });
+    const absentes = IMAGES.filter(i => docker("image", "inspect", i).status !== 0);
+    if (absentes.length) {
+      console.log(`  [SKIP] TF-2165 · image(s) ${absentes.join(", ")} absente(s) du poste : l'exercice ne télécharge rien`);
+    } else {
+      const attendre = ms => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+      const suffixe = randomBytes(3).toString("hex");
+      const reseau = `forge-ops-tf2165-${suffixe}`;
+      const noms = { app: `fo-tf2165-app-${suffixe}`, front: `fo-tf2165-front-${suffixe}`, occupant: `fo-tf2165-occ-${suffixe}` };
+      const dossier = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2165-"));
+      const nettoyer = () => { for (const n of Object.values(noms)) docker("rm", "-f", n); docker("network", "rm", reseau); };
+      const adresse = n => docker("inspect", "-f", `{{(index .NetworkSettings.Networks "${reseau}").IPAddress}}`, n).stdout.trim();
+      const monter = conf => `${path.join(dossier, conf).replace(/\\/g, "/")}:/etc/nginx/conf.d/default.conf:ro`;
+      const demarrerApp = () => docker("run", "-d", "--name", noms.app, "--network", reseau, "--network-alias", "app", "python:3.12-slim", "python", "-m", "http.server", "8000");
+      const statut = () => (docker("exec", noms.front, "wget", "-q", "-S", "-O", "/dev/null", "http://127.0.0.1/").stderr.match(/HTTP\/1\.\d (\d{3})/) || [])[1] ?? "aucune réponse";
+      const gabarit = fs.readFileSync(gabarit24, "utf8").replace(/\r\n/g, "\n");
+      // Le littéral, tel que le lot le décrit : le gabarit privé de son resolver et de sa variable.
+      const litteral = gabarit.replace(/\n\s*resolver [^\n]*\n/, "\n").replace(/\n\s*set \$amont "http:\/\/app:8000";\n/, "\n").replace("proxy_pass $amont;", "proxy_pass http://app:8000;");
+      fs.writeFileSync(path.join(dossier, "litteral.conf"), litteral, "utf8");
+      fs.writeFileSync(path.join(dossier, "gabarit.conf"), gabarit, "utf8");
+      const resultats = {};
+      try {
+        for (const conf of ["litteral.conf", "gabarit.conf"]) {
+          nettoyer();
+          docker("network", "create", reseau);
+          const t = docker("run", "--rm", "--network", reseau, "-v", monter(conf), "nginx:1.30-alpine", "nginx", "-t");
+          const app = demarrerApp(); attendre(2500);
+          const avantApp = adresse(noms.app);
+          const front = docker("run", "-d", "--name", noms.front, "--network", reseau, "-v", monter(conf), "nginx:1.30-alpine");
+          attendre(1500);
+          const avant = statut();
+          docker("rm", "-f", noms.app);
+          docker("run", "-d", "--name", noms.occupant, "--network", reseau, "python:3.12-slim", "sleep", "300");
+          demarrerApp(); attendre(2500);
+          const apresApp = adresse(noms.app);
+          attendre(11000); // plus que valid=10s
+          resultats[conf] = { nginxT: t.status, demarre: app.status === 0 && front.status === 0, changee: avantApp !== "" && apresApp !== "" && avantApp !== apresApp, avant, apres: statut() };
+        }
+      } finally { nettoyer(); fs.rmSync(dossier, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+      const L = resultats["litteral.conf"], G = resultats["gabarit.conf"];
+      ok(L && G && L.demarre && G.demarre && L.changee && G.changee, "TF-2165 · exercice : l'application recréée a changé d'adresse dans les deux essais");
+      ok(L?.nginxT !== 0 && G?.nginxT === 0, `TF-2165 · exercice : nginx -t sans l'amont échoue en littéral (exit ${L?.nginxT}) et passe avec le gabarit (exit ${G?.nginxT})`);
+      ok(L?.avant === "200" && L?.apres === "502", `TF-2165 · exercice ROUGE : frontal littéral, 200 avant la recréation puis ${L?.apres} après (attendu 502)`);
+      ok(G?.avant === "200" && G?.apres === "200", `TF-2165 · exercice VERT : gabarit, ${G?.avant} avant la recréation puis ${G?.apres} après (attendu 200)`);
+      ok(docker("ps", "-a", "-q", "--filter", `name=fo-tf2165-`).stdout.trim() === "" && docker("network", "ls", "-q", "--filter", `name=${reseau}`).stdout.trim() === "",
+        "TF-2165 · exercice : conteneurs et réseau jetables retirés");
+    }
+  }
+
+  // Loi n° 1 : la règle, le gabarit et le référentiel sont appelés ; les faits sont sourcés et datés.
+  const lire24 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire24(f); return t.includes("--frontal-nginx") && t.includes("frontal-nginx.conf") && t.includes("RESEAU-ET-FRONTAL-DOCKER.md"); }),
+    "O24 : le mode, le gabarit et le référentiel sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(/O24 --frontal-nginx/.test(lire24("oracles/oracle-ops.mjs").split("import fs")[0]), "O24 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
+  const doc24 = lire24("references/RESEAU-ET-FRONTAL-DOCKER.md");
+  const sources24 = [...doc24.matchAll(/^  - url: (https:\/\/nginx\.org\/\S+)\r?\n    lu_le: (\d{4}-\d{2}-\d{2})\r?$/gm)];
+  ok(sources24.length === 3 && sources24.every(m => m[2] === "2026-11-05"), `O24 : trois pages nginx.org sourcées, chacune lue le 05/11/2026 (obtenu ${sources24.length})`);
+  const doc24Plie = doc24.replace(/\s+/g, " ");
+  ok(doc24Plie.includes("the name is searched among the described server groups, and, if not found, is determined using a resolver.")
+      && doc24Plie.includes("By default, nginx caches answers using the TTL value of a response. An optional valid parameter allows overriding it")
+      && doc24Plie.includes("Prior to version 1.27.3, this parameter was available only as part of our commercial subscription"),
+    "O24 : les trois phrases nginx qui fondent les règles sont citées mot pour mot");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

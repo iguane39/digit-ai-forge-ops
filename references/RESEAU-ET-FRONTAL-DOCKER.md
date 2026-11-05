@@ -9,6 +9,12 @@ sources:
     lu_le: 2026-11-05
   - url: https://docs.docker.com/engine/network/drivers/bridge/
     lu_le: 2026-11-05
+  - url: https://nginx.org/en/docs/http/ngx_http_proxy_module.html
+    lu_le: 2026-11-05
+  - url: https://nginx.org/en/docs/http/ngx_http_core_module.html
+    lu_le: 2026-11-05
+  - url: https://nginx.org/en/docs/http/ngx_http_upstream_module.html
+    lu_le: 2026-11-05
 ---
 
 # Un réseau Docker posé par Terraform, et le frontal qui le traverse
@@ -69,7 +75,59 @@ appel au démon :
 - un `subnet` tiré d'une variable ou d'un local n'est ni jugé ni refusé ; un réseau sans `ipam_config`
   laisse le démon choisir, rien à juger.
 
-Fixtures à double sens : `fixtures/o23-reseau-docker/` (4 rouges, 2 verts), et le gabarit lui-même passe.
+Fixtures à double sens : `fixtures/o23-reseau-docker/` (3 rouges, un vert par variable, un cas sans objet
+rendu en SKIP), et le gabarit lui-même passe.
 
 **Ce qui n'est pas jugé.** La plage réellement libre au moment de l'`apply` (le relevé la lit à l'`apply`,
 l'oracle lit des fichiers), les routes de l'hôte (VPN, réseau d'entreprise) et les plages IPv6.
+
+## 2. Le frontal : résoudre l'amont à chaque requête (TF-2165)
+
+**Le fait du 04/11/2026.** Le frontal nginx de la préproduction portait `proxy_pass http://app:8000;`. nginx
+résout « app » une fois, au chargement de la configuration. Après l'ajout de conteneurs au réseau interne,
+l'application recréée a changé d'adresse et le frontal a rendu 502 : santé 1/3, un déploiement en échec à
+12:31.
+
+**Rejoué le 05/11/2026** sur `nginx:1.30-alpine` et Docker 29.4.2 : un réseau jetable, une application
+(`python -m http.server 8000`, alias `app`), un frontal ; puis l'application est supprimée, un occupant prend
+son adresse et l'application recréée reçoit la suivante.
+
+| Frontal | `nginx -t` sans l'amont | Requête avant la recréation | Requête après la recréation |
+|---|---|---|---|
+| `proxy_pass http://app:8000;` | exit 1, « host not found in upstream "app" » | 200 | 502 Bad Gateway |
+| `gabarits/frontal-nginx.conf` | exit 0 | 200 | 200 |
+
+L'exercice se rejoue par `FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs` : il lit les deux images
+déjà présentes sur le poste, n'en télécharge aucune, et retire ce qu'il a créé.
+
+**Ce que le gabarit pose.**
+
+1. `resolver 127.0.0.11 valid=10s;` : 127.0.0.11 est le serveur DNS embarqué de Docker (« The embedded DNS
+   server address is 127.0.0.11. », page `bridge`, lue le 05/11/2026) ; `valid=10s` remplace le TTL de la
+   réponse (« By default, nginx caches answers using the TTL value of a response. An optional valid parameter
+   allows overriding it », page `ngx_http_core_module`, lue le 05/11/2026).
+2. `set $amont "http://app:8000";` puis `proxy_pass $amont;`. Avec une variable, nginx ne résout plus au
+   chargement : « if an address is specified as a domain name, the name is searched among the described
+   server groups, and, if not found, is determined using a resolver. » (page `ngx_http_proxy_module`, lue le
+   05/11/2026). Déduit : sans `resolver`, la requête échoue, d'où la règle (1) d'O-24.
+
+**Ce que juge O-24** (`node oracles/oracle-ops.mjs --frontal-nginx <fichier.conf ou dossier>`), statique, sans
+lancer nginx :
+
+- un `proxy_pass` vers un nom d'hôte écrit en clair est un constat bloquant ; une adresse IP, `localhost` et
+  un socket unix ne se résolvent pas et sont écartés ;
+- un `proxy_pass` par variable exige un `resolver` : constat bloquant sans lui, constat majeur s'il ne porte
+  pas `valid=` ;
+- un `proxy_pass` vers un groupe `upstream` dont un serveur est un nom d'hôte exige le paramètre `resolve`
+  sur ce serveur, avec un `resolver` dans le bloc `upstream` ou dans `http`. Le paramètre est libre depuis
+  nginx 1.27.3 (« Prior to version 1.27.3, this parameter was available only as part of our commercial
+  subscription », page `ngx_http_upstream_module`, lue le 05/11/2026). Mesuré le 05/11/2026 : un `resolver`
+  posé dans le bloc `server` ne lui sert pas, `nginx -t` répond « no resolver defined to resolve names at run
+  time in upstream ».
+
+Fixtures à double sens : `fixtures/o24-frontal-nginx/` (5 rouges, un vert par `resolve`, un cas sans objet
+rendu en SKIP), et le gabarit lui-même passe. Chaque vert et chaque rouge d'`upstream` a été passé à `nginx -t`.
+
+**Ce qui n'est pas jugé.** L'exécution de nginx (c'est le rôle de l'exercice), les autres directives de
+passage (`fastcgi_pass`, `uwsgi_pass`, `scgi_pass`, `grpc_pass`), un `resolver` posé dans un autre fichier que
+le `proxy_pass` quand un seul fichier est passé, et la valeur d'une variable.

@@ -108,6 +108,10 @@ node oracles/oracle-ops.mjs --reseau-docker <pile-terraform-ou-fichier.tf>
 node scripts/plages-docker.mjs choisir [--nom <réseau>] [--base 10.200.0.0/16] [--longueur 24]   # la plage libre, relevée sur le démon
 node scripts/plages-docker.mjs lister                                                             # les plages déjà prises
 
+# Oracle O-24 : un frontal nginx résout son amont à chaque requête, il ne le fige pas au démarrage (TF-2165)
+# gabarit : gabarits/frontal-nginx.conf — faits : references/RESEAU-ET-FRONTAL-DOCKER.md ; exercice réel : FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
+node oracles/oracle-ops.mjs --frontal-nginx <fichier.conf-ou-dossier-de-configuration>
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -168,6 +172,7 @@ FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 | O21 | `--workflow-deploiement <fichier.yml> [--environnement <nom>] [--protection <capture.json>]` : un job qui déploie référence un environnement ; le job de production a son GO humain prouvé (job de garde qui lit l'environnement par l'API, ou capture de `gh api …/environments/<nom>`) ; il est couvert par un groupe de concurrence sans `cancel-in-progress: true` ; `id-token: write` ne va qu'à lui (TF-2003) |
 | O22 | `--mise-en-service <COMPOSANTS-OPS.md> [--le "AAAA-MM-JJ HH:MM"]` : une tâche planifiée ou récurrente déclarée « en service » (« actif », « partagé » ou « en service ») porte l'identifiant ou l'URL d'une première exécution réelle lue, la date et l'heure de lecture, et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat (D-108 (b)) |
 | O23 | `--reseau-docker <pile Terraform ou fichier.tf>` : chaque `docker_network` à `ipam_config` pose `lifecycle { ignore_changes = [ipam_config] }` et tient son `subnet` d'un relevé des plages prises (`data "external"` qui appelle `scripts/plages-docker.mjs`), jamais d'un CIDR écrit à la main ; gabarit `gabarits/reseau-docker.tf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2164) |
+| O24 | `--frontal-nginx <fichier.conf ou dossier>` : chaque `proxy_pass` vers un nom d'hôte passe par une variable, avec un `resolver` qui porte `valid=` ; un groupe `upstream` à serveur nommé porte `resolve` et son resolver dans son bloc ou dans `http` ; gabarit `gabarits/frontal-nginx.conf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2165) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.
