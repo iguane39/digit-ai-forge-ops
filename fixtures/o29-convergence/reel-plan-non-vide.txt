@@ -1,0 +1,24 @@
+terraform_data.autre: Refreshing state... [id=e5189637-7346-5e82-b665-5263c752da2c]
+terraform_data.conteneur: Refreshing state... [id=ed7af931-15a9-c548-988e-5a11949a26a2]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  ~ update in-place
+
+Terraform will perform the following actions:
+
+  # terraform_data.conteneur will be updated in-place
+  ~ resource "terraform_data" "conteneur" {
+        id     = "ed7af931-15a9-c548-988e-5a11949a26a2"
+      ~ input  = "a" -> "b"
+      ~ output = "a" -> (known after apply)
+    }
+
+Plan: 0 to add, 1 to change, 0 to destroy.
+
+─────────────────────────────────────────────────────────────────────────────
+
+Saved the plan to: p.bin
+
+To perform exactly these actions, run the following command to apply:
+    terraform apply "p.bin"

@@ -1,0 +1,7 @@
+terraform_data.autre: Refreshing state... [id=e5189637-7346-5e82-b665-5263c752da2c]
+terraform_data.conteneur: Refreshing state... [id=5fb439a4-760d-849a-0452-d64984d8c6c0]
+
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.

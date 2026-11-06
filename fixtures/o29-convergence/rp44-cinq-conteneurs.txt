@@ -1,0 +1,35 @@
+docker_network.lab: Refreshing state... [id=n1]
+docker_container.webgoat: Refreshing state... [id=c1]
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  ~ update in-place
+
+Terraform will perform the following actions:
+
+  # docker_container.webgoat will be updated in-place
+  ~ resource "docker_container" "webgoat" {
+      ~ healthcheck = [...]
+    }
+
+  # docker_container.zap will be updated in-place
+  ~ resource "docker_container" "zap" {
+      ~ memory_swap = 0 -> -1
+    }
+
+  # docker_container.juice will be updated in-place
+  ~ resource "docker_container" "juice" {
+      ~ memory_swap = 0 -> -1
+    }
+
+  # docker_container.frontal will be updated in-place
+  ~ resource "docker_container" "frontal" {
+      ~ memory_swap = 0 -> -1
+    }
+
+  # module.base.docker_container.postgres will be updated in-place
+  ~ resource "docker_container" "postgres" {
+      ~ memory_swap = 0 -> -1
+    }
+
+Plan: 0 to add, 5 to change, 0 to destroy.

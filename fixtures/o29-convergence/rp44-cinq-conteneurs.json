@@ -1,0 +1,60 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.12.2",
+  "_fixture": "Reproduit RP-44 (Produit-86, lot 20261106a) : 5 conteneurs « update in-place » après l'apply, jamais appliqués. Forme `terraform show -json` (format_version 1.2) ; valeurs écrites à la main, les captures reel-*.json sont, elles, sorties de Terraform 1.12.2.",
+  "resource_changes": [
+    {
+      "address": "docker_container.webgoat", "mode": "managed", "type": "docker_container", "name": "webgoat",
+      "change": {
+        "actions": ["update"],
+        "before": { "id": "c1", "image": "webgoat/webgoat:latest", "memory_swap": 0, "healthcheck": [{ "test": ["CMD", "curl", "-f", "http://localhost:8080/WebGoat"], "interval": "30s" }] },
+        "after": { "id": "c1", "image": "webgoat/webgoat:latest", "memory_swap": 0, "healthcheck": [{ "test": ["NONE"], "interval": "30s" }] },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "docker_container.zap", "mode": "managed", "type": "docker_container", "name": "zap",
+      "change": {
+        "actions": ["update"],
+        "before": { "id": "c2", "image": "ghcr.io/zaproxy/zaproxy:stable", "memory_swap": 0 },
+        "after": { "id": "c2", "image": "ghcr.io/zaproxy/zaproxy:stable", "memory_swap": -1 },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "docker_container.juice", "mode": "managed", "type": "docker_container", "name": "juice",
+      "change": {
+        "actions": ["update"],
+        "before": { "id": "c3", "image": "bkimminich/juice-shop:latest", "memory_swap": 0 },
+        "after": { "id": "c3", "image": "bkimminich/juice-shop:latest", "memory_swap": -1 },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "docker_container.frontal", "mode": "managed", "type": "docker_container", "name": "frontal",
+      "change": {
+        "actions": ["update"],
+        "before": { "id": "c4", "image": "nginx:1.30-alpine", "memory_swap": 0 },
+        "after": { "id": "c4", "image": "nginx:1.30-alpine", "memory_swap": -1 },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "module.base.docker_container.postgres", "mode": "managed", "type": "docker_container", "name": "postgres",
+      "change": {
+        "actions": ["update"],
+        "before": { "id": "c5", "image": "registry.example/lab/postgres:16", "memory_swap": 0 },
+        "after": { "id": "c5", "image": "registry.example/lab/postgres:16", "memory_swap": -1 },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "docker_network.lab", "mode": "managed", "type": "docker_network", "name": "lab",
+      "change": { "actions": ["no-op"], "before": { "id": "n1", "name": "lab" }, "after": { "id": "n1", "name": "lab" }, "after_unknown": {} }
+    },
+    {
+      "address": "data.external.plage", "mode": "data", "type": "external", "name": "plage",
+      "change": { "actions": ["read"], "before": null, "after": { "result": { "subnet": "10.200.3.0/24" } }, "after_unknown": {} }
+    }
+  ]
+}

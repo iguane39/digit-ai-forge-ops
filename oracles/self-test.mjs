@@ -2696,5 +2696,147 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(["README.md", "CLAUDE.md"].every(f => { const t = lire44(f); return t.includes("cloudbuild-commit.yaml") && t.includes("TF-2244"); }), "TF-2244 : le gabarit de construction et la règle sont appelés par README.md et CLAUDE.md (loi n° 1)");
 }
 
+// ── TF-2271 (Produit-86, lot 20261106a RP-44, ledger seq 609) : UNE CHAÎNE TERRAFORM N'EST RÉUSSIE QUE SI LE PLAN SUIVANT EST VIDE ─
+// Le fait : le fournisseur Docker annonçait à chaque plan 5 conteneurs « mis à jour sur place » qu'il n'appliquait jamais ; la
+// chaîne rendait PASS après chaque apply. Décision R-58 du 06/11/2026 : la chaîne re-planifie après l'apply et signale un plan
+// non vide ; un attribut non modifiable sur place force le remplacement. Les captures reel-* sont sorties de Terraform 1.12.2
+// (terraform_data, fournisseur intégré, sans réseau) ; rp44-* reproduit les 5 conteneurs, valeurs écrites à la main.
+{
+  console.log("");
+  const lib29 = await import("../scripts/lib-convergence.mjs");
+  const fx29 = f => fx(path.join("o29-convergence", f));
+  const o29 = (...a) => { try { return JSON.parse(run(oracle, ["--convergence", ...a, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const durs = r => (r.findings || []).filter(f => f.regle === "O29" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const tmp29 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2271-"));
+  try {
+    // Verte : le plan suivant l'apply est vide (JSON de `terraform show -json` et sortie texte).
+    for (const f of ["reel-plan-vide.json", "reel-plan-vide.txt", "reel-plan-apres-remplacement.json", "reel-plan-apres-remplacement.txt"]) {
+      const r = o29(fx29(f));
+      ok(r.verdict === "PASS" && durs(r).length === 0, `O29 : ${f} (plan vide, Terraform 1.12.2) -> PASS (obtenu ${r.verdict}, ${durs(r).length})`);
+    }
+    // Rouge réelle : une ressource change encore après l'apply -> FAIL bloquant qui la nomme, ses attributs et le remède.
+    for (const f of ["reel-plan-non-vide.json", "reel-plan-non-vide.txt"]) {
+      const r = o29(fx29(f));
+      ok(r.verdict === "FAIL" && durs(r).length === 1 && durs(r)[0].sev === "bloquant" && /terraform_data\.conteneur/.test(durs(r)[0].msg), `O29 : ${f} (« 1 to change » après l'apply) -> FAIL bloquant qui nomme terraform_data.conteneur (obtenu ${r.verdict}, ${durs(r).length})`);
+      ok(/terraform apply -replace='terraform_data\.conteneur'/.test(durs(r)[0].msg), `O29 : ${f} -> le constat donne la commande de remplacement forcé`);
+    }
+    ok(/attributs : input, output/.test(durs(o29(fx29("reel-plan-non-vide.json")))[0].msg), "O29 : la capture JSON nomme les attributs qui changent encore (input, output)");
+    // Rouge RP-44 : 5 conteneurs, un constat bloquant chacun, jamais un total anonyme.
+    for (const f of ["rp44-cinq-conteneurs.json", "rp44-cinq-conteneurs.txt"]) {
+      const r = o29(fx29(f));
+      ok(r.verdict === "FAIL" && durs(r).length === 5 && durs(r).every(x => x.sev === "bloquant"), `O29 : ${f} (RP-44, 5 conteneurs « update in-place ») -> FAIL, 5 constats bloquants (obtenu ${r.verdict}, ${durs(r).length})`);
+      const m = durs(r).map(x => x.msg).join("\n");
+      ok(["docker_container.webgoat", "docker_container.zap", "docker_container.juice", "docker_container.frontal", "module.base.docker_container.postgres"].every(a => m.includes(`« ${a} »`)), `O29 : ${f} -> chaque conteneur est nommé`);
+    }
+    ok(/attributs : healthcheck/.test(durs(o29(fx29("rp44-cinq-conteneurs.json"))).find(x => /webgoat/.test(x.msg)).msg), "O29 : la sonde de WebGoat (healthcheck) est nommée comme attribut qui ne converge pas");
+    // Jouer le remède que le refus nomme (TF-1013) : le plan pris APRÈS `apply -replace` est vide -> PASS. Éprouvé avec Terraform 1.12.2 :
+    // reel-plan-remplacement.txt est le plan « will be replaced, as requested » de la même ressource, reel-plan-apres-remplacement.* le plan suivant.
+    ok(/terraform_data\.conteneur will be replaced, as requested/.test(fs.readFileSync(fx29("reel-plan-remplacement.txt"), "utf8")) && o29(fx29("reel-plan-apres-remplacement.json")).verdict === "PASS",
+      "O29 remède : `terraform plan -replace` annonce « will be replaced, as requested » et le plan suivant l'apply -replace est vide -> PASS");
+    // Bornes : une capture qu'on ne sait pas lire n'est jamais un PASS.
+    const ecrire29 = (nom, t) => { const f = path.join(tmp29, nom); fs.writeFileSync(f, t, "utf8"); return f; };
+    ok(o29(path.join(tmp29, "absente.json")).verdict === "SKIP", "O29 borne : capture introuvable -> SKIP");
+    const bornes29 = [["vide.json", "", /capture vide/], ["casse.json", "{ pas du json", /JSON invalide/], ["sans-changes.json", "{\"format_version\":\"1.2\"}", /resource_changes/],
+      ["pas-un-plan.txt", "Apply complete! Resources: 2 added, 0 changed, 0 destroyed.\n", /ce n'est pas la sortie d'un plan/]];
+    for (const [nom, t, motif] of bornes29) {
+      const r = o29(ecrire29(nom, t));
+      ok(r.verdict === "FAIL" && durs(r).length === 1 && motif.test(durs(r)[0].msg), `O29 borne : ${nom} -> FAIL dit, jamais un PASS (obtenu ${r.verdict})`);
+    }
+    const sansAdresse = o29(ecrire29("decompte.txt", "Plan: 1 to add, 2 to change, 0 to destroy.\n"));
+    ok(sansAdresse.verdict === "FAIL" && durs(sansAdresse).length === 1 && /1 à ajouter, 2 à changer, 0 à détruire/.test(durs(sansAdresse)[0].msg), "O29 : un décompte « Plan: » non nul sans ligne d'adresse -> FAIL qui dit le décompte");
+    ok(o29(ecrire29("ansi.txt", "\u001b[1m\u001b[32mNo changes.\u001b[0m Your infrastructure matches the configuration.\n")).verdict === "PASS", "O29 : la sortie colorée (codes ANSI) d'un plan vide -> PASS");
+
+    // La boucle de la chaîne (lib), Terraform injecté : re-planifier, remplacer de force un tour, re-planifier.
+    const rp44 = fs.readFileSync(fx29("rp44-cinq-conteneurs.json"), "utf8");
+    const faux = (planApres, { applyStatus = 0, showTexte = rp44, planAvant = 2 } = {}) => {
+      const appels = []; let nPlan = 0;
+      const lancer = a => {
+        appels.push(a);
+        if (a.includes("plan")) { nPlan++; return { status: nPlan === 1 ? planAvant : planApres, stdout: "", stderr: planAvant === 1 && nPlan === 1 ? "Error: boom" : "" }; }
+        if (a.includes("show")) return { status: 0, stdout: showTexte, stderr: "" };
+        if (a.includes("apply")) return { status: applyStatus, stdout: "", stderr: applyStatus ? "Error: apply" : "" };
+        return { status: 99, stdout: "", stderr: "commande inattendue" };
+      };
+      return { appels, lancer };
+    };
+    const etat29 = lib29.imagesAEtatDuReferentiel(path.join(ici, "..", "references", "CONTENEURS-A-ETAT.json"));
+    ok(etat29.includes("postgres"), "TF-2271 : le référentiel O-20 des images à état est lu (postgres en fait partie)");
+    { // a) plan vide dès la première re-planification : rien n'est appliqué
+      const f = faux(0, { planAvant: 0 });
+      const r = lib29.converger({ pile: "pile", lancer: f.lancer, executer: true, imagesAEtat: etat29, dossierTemp: tmp29 });
+      ok(r.verdict === "converge" && !f.appels.some(a => a.includes("apply")), "TF-2271 converger : plan vide après l'apply -> converge, aucun remplacement joué");
+    }
+    { // b) plan non vide, sans --executer : la commande est écrite, rien n'est appliqué, le conteneur à état est refusé
+      const f = faux(0);
+      const r = lib29.converger({ pile: "pile", lancer: f.lancer, executer: false, imagesAEtat: etat29, dossierTemp: tmp29 });
+      ok(r.verdict === "non-converge" && !f.appels.some(a => a.includes("apply")), "TF-2271 converger : plan non vide sans --executer -> non-converge, rien n'est appliqué (plan-first)");
+      ok(r.commande && ["webgoat", "zap", "juice", "frontal"].every(n => r.commande.includes(`-replace='docker_container.${n}'`)) && !/postgres/.test(r.commande), "TF-2271 converger : la commande de remplacement nomme les 4 conteneurs sans état, pas postgres");
+      ok(r.refusees.length === 1 && r.refusees[0].adresse === "module.base.docker_container.postgres" && r.refusees[0].image === "postgres", "TF-2271 converger : le conteneur d'image à état (postgres) est refusé au remplacement automatique, pas silencieusement");
+    }
+    { // c) --executer : UN apply -replace des 4, puis re-planification vide -> converge
+      const f = faux(0);
+      const r = lib29.converger({ pile: "pile", lancer: f.lancer, executer: true, imagesAEtat: etat29, dossierTemp: tmp29 });
+      const applys = f.appels.filter(a => a.includes("apply"));
+      ok(r.verdict === "converge" && applys.length === 1 && applys[0].filter(x => x.startsWith("-replace=")).length === 4 && applys[0].includes("-auto-approve") && !applys[0].some(x => /postgres/.test(x)),
+        `TF-2271 converger --executer : un seul apply -replace des 4 ressources sans état, puis plan vide -> converge (appels apply : ${applys.length})`);
+      ok(r.remplacees.length === 4 && r.etapes.length === 3, "TF-2271 converger --executer : trois étapes tracées (re-planification, remplacement forcé, re-planification)");
+    }
+    { // d) le plan reste non vide APRÈS le remplacement : un tour, pas deux
+      const f = faux(2);
+      const r = lib29.converger({ pile: "pile", lancer: f.lancer, executer: true, imagesAEtat: etat29, dossierTemp: tmp29 });
+      ok(r.verdict === "non-converge" && f.appels.filter(a => a.includes("apply")).length === 1, "TF-2271 converger --executer : plan encore non vide après le remplacement -> non-converge, un seul tour joué");
+    }
+    { // e) Terraform échoue : une erreur dite, jamais une convergence supposée
+      const e1 = lib29.converger({ pile: "pile", lancer: faux(0, { planAvant: 1 }).lancer, executer: true, imagesAEtat: etat29, dossierTemp: tmp29 });
+      ok(e1.verdict === "erreur" && /exit 1/.test(e1.etapes[0].detail), "TF-2271 converger : `terraform plan` en erreur (exit 1) -> erreur dite, pas converge");
+      const e2 = lib29.converger({ pile: "pile", lancer: faux(0, { applyStatus: 1 }).lancer, executer: true, imagesAEtat: etat29, dossierTemp: tmp29 });
+      ok(e2.verdict === "erreur" && /apply -replace a échoué/.test(e2.etapes[e2.etapes.length - 1].detail), "TF-2271 converger : `terraform apply -replace` en échec -> erreur dite");
+      const e3 = lib29.converger({ pile: "pile", lancer: faux(0, { showTexte: "{ pas du json" }).lancer, executer: true, imagesAEtat: etat29, dossierTemp: tmp29 });
+      ok(e3.verdict === "erreur" && /capture illisible/.test(e3.etapes[0].detail), "TF-2271 converger : `show -json` illisible -> erreur dite");
+    }
+    { // f) une ressource à créer ou détruire n'est pas un « update » : le remplacement forcé ne la concerne pas
+      const mixte = JSON.stringify({ resource_changes: [{ address: "docker_container.neuf", change: { actions: ["create"], before: null, after: { image: "nginx:1" } } }, { address: "docker_container.vieux", change: { actions: ["delete"], before: { image: "nginx:1" }, after: null } }] });
+      const f = faux(0, { showTexte: mixte });
+      const r = lib29.converger({ pile: "pile", lancer: f.lancer, executer: true, imagesAEtat: etat29, dossierTemp: tmp29 });
+      ok(r.verdict === "non-converge" && r.autres.length === 2 && !f.appels.some(a => a.includes("apply")), "TF-2271 converger : create et delete ne sont pas remplacés de force -> non-converge, listés hors remplacement");
+    }
+
+    // La ligne de commande : usages refusés, Terraform absent dit.
+    const cli29 = path.join(ici, "..", "scripts", "convergence-terraform.mjs");
+    const sortie29 = (args, env = {}) => { const r = spawnSync(process.execPath, [cli29, ...args], { encoding: "utf8", env: { ...process.env, ...env } }); return { status: r.status, out: String(r.stdout) + String(r.stderr) }; };
+    ok(sortie29(["inconnu", tmp29]).status === 2 && /usage/.test(sortie29(["inconnu", tmp29]).out), "convergence-terraform : verbe inconnu -> exit 2 et usage");
+    ok(sortie29(["verifier"]).status === 2 && sortie29(["verifier", path.join(tmp29, "nulle-part")]).status === 2, "convergence-terraform : sans pile, ou pile introuvable -> exit 2");
+    const absent29 = sortie29(["verifier", tmp29], { FORGE_OPS_TERRAFORM: path.join(tmp29, "terraform-absent") });
+    ok(absent29.status === 2 && /terraform-absent/.test(absent29.out), `convergence-terraform : Terraform introuvable -> exit 2 qui le dit, jamais une convergence (exit ${absent29.status})`);
+
+    // L'exercice réel avec Terraform : à la demande (comme Docker), il rejoue toute la chaîne sur la pile terraform_data, sans réseau.
+    if (process.env.FORGE_OPS_EXERCICE_TERRAFORM === "1") {
+      const pile29 = path.join(tmp29, "pile");
+      fs.mkdirSync(pile29);
+      fs.writeFileSync(path.join(pile29, "main.tf"), 'variable "valeur" {\n  type    = string\n  default = "a"\n}\nresource "terraform_data" "conteneur" {\n  input = var.valeur\n}\nresource "terraform_data" "autre" {\n  input = "fixe"\n}\n', "utf8");
+      const tf = (...a) => spawnSync("terraform", [`-chdir=${pile29}`, ...a, "-input=false", "-no-color"], { encoding: "utf8", timeout: 600000 });
+      ok(tf("init").status === 0 && tf("apply", "-auto-approve").status === 0, "EXERCICE Terraform : init et apply de la pile terraform_data");
+      const v1 = sortie29(["verifier", pile29, "--sortie", path.join(tmp29, "capture-vide.json")]);
+      ok(v1.status === 0 && /la pile converge/.test(v1.out), `EXERCICE Terraform : verifier après l'apply -> exit 0, plan vide (exit ${v1.status})`);
+      fs.writeFileSync(path.join(pile29, "terraform.tfvars"), 'valeur = "b"\n', "utf8"); // un changement non appliqué : le plan suivant n'est plus vide
+      const v2 = sortie29(["verifier", pile29, "--sortie", path.join(tmp29, "capture-non-vide.json")]);
+      ok(v2.status === 1 && /terraform_data\.conteneur/.test(v2.out) && /-replace='terraform_data\.conteneur'/.test(v2.out), `EXERCICE Terraform : verifier avec un plan non vide -> exit 1, la ressource et la commande de remplacement nommées (exit ${v2.status})`);
+      ok(o29(path.join(tmp29, "capture-non-vide.json")).verdict === "FAIL" && o29(path.join(tmp29, "capture-vide.json")).verdict === "PASS", "EXERCICE Terraform : la capture non vide écrite par --sortie est refusée par O-29, la vide est acceptée");
+      const v3 = sortie29(["converger", pile29]);
+      ok(v3.status === 1 && /remède, à jouer sous le GO du run/.test(v3.out), `EXERCICE Terraform : converger sans --executer -> exit 1, la commande écrite, rien appliqué (exit ${v3.status})`);
+      const v4 = sortie29(["converger", pile29, "--executer"]);
+      ok(v4.status === 0 && /remplacée\(s\) de force, le plan suivant est vide/.test(v4.out), `EXERCICE Terraform : converger --executer -> remplacement forcé puis plan vide, exit 0 (exit ${v4.status})`);
+      ok(sortie29(["verifier", pile29]).status === 0, "EXERCICE Terraform : verifier après le remplacement -> exit 0");
+    }
+  } finally {
+    fs.rmSync(tmp29, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // Loi n° 1 : l'outil et la règle sont appelés ; l'en-tête de l'oracle dit O29.
+  const lire29 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire29(f); return t.includes("--convergence") && t.includes("convergence-terraform.mjs") && t.includes("TF-2271"); }), "TF-2271 : l'outil et la règle sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(/O29 --convergence/.test(lire29("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2271 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

@@ -82,6 +82,10 @@
 //   O27 --inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …] : chaque composant que les sorties
 //       d'état nomment (terraform state list, docker ps, az resource list, export noms) figure mot pour mot dans l'inventaire ;
 //       un composant présent et non inventorié refuse « prêt » (FAIL). Sans sortie d'état : SKIP (TF-2209).
+//   O29 --convergence <capture> : la capture du plan pris juste après l'apply (`terraform show -json <plan>` ou la sortie
+//       texte de `terraform plan`) est VIDE ; un plan qui change encore une ressource refuse la chaîne (FAIL, une ressource
+//       par constat, avec ses attributs et `terraform apply -replace='<adresse>'`), une capture illisible aussi. La capture
+//       se prend par `scripts/convergence-terraform.mjs verifier <pile>` (TF-2271).
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -113,6 +117,7 @@ import { correspond, hacherFichier } from "../scripts/lib-empreinte.mjs";
 import { lireYaml } from "../scripts/lib-yaml.mjs";
 import { defautsDuSecret } from "../scripts/lib-secret-humain.mjs";
 import { jugerVersionServie } from "../scripts/lib-version-servie.mjs";
+import { lireCapture, commandeRemplacement } from "../scripts/lib-convergence.mjs";
 
 const DOM = "Exploitation : cible déployée saine et restaurable";
 const NON_JUGE = [
@@ -2172,6 +2177,47 @@ if (args.includes("--inventaire-a-jour")) {
   const durs27 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   if (!durs27.length && !compares27) { add("info", "O27", "aucun composant comparé", docPath); fin27("SKIP", 2); }
   fin27(durs27.length ? "FAIL" : "PASS", durs27.length ? 1 : 0);
+}
+// ── O29 · une chaîne Terraform n'est réussie que si le plan SUIVANT son apply est vide (TF-2271) ───
+//
+// LE FAIT (Produit-86, lot 20261106a RP-44, ledger seq 609, 06/11/2026). Le fournisseur Docker annonçait à chaque plan 5
+// conteneurs « mis à jour sur place » (sondes de santé, memory_swap) et ne les appliquait jamais : « Plan: 0 to add, 5 to
+// change, 0 to destroy » sur une préproduction déployée la veille par la même chaîne, qui rendait PASS après chaque apply.
+// La sonde de WebGoat, désactivée au code depuis le 04/11, n'a jamais atteint le conteneur, « unhealthy » depuis 47 h.
+//
+// CE QUI EST JUGÉ, sur la CAPTURE du plan pris juste après l'apply (aucun appel à Terraform ; `scripts/convergence-terraform.mjs
+// verifier <pile> --sortie capture.json` la prend) : `terraform show -json <plan>` ou la sortie texte de `terraform plan`.
+// Un plan qui change encore une ressource est un constat bloquant, une ressource par constat, avec ses attributs et la
+// commande de remplacement forcé (`terraform apply -replace='<adresse>'`, éprouvé avec Terraform 1.12.2) ; un plan vide est
+// PASS. Une capture qu'on ne sait pas lire est FAIL, jamais PASS. Logique : scripts/lib-convergence.mjs.
+if (args.includes("--convergence")) {
+  const fichier29 = args[args.indexOf("--convergence") + 1];
+  const DOM29 = "Exploitation : le plan suivant l'apply est vide, la pile converge (O-29)";
+  const NJ29 = [
+    "que la capture est celle du plan pris APRÈS l'apply de la chaîne, sur la bonne pile : le fichier est celui que l'appelant donne",
+    "la CAUSE d'un écart persistant (attribut que le fournisseur ne sait pas changer sur place, dérive faite à la main, variable d'environnement différente de celle de l'apply) : l'oracle nomme les ressources et propose le remplacement forcé, il ne diagnostique pas",
+    "les modifications faites hors de Terraform que le plan ne rapporte que comme dérive (`resource_drift`) sans les changer : seules les actions du plan comptent",
+    "l'exécution du remplacement : `converger --executer` la joue (un tour) et refuse un conteneur d'image à état, l'oracle ne juge que la capture",
+  ];
+  const fin29 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM29, artefact: fichier29 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O29", msg: "le plan suivant l'apply est vide : l'infrastructure converge", where: fichier29 }], non_juge: NJ29 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier29 || !fs.existsSync(fichier29)) { add("info", "O29", "capture du plan introuvable — la convergence n'est pas prouvée", String(fichier29)); fin29("SKIP", 2); }
+  const lec29 = lireCapture(fs.readFileSync(fichier29, "utf8"));
+  const nom29 = path.basename(fichier29);
+  if (lec29.vide === null) add("bloquant", "O29", `capture illisible : ${lec29.erreur} — une capture non lue ne vaut jamais PASS`, nom29);
+  else if (!lec29.vide) {
+    if (lec29.ressources.length) {
+      for (const r of lec29.ressources)
+        add("bloquant", "O29", `« ${r.adresse} » : le plan APRÈS l'apply la change encore (${r.actions.join("+")}${r.attributs.length ? `, attributs : ${r.attributs.join(", ")}` : ""}) — l'apply a rendu PASS sans converger ; si le fournisseur ne sait pas changer cet attribut sur place, forcer le remplacement : ${commandeRemplacement([r.adresse])} (TF-2271)`, nom29);
+    } else {
+      const [aj29, ch29, de29] = lec29.decompte ?? [0, 0, 0];
+      add("bloquant", "O29", `le plan APRÈS l'apply compte ${aj29} à ajouter, ${ch29} à changer, ${de29} à détruire — l'apply a rendu PASS sans converger (TF-2271)`, nom29);
+    }
+  }
+  const durs29 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin29(durs29.length ? "FAIL" : "PASS", durs29.length ? 1 : 0);
 }
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
 // RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a

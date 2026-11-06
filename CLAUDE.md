@@ -253,6 +253,18 @@ findings,non_juge}`, exit 0/1/2 :
   Foundry ; la machine est restée 2 jours sans usage. Le plan `azure` capture `az resource list` et rejoue O-27 après la
   bascule. `ops.mjs etat` n'est pas un genre (aucun nom de composant). Fixtures : `fixtures/o27-inventaire-a-jour/`.
 
+- **O29** `--convergence <capture>` (TF-2271, lot Produit-86 20261106a RP-44). Une chaîne Terraform n'est réussie que si le
+  plan SUIVANT son apply est vide. La capture est celle de `terraform show -json <plan>` (ou la sortie texte de `terraform
+  plan`) pris juste après l'apply, par `node scripts/convergence-terraform.mjs verifier <pile> --sortie capture.json` ; un plan
+  qui change encore une ressource est un constat bloquant, une ressource par constat, avec ses attributs et la commande
+  `terraform apply -replace='<adresse>'` ; une capture illisible est FAIL. `converger <pile> [--executer]` joue le remède :
+  UN tour de `-replace` pour les ressources que le plan dit « update », puis une nouvelle re-planification ; sans
+  `--executer`, la commande est écrite et rien n'est appliqué, et un conteneur d'image à état (O-20,
+  `references/CONTENEURS-A-ETAT.json`) n'est jamais remplacé par la chaîne. Mesure fondatrice : 5 conteneurs « mis à jour sur
+  place » à chaque plan, jamais appliqués ; la sonde de WebGoat, désactivée au code depuis le 04/11, n'a jamais atteint le
+  conteneur, « unhealthy » depuis 47 h, sous un apply rendu PASS. Remède éprouvé avec Terraform 1.12.2 le 06/11/2026
+  (`FORGE_OPS_EXERCICE_TERRAFORM=1 node oracles/self-test.mjs`). Fixtures : `fixtures/o29-convergence/`.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les

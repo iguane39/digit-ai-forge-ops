@@ -134,6 +134,12 @@ node oracles/oracle-ops.mjs --version-servie version-servie.json --depot <dossie
 terraform state list > etat-terraform.txt ; docker ps --format "{{.Names}}" > etat-docker.txt ; az resource list -g <groupe> -o json > etat-azure.json
 node oracles/oracle-ops.mjs --inventaire-a-jour docs/projet/COMPOSANTS-OPS.md --etat terraform:etat-terraform.txt --etat docker:etat-docker.txt --etat azure:etat-azure.json
 
+# Convergence d'une pile Terraform (TF-2271) : le plan SUIVANT l'apply est vide, sinon la chaîne est refusée. À placer juste après
+# `terraform apply` ; une ressource que le fournisseur ne change pas sur place se remplace de force (un tour, jamais un conteneur à état)
+node scripts/convergence-terraform.mjs verifier <pile> --sortie plan-apres-apply.json   # exit 0 plan vide · 1 plan non vide · 2 Terraform en échec
+node scripts/convergence-terraform.mjs converger <pile> [--executer]                   # sans --executer, la commande `terraform apply -replace=…` est écrite, rien n'est appliqué
+node oracles/oracle-ops.mjs --convergence plan-apres-apply.json                        # O-29 : un plan non vide refuse la chaîne, une ressource par constat
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -141,6 +147,8 @@ node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.
 node oracles/self-test.mjs
 # ... plus l'exercice réel de reinitialiser-base sur un conteneur postgres:16-alpine jetable, créé puis détruit
 FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
+# ... plus l'exercice réel de convergence-terraform (init, apply, plan non vide, remplacement forcé) sur une pile terraform_data, sans réseau
+FORGE_OPS_EXERCICE_TERRAFORM=1 node oracles/self-test.mjs
 ```
 
 ## Contrat de la cible
@@ -198,6 +206,7 @@ FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 | O25 | `--identifiants-test <fichier.json> [--journal <journal.jsonl>]` : sur un fichier `forge-ops/identifiants-test@1`, le mot de passe de chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni signe ; le constat nomme le compte et la position, jamais la valeur (générateur `scripts/tirer-secret-humain.mjs`, TF-2167). Avec le journal de `scripts/identifiants-test.mjs` : aucun renouvellement sans demande de l'humain, aucune création hors fichier ou compte absent, chaque création ou renouvellement suivi d'une connexion réussie (TF-2166) ; faits `references/IDENTIFIANTS-DE-TEST.md` |
 | O26 | `--version-servie <capture.json> [--depot <dossier git>] [--attendu <commit>]` : la réponse `/healthz` d'une instance porte un champ `commit` de 7 à 40 caractères hexadécimaux, qui est un commit du dépôt et, si le dossier de MEP l'annonce, le commit attendu ; les plans azure et aws passent le commit à l'image (`--build-arg COMMIT_SHA=<COMMIT>`), gcp par `gabarits/cloudbuild-commit.yaml` et la substitution `_COMMIT_SHA`, railway par la variable de service `COMMIT_SHA` lue par `ARG` (TF-2244, d'après les pages de l'éditeur lues le 06/11/2026, non éprouvé par un déploiement réel), et O-5 les refuse sans lui (TF-2201). La capture se prend par `scripts/version-servie.mjs lire` |
 | O27 | `--inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …]` : chaque composant que les sorties d'état nomment (`terraform state list`, `docker ps`, `az resource list`, export `noms`) figure mot pour mot dans l'inventaire ; un composant présent et non inventorié refuse « prêt » (FAIL) ; sans sortie d'état : SKIP. Le plan azure le rejoue à la MEP (TF-2209) |
+| O29 | `--convergence <capture>` : la capture du plan pris juste après l'apply (`terraform show -json <plan>` ou la sortie texte de `terraform plan`) est vide ; un plan qui change encore une ressource refuse la chaîne (une ressource par constat, avec ses attributs et `terraform apply -replace='<adresse>'`), une capture illisible aussi. La capture se prend par `scripts/convergence-terraform.mjs verifier <pile>` (TF-2271, lot Produit-86 20261106a RP-44) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.
