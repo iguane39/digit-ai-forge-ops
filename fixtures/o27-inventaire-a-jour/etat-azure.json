@@ -1,0 +1,4 @@
+[
+  { "name": "ca-exemple-api", "type": "Microsoft.App/containerApps", "resourceGroup": "rg-exemple" },
+  { "name": "vm-exemple-poste", "type": "Microsoft.Compute/virtualMachines", "resourceGroup": "rg-exemple" }
+]

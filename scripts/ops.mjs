@@ -337,7 +337,7 @@ const PLANS = {
   azure: {
     service: "Azure Container Apps",
     fiche: "experts-forge/fiches/expert-ops-azure.md",
-    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>", "<ENV>", "<DOMAINE_ENV>", "<BUILD>", "<BUDGET_MENSUEL>", "<SEUIL_ALERTE_PCT>", "<DESTINATAIRE_ALERTE_COUT>", "<DEBUT_MOIS>", "<REGION_REPLI>", "<TAILLE_MACHINE>", "<COMMIT>"],
+    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>", "<ENV>", "<DOMAINE_ENV>", "<BUILD>", "<BUDGET_MENSUEL>", "<SEUIL_ALERTE_PCT>", "<DESTINATAIRE_ALERTE_COUT>", "<DEBUT_MOIS>", "<REGION_REPLI>", "<TAILLE_MACHINE>", "<COMMIT>", "<SORTIE_STATE_LIST>", "<SORTIE_DOCKER_PS>"],
     provision: [
       // TF-2129 (lot Produit-86 20261103d, RO-1) : la region de convention d'une souscription a manque de
       // capacite (northeurope, 6 echecs 409 SkuNotAvailable le 03/11 entre 21:52 et 21:58) alors qu'`az vm list-skus`
@@ -387,6 +387,9 @@ const PLANS = {
       "GARDE=$(az containerapp revision list --name <APP> --resource-group <RG> --query \"sort_by([?properties.active && properties.trafficWeight==\\`0\\` && properties.healthState!='Unhealthy'], &properties.createdTime)[-1].name\" -o tsv)   # menage 1/2 : N-1 saine gardee pour le retour instantane",
       "for R in $(az containerapp revision list --name <APP> --resource-group <RG> --query \"[?properties.active && properties.trafficWeight==\\`0\\`].name\" -o tsv); do [ \"$R\" = \"$GARDE\" ] || az containerapp revision deactivate --name <APP> --resource-group <RG> --revision \"$R\" || echo \"AVERTISSEMENT menage : $R reste active\"; done   # menage 2/2 : toute autre revision active a 0 % desactivee (TF-1638)",
       "az containerapp revision list --name <APP> --resource-group <RG> -o json > revisions-<APP>.json && node <FORGE_OPS>/oracles/oracle-ops.mjs --revisions-actives revisions-<APP>.json   # O-18 : revisions actives bornees, verdict au dossier de MEP (TF-1639)",
+      // TF-2209 (Produit-86, lot 20261105e RP-29) : l'inventaire des composants est confronté aux ressources RÉELLES à chaque MEP ;
+      // un composant présent et non inventorié refuse « prêt ». Pile Terraform et Docker local s'ajoutent par --etat.
+      "az resource list --resource-group <RG> -o json > etat-composants-<RG>.json && node <FORGE_OPS>/oracles/oracle-ops.mjs --inventaire-a-jour docs/projet/COMPOSANTS-OPS.md --etat azure:etat-composants-<RG>.json   # O-27 : chaque ressource du groupe figure a l'inventaire, sinon « pret » est refuse (TF-2209) ; ajouter --etat terraform:<SORTIE_STATE_LIST> pour la pile et --etat docker:<SORTIE_DOCKER_PS> pour le Docker local du produit (docker ps --format \"{{.Names}}\" filtre sur le produit)",
     ],
     rollback: [
       "az containerapp ingress traffic set --name <APP> --resource-group <RG> --revision-weight <SUFFIXE_PRECEDENT>=100   # instantane en mode multiple",

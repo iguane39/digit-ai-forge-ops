@@ -239,6 +239,17 @@ findings,non_juge}`, exit 0/1/2 :
   Le Dockerfile du produit déclare `ARG COMMIT_SHA` et son `/healthz` rend `commit`. `gcp` et `railway` ne passent pas
   encore le commit à la construction (non jugé, dit au verdict). Le dossier de MEP cite la sortie JSON de `lire`.
 
+- **O27** `--inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …]` (TF-2209, lot Produit-86
+  20261105e RP-29). L'inventaire des composants est confronté aux sorties d'état de la MEP, et « prêt » est refusé sur un
+  composant présent non inventorié (FAIL, un constat bloquant par composant, avec la sortie d'origine). Genres :
+  `terraform:` (`terraform state list` ; `data.*` et les types sans ressource réelle ne comptent pas), `docker:`
+  (`docker ps --format "{{.Names}}"`, filtré sur le produit), `azure:` (`az resource list -g <groupe> -o json` ou
+  `az graph query`), `noms:` (export d'O-14). Un nom se lit comme un mot entier : `exemple-api` n'est pas inventorié par
+  `ca-exemple-api`. Sans sortie d'état : SKIP, « prêt » ne s'appuie pas sur l'inventaire. Mesure fondatrice :
+  `COMPOSANTS-OPS.md` resté au texte du premier commit pendant 3 déploiements, sans la machine Azure, le Docker local ni
+  Foundry ; la machine est restée 2 jours sans usage. Le plan `azure` capture `az resource list` et rejoue O-27 après la
+  bascule. `ops.mjs etat` n'est pas un genre (aucun nom de composant). Fixtures : `fixtures/o27-inventaire-a-jour/`.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les

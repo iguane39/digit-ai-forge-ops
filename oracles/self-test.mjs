@@ -2580,5 +2580,66 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(/O26 --version-servie/.test(lire27("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2201 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
 }
 
+// ── TF-2209 (Produit-86, lot 20261105e RP-29, ledger seq 538) : L'INVENTAIRE DES COMPOSANTS EST COMPARÉ AUX SORTIES D'ÉTAT ───
+// Le fait : COMPOSANTS-OPS.md est resté au texte du premier commit pendant trois déploiements ; ni la machine Azure, ni le
+// Docker local, ni Foundry n'y figuraient, et R-20 ne juge que le vocabulaire des statuts. Décision du 06/11/2026 : à la MEP,
+// l'inventaire des composants est comparé aux sorties d'état, et « prêt » est refusé sur un composant présent non inventorié.
+{
+  console.log("");
+  const fx27 = f => fx(path.join("o27-inventaire-a-jour", f));
+  const o27 = (...a) => { try { return JSON.parse(run(oracle, ["--inventaire-a-jour", ...a, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const durs = r => (r.findings || []).filter(f => f.regle === "O27" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const etats = [`--etat`, `terraform:${fx27("etat-terraform.txt")}`, `--etat`, `docker:${fx27("etat-docker.txt")}`, `--etat`, `azure:${fx27("etat-azure.json")}`];
+  const tmp28 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2209-"));
+  try {
+    // Verte : chaque composant des trois sorties figure au document (module, indice, `data.*` et random_* ne sont pas à inventorier).
+    const rV = o27(fx27("doc-vert.md"), ...etats);
+    ok(rV.verdict === "PASS" && durs(rV).length === 0, `O27 : inventaire à jour des trois sorties d'état (pile, Docker local, groupe de ressources) -> PASS (obtenu ${rV.verdict}, ${durs(rV).length})`);
+    ok((rV.findings || []).some(f => f.sev === "info" && /terraform : 2 ligne\(s\) ignorée\(s\)/.test(f.msg)), "O27 : les lignes ignorées d'une sortie se comptent à côté du verdict, jamais en silence (data.* et random_*)");
+    // Rouge : le document du premier commit. Quatre composants nés depuis ne sont nommés nulle part, chacun avec sa sortie d'origine.
+    const rR = o27(fx27("doc-perime.md"), ...etats);
+    const msgs = durs(rR).map(f => f.msg).join("\n");
+    ok(rR.verdict === "FAIL" && durs(rR).length === 4 && durs(rR).every(f => f.sev === "bloquant"), `O27 : inventaire du premier commit -> FAIL, exactement 4 composants présents non inventoriés (obtenu ${rR.verdict}, ${durs(rR).length})`);
+    ok(/module\.machine\.azurerm_linux_virtual_machine\.vm.*terraform/.test(msgs) && /azurerm_ai_foundry\.hub.*terraform/.test(msgs) && /exemple-postgres.*docker/.test(msgs) && /vm-exemple-poste.*azure/.test(msgs),
+      "O27 : le verdict nomme la machine, le hub d'intelligence artificielle, le conteneur local et la machine du groupe, chacun avec sa sortie d'état");
+    ok(/« prêt » est refusé/.test(msgs), "O27 : le constat dit que « prêt » est refusé");
+    // Jouer le remède que le refus nomme (TF-1013) : ajouter les quatre lignes au document périmé doit faire PASSER.
+    const remede = path.join(tmp28, "doc-remede.md");
+    fs.writeFileSync(remede, fs.readFileSync(fx27("doc-perime.md"), "utf8")
+      + "\n| Composant | Type | Environnement | Statut |\n|---|---|---|---|\n| azurerm_linux_virtual_machine.vm | machine virtuelle | qualification | actif |\n| azurerm_ai_foundry.hub | hub | qualification | actif |\n| exemple-postgres | conteneur | local | actif |\n| vm-exemple-poste | machine virtuelle | qualification | actif |\n", "utf8");
+    ok(o27(remede, ...etats).verdict === "PASS", "O27 remède : les quatre lignes ajoutées au document du premier commit -> PASS");
+    // Un nom contenu dans un autre nom ne compte pas comme inventorié.
+    const sousChaine = path.join(tmp28, "sous-chaine.md");
+    fs.writeFileSync(sousChaine, "| ca-exemple-api | application | qualification | actif |\n", "utf8");
+    const dock = path.join(tmp28, "docker.txt"); fs.writeFileSync(dock, "exemple-api\n", "utf8");
+    const rS = o27(sousChaine, "--etat", `docker:${dock}`);
+    ok(rS.verdict === "FAIL" && durs(rS).length === 1 && /« exemple-api »/.test(durs(rS)[0].msg), "O27 : « exemple-api » contenu dans « ca-exemple-api » n'est pas inventorié (mot entier) -> FAIL");
+    // Bornes.
+    ok((r => r.verdict === "SKIP" && (r.findings || []).some(f => f.regle === "O27" && /aucune sortie d'état/.test(f.msg)))(o27(fx27("doc-vert.md"))), "O27 borne : aucune sortie d'état donnée -> SKIP qui dit que « prêt » ne peut pas s'appuyer sur l'inventaire");
+    ok((r => r.verdict === "SKIP")(o27(path.join(tmp28, "absent.md"), ...etats)), "O27 borne : document introuvable -> SKIP");
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1 && /genre inconnu/.test(durs(r)[0].msg))(o27(fx27("doc-vert.md"), "--etat", `kubectl:${dock}`)), "O27 borne : genre inconnu -> FAIL dit");
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1 && /introuvable/.test(durs(r)[0].msg))(o27(fx27("doc-vert.md"), "--etat", `docker:${path.join(tmp28, "nulle-part.txt")}`)), "O27 borne : sortie d'état introuvable -> FAIL dit, jamais un PASS");
+    const tableDocker = path.join(tmp28, "docker-table.txt"); fs.writeFileSync(tableDocker, "CONTAINER ID   IMAGE   NAMES\nabc123   img   exemple-api\n", "utf8");
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1 && /sans aucun composant lisible/.test(durs(r)[0].msg))(o27(fx27("doc-vert.md"), "--etat", `docker:${tableDocker}`)), "O27 borne : `docker ps` en table, avec en-tête -> FAIL qui nomme le format attendu, jamais un PASS");
+    const casse = path.join(tmp28, "casse.json"); fs.writeFileSync(casse, "{ pas du json", "utf8");
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1 && /illisible/.test(durs(r)[0].msg))(o27(fx27("doc-vert.md"), "--etat", `azure:${casse}`)), "O27 borne : sortie azure illisible -> FAIL dit");
+    const noms = path.join(tmp28, "noms.json"); fs.writeFileSync(noms, JSON.stringify({ noms: ["exemple-postgres", "inconnu-au-document"] }), "utf8");
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1 && /inconnu-au-document/.test(durs(r)[0].msg))(o27(fx27("doc-vert.md"), "--etat", `noms:${noms}`)), "O27 : l'export au format noms (celui d'O-14) se compare aussi");
+    const graphe = path.join(tmp28, "graphe.json"); fs.writeFileSync(graphe, JSON.stringify({ data: [{ name: "vm-exemple-poste" }, { name: "st-exemple-oublie" }] }), "utf8");
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1 && /st-exemple-oublie/.test(durs(r)[0].msg))(o27(fx27("doc-vert.md"), "--etat", `azure:${graphe}`)), "O27 : la sortie d'`az graph query` ({ data: [...] }) se compare aussi");
+  } finally {
+    fs.rmSync(tmp28, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // Le plan azure rejoue la comparaison à la MEP, après la bascule.
+  const san28 = JSON.parse(run(ops, ["plan", "azure", "<BUILD>"])).phases.healthcheck.join("\n");
+  ok(/az resource list --resource-group <RG> -o json > etat-composants-<RG>\.json/.test(san28) && /--inventaire-a-jour \S*COMPOSANTS-OPS\.md --etat azure:etat-composants-<RG>\.json/.test(san28),
+    "TF-2209 : le plan azure capture `az resource list` et rejoue O-27 contre COMPOSANTS-OPS.md après la bascule");
+  // Loi n° 1 : la règle et l'en-tête.
+  const lire28 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire28(f); return t.includes("--inventaire-a-jour") && t.includes("TF-2209"); }), "TF-2209 : la règle est appelée par README.md et CLAUDE.md (loi n° 1)");
+  ok(/O27 --inventaire-a-jour/.test(lire28("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2209 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

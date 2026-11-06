@@ -128,6 +128,11 @@ node oracles/oracle-ops.mjs --identifiants-test identifiants-test.json --journal
 node scripts/version-servie.mjs lire https://<instance> --attendu <commit> --sortie version-servie.json   # exit 0 lu · 1 autre version · 2 illisible
 node oracles/oracle-ops.mjs --version-servie version-servie.json --depot <dossier-git> [--attendu <commit>]   # O-26 : un commit du dépôt
 
+# Inventaire des composants à jour (TF-2209) : COMPOSANTS-OPS.md comparé aux sorties d'état de la MEP, « prêt » refusé sur un
+# composant présent non inventorié. Exemple : fixtures/o27-inventaire-a-jour/ (verte et périmée, trois sorties d'état)
+terraform state list > etat-terraform.txt ; docker ps --format "{{.Names}}" > etat-docker.txt ; az resource list -g <groupe> -o json > etat-azure.json
+node oracles/oracle-ops.mjs --inventaire-a-jour docs/projet/COMPOSANTS-OPS.md --etat terraform:etat-terraform.txt --etat docker:etat-docker.txt --etat azure:etat-azure.json
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -191,6 +196,7 @@ FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 | O24 | `--frontal-nginx <fichier.conf ou dossier>` : chaque `proxy_pass`, `fastcgi_pass`, `uwsgi_pass`, `scgi_pass` et `grpc_pass` vers un nom d'hôte passe par une variable, avec un `resolver` qui porte `valid=` ; un groupe `upstream` à serveur nommé porte `resolve` et son resolver dans son bloc ou dans `http` ; gabarit `gabarits/frontal-nginx.conf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2165, étendu par TF-2177) |
 | O25 | `--identifiants-test <fichier.json> [--journal <journal.jsonl>]` : sur un fichier `forge-ops/identifiants-test@1`, le mot de passe de chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni signe ; le constat nomme le compte et la position, jamais la valeur (générateur `scripts/tirer-secret-humain.mjs`, TF-2167). Avec le journal de `scripts/identifiants-test.mjs` : aucun renouvellement sans demande de l'humain, aucune création hors fichier ou compte absent, chaque création ou renouvellement suivi d'une connexion réussie (TF-2166) ; faits `references/IDENTIFIANTS-DE-TEST.md` |
 | O26 | `--version-servie <capture.json> [--depot <dossier git>] [--attendu <commit>]` : la réponse `/healthz` d'une instance porte un champ `commit` de 7 à 40 caractères hexadécimaux, qui est un commit du dépôt et, si le dossier de MEP l'annonce, le commit attendu ; les plans azure et aws passent le commit à l'image (`--build-arg COMMIT_SHA=<COMMIT>`) et O-5 les refuse sans lui (TF-2201). La capture se prend par `scripts/version-servie.mjs lire` |
+| O27 | `--inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …]` : chaque composant que les sorties d'état nomment (`terraform state list`, `docker ps`, `az resource list`, export `noms`) figure mot pour mot dans l'inventaire ; un composant présent et non inventorié refuse « prêt » (FAIL) ; sans sortie d'état : SKIP. Le plan azure le rejoue à la MEP (TF-2209) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.

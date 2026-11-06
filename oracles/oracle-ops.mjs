@@ -79,6 +79,9 @@
 //       porte un champ `commit` de 7 à 40 caractères hexadécimaux ; avec `--depot`, c'est un commit du dépôt ; avec
 //       `--attendu`, c'est le commit que le dossier de MEP annonce. La capture se prend par `scripts/version-servie.mjs
 //       lire <url> --sortie capture.json` ; les plans azure et aws passent le commit à l'image (TF-2201).
+//   O27 --inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …] : chaque composant que les sorties
+//       d'état nomment (terraform state list, docker ps, az resource list, export noms) figure mot pour mot dans l'inventaire ;
+//       un composant présent et non inventorié refuse « prêt » (FAIL). Sans sortie d'état : SKIP (TF-2209).
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -2068,6 +2071,99 @@ if (args.includes("--version-servie")) {
   for (const c of jug26.constats) add(c.sev, "O26", c.msg, path.basename(fichier26));
   const durs26 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin26(durs26.length ? "FAIL" : "PASS", durs26.length ? 1 : 0);
+}
+// ── O27 · l'inventaire des composants est confronté aux sorties d'état, et « prêt » est refusé sur un composant présent non inventorié (TF-2209) ───
+//
+// LE FAIT (Produit-86, lot 20261105e RP-29, ledger seq 538, 05/11/2026). `docs/projet/COMPOSANTS-OPS.md` est resté au texte
+// du premier commit (03/11 à 11:31) pendant trois déploiements : ni la machine Azure, ni le Docker local, ni Foundry, et
+// « Aucun composant inutilisé ». Le vocabulaire des statuts était conforme (R-20 côté pilot) ; personne ne comparait le
+// document aux ressources réelles. La machine Azure est restée deux jours sans usage, trouvée par le porteur.
+//
+// CE QUI EST JUGÉ (le document, plus des CAPTURES de sorties d'état, aucun appel réseau — O-14 et O-15 jugent déjà un export
+// au format `noms`, O-27 l'établit à partir des sorties brutes des outils) : chaque composant que ces sorties nomment figure
+// LITTÉRALEMENT dans le document, comme un mot entier (un nom contenu dans un autre nom ne compte pas). Un composant
+// présent et non inventorié est un constat bloquant : le verdict est FAIL, « prêt » est refusé. Genres de sortie :
+//   terraform:<fichier>  sortie de `terraform state list` ; l'adresse (sans module ni indice) ou l'adresse complète figure
+//                        au document ; `data.*` et les types sans ressource réelle (random_, null_, time_, tls_, local_,
+//                        archive_, external, terraform_data) ne sont pas des composants ;
+//   docker:<fichier>     sortie de `docker ps --format "{{.Names}}"` (filtrée sur le produit : un autre produit du poste
+//                        n'est pas à inventorier ici) ;
+//   azure:<fichier>      sortie JSON de `az resource list -g <groupe> -o json` (tableau d'objets à `name`, ou { data: [...] }
+//                        d'`az graph query`) ;
+//   noms:<fichier>       export `{ "noms": [...] }` des autres cas, celui d'O-14.
+// Aucune sortie donnée : SKIP, l'inventaire n'est pas comparé et « prêt » ne peut pas s'appuyer sur lui.
+const _GENRES_O27 = ["terraform", "docker", "azure", "noms"];
+const _TYPES_SANS_COMPOSANT_O27 = /^(random_|null_|time_|tls_|local_|archive_|terraform_data$)/;
+const _echapper27 = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const _present27 = (texte, nom) => new RegExp(`(?<![\\w-])${_echapper27(nom)}(?![\\w-])`).test(texte);
+if (args.includes("--inventaire-a-jour")) {
+  const docPath = args[args.indexOf("--inventaire-a-jour") + 1];
+  const etats = args.map((a, i) => (a === "--etat" ? args[i + 1] : null)).filter(Boolean);
+  const DOM27 = "Exploitation : l'inventaire des composants contient chaque composant que les sorties d'état nomment (O-27)";
+  const NJ27 = [
+    "la COMPLÉTUDE des sorties d'état données : un composant qu'aucune sortie ne nomme (une pile dont on n'a pas donné `terraform state list`, un démon Docker non interrogé) n'est pas comparé — l'oracle juge ce qu'on lui montre, jamais le parc",
+    "le PÉRIMÈTRE des sorties : `docker ps` sans filtre nomme les conteneurs des autres produits du poste, que le document n'a pas à porter ; filtrer la sortie, jamais le document",
+    "`ops.mjs etat` n'est pas un genre : il rend la release courante et le journal, aucun nom de composant — le déploiement local est un composant que `docker`, `terraform` ou `noms` nomment",
+    "la fraîcheur du document au sens de sa date `verifie_le` : seule compte la présence de chaque nom, comme en O-14",
+    "le sens inverse (un composant inventorié « actif » absent des sorties) : c'est O-15 (`--statut-composants`)",
+    "la nature de la correspondance : un mot entier lu dans le texte, jamais une cellule de table (un nom cité en prose compte)",
+  ];
+  const fin27 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM27, artefact: docPath || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O27", msg: "chaque composant nommé par les sorties d'état figure dans l'inventaire", where: docPath }], non_juge: NJ27 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!docPath || !fs.existsSync(docPath)) { add("info", "O27", "document d'inventaire introuvable — rien n'est comparé", String(docPath)); fin27("SKIP", 2); }
+  if (!etats.length) { add("info", "O27", "aucune sortie d'état donnée (--etat <genre>:<fichier>) : l'inventaire n'est pas comparé aux ressources réelles, « prêt » ne peut pas s'appuyer sur lui", docPath); fin27("SKIP", 2); }
+  const doc27 = fs.readFileSync(docPath, "utf8");
+  let compares27 = 0;
+  for (const spec of etats) {
+    const m = /^([a-z]+):(.+)$/.exec(spec);
+    if (!m || !_GENRES_O27.includes(m[1])) { add("bloquant", "O27", `--etat « ${spec} » : genre inconnu — attendu ${_GENRES_O27.map(g => g + ":<fichier>").join(", ")}`, spec); continue; }
+    const [genre, fichier] = [m[1], m[2]];
+    if (!fs.existsSync(fichier)) { add("bloquant", "O27", `sortie d'état ${genre} introuvable : ${fichier} — une sortie non lue ne vaut jamais PASS`, fichier); continue; }
+    const texte = fs.readFileSync(fichier, "utf8");
+    const composants = []; // { nom, candidats: [formes acceptées au document] }
+    let ignorees = 0;
+    if (genre === "terraform") {
+      for (const brut of texte.split(/\r?\n/)) {
+        const ligne = brut.trim();
+        if (!ligne) continue;
+        const adresse = /^((?:module\.[\w-]+(?:\[[^\]]*\])?\.)*)(data\.)?([a-z][a-z0-9]*_\w+|external)\.([\w-]+)(?:\[[^\]]*\])?$/.exec(ligne);
+        if (!adresse) { ignorees++; continue; }
+        const [, module, data, type, nom] = adresse;
+        if (data || _TYPES_SANS_COMPOSANT_O27.test(type)) { ignorees++; continue; }
+        const complete = `${module}${type}.${nom}`;
+        composants.push({ nom: complete, candidats: [complete, `${type}.${nom}`] });
+      }
+    } else if (genre === "docker") {
+      for (const brut of texte.split(/\r?\n/)) {
+        const ligne = brut.trim();
+        if (!ligne) continue;
+        if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(ligne)) { ignorees++; continue; }
+        composants.push({ nom: ligne, candidats: [ligne] });
+      }
+    } else {
+      let json = null;
+      try { json = JSON.parse(texte); } catch { add("bloquant", "O27", `sortie d'état ${genre} illisible (JSON invalide) : ${fichier}`, fichier); continue; }
+      const liste = genre === "noms" ? json?.noms : Array.isArray(json) ? json : json?.data;
+      if (!Array.isArray(liste)) { add("bloquant", "O27", `sortie d'état ${genre} sans liste : attendu ${genre === "noms" ? "{ \"noms\": [...] }" : "un tableau d'objets à « name » ou { \"data\": [...] }"} (${fichier})`, fichier); continue; }
+      for (const e of liste) {
+        const nom = typeof e === "string" ? e : e?.name;
+        if (typeof nom === "string" && nom.trim()) composants.push({ nom: nom.trim(), candidats: [nom.trim()] });
+        else ignorees++;
+      }
+    }
+    if (!composants.length) { add("bloquant", "O27", `sortie d'état ${genre} sans aucun composant lisible (${ignorees} ligne(s) ignorée(s)) : ${fichier} — format attendu : ${genre === "terraform" ? "`terraform state list`" : genre === "docker" ? "`docker ps --format \"{{.Names}}\"` (un nom par ligne, sans en-tête)" : "voir --inventaire-a-jour"}`, fichier); continue; }
+    compares27 += composants.length;
+    if (ignorees) add("info", "O27", `sortie d'état ${genre} : ${ignorees} ligne(s) ignorée(s) (données de lecture, types sans ressource réelle, ou forme inconnue) sur ${composants.length + ignorees}`, fichier);
+    for (const c of composants) {
+      if (!c.candidats.some(n => _present27(doc27, n)))
+        add("bloquant", "O27", `composant « ${c.nom} » PRÉSENT (sortie d'état ${genre}) mais ABSENT, mot pour mot, de l'inventaire ${path.basename(docPath)} — « prêt » est refusé : ajouter sa ligne (type, environnement, Statut) ou, s'il n'est pas à ce produit, filtrer la sortie d'état (TF-2209)`, c.nom);
+    }
+  }
+  const durs27 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  if (!durs27.length && !compares27) { add("info", "O27", "aucun composant comparé", docPath); fin27("SKIP", 2); }
+  fin27(durs27.length ? "FAIL" : "PASS", durs27.length ? 1 : 0);
 }
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
 // RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a
