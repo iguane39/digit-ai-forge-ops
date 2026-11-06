@@ -19,7 +19,9 @@
     "<URL_VERSION>",
     "<POURCENT_NOUVELLE>",
     "<POURCENT_PRECEDENTE>",
-    "<URL_SERVICE>"
+    "<URL_SERVICE>",
+    "<FORGE_OPS>",
+    "<ECARTS_ACCEPTES>"
   ],
   "phases": {
     "provision": [
@@ -27,7 +29,9 @@
       "npx wrangler whoami --json   # identite lue par la CLI ; sort en code non nul si elle n'est pas authentifiee ; le compte attendu est celui de CLOUDFLARE_ACCOUNT_ID ; source : https://developers.cloudflare.com/workers/wrangler/commands/general/, lue le 28/10/2026",
       "domaine personnalise <DOMAINE> : Workers n'accepte AUCUN domaine dont les serveurs de noms ne sont pas geres par Cloudflare (« Unlike Pages, Workers does not support any domain whose nameservers are not managed by Cloudflare. ») — verifier que la zone de <DOMAINE> est chez Cloudflare AVANT de migrer un projet Pages dont le domaine y pointe par un CNAME ; sinon la migration est bloquee, et deplacer les serveurs de noms est un geste humain hors forge ; source : https://developers.cloudflare.com/workers/static-assets/migration-guides/migrate-from-pages/, lue le 28/10/2026",
       "front Workers devant une base Supabase : ordre des deux plans, variables d'environnement nommees par plateforme et URL de redirection de l'auth pour les previsualisations sont dans references/ENCHAINEMENT-PLANS.md de forge-ops (TF-2010) ; la base se deploie AVANT le front",
-      "un secret change est un deploiement : `wrangler secret put` cree une nouvelle version ET la deploie aussitot ; avec des deploiements progressifs, poser le secret par `wrangler versions secret put`, qui ne cree que la version ; source : https://developers.cloudflare.com/workers/configuration/secrets/, lue le 28/10/2026"
+      "un secret change est un deploiement : `wrangler secret put` cree une nouvelle version ET la deploie aussitot ; avec des deploiements progressifs, poser le secret par `wrangler versions secret put`, qui ne cree que la version ; source : https://developers.cloudflare.com/workers/configuration/secrets/, lue le 28/10/2026",
+      "node <FORGE_OPS>/scripts/relever-reglages.mjs Cloudflare --sortie reglages-plateforme.json --executer   # TF-2230 : chaque reglage Cloudflare du registre du pilot (references/REGLAGES-SURS-PAR-DEFAUT.json, lu par FORGE_ROOT) est LU par sa commande de lecture, en lecture seule ; les secrets (CLOUDFLARE_API_TOKEN) restent dans l'environnement du run, le releve ne porte que les valeurs lues",
+      "node <FORGE_OPS>/oracles/oracle-ops.mjs --reglages-plateforme reglages-plateforme.json [--ecarts <ECARTS_ACCEPTES>]   # O-28, BLOQUANT avant la MEP : un reglage non lu, ou hors de son attendu sans decision enregistree, refuse « pret » ; un ecart decide par l'humain est verifie tel que decide ; omettre --ecarts s'il n'y en a aucun"
     ],
     "deploiement": [
       "deploiement fait a la main depuis le tableau de bord   # aucune commande du CLI : refuse par O-5"

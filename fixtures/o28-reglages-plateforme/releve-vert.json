@@ -1,0 +1,52 @@
+{
+  "format": "forge-ops/reglages-plateforme@1",
+  "releve_le": "2026-11-06T12:00:00.000Z",
+  "plateformes": ["Supabase", "GitHub", "Cloudflare"],
+  "reglages": [
+    {
+      "reglage": "TLS imposé sur les connexions Postgres (ssl-enforcement, database=true)",
+      "commande": "curl -sS \"https://api.supabase.com/v1/projects/$PROJECT_REF/ssl-enforcement\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" | jq '.currentConfig.database'",
+      "lu": true
+    },
+    {
+      "reglage": "Restriction des adresses admises sur Postgres et le pooler (network-restrictions)",
+      "commande": "curl -sS \"https://api.supabase.com/v1/projects/$PROJECT_REF/network-restrictions\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" | jq '{v4: .config.dbAllowedCidrs, v6: .config.dbAllowedCidrsV6, status: .status}'",
+      "lu": { "v4": ["203.0.113.0/24"], "v6": ["2001:db8::/32"], "status": "applied" }
+    },
+    {
+      "reglage": "Double vérification imposée aux membres de l'organisation (Require MFA to access organization)",
+      "commande": "curl -sS \"https://api.supabase.com/v1/organizations/$ORG_SLUG/members\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" | jq '[.[] | .mfa_enabled] | all'",
+      "lu": true
+    },
+    {
+      "reglage": "Restauration à la minute (PITR, 7 jours) — entrée de contrôle, hors matrice et hors liste fermée",
+      "commande": "curl -sS \"https://api.supabase.com/v1/projects/$PROJECT_REF/database/backups\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" | jq '.pitr_enabled'",
+      "lu": true
+    },
+    {
+      "reglage": "Protection des secrets à la poussée d'un dépôt privé (secret_scanning_push_protection)",
+      "commande": "gh api repos/$OWNER/$REPO --jq '.security_and_analysis.secret_scanning_push_protection.status'",
+      "lu": "enabled"
+    },
+    {
+      "reglage": "Alertes Dependabot sur les dépendances vulnérables (vulnerability-alerts)",
+      "commande": "gh api repos/$OWNER/$REPO/vulnerability-alerts --silent; echo $?",
+      "lu": 0
+    },
+    {
+      "reglage": "Protection de la branche principale par ruleset (demande de fusion exigée, suppression et poussée forcée refusées)",
+      "commande": "gh api repos/$OWNER/$REPO/rules/branches/main --jq '[.[].type] | sort'",
+      "lu": ["deletion", "non_fast_forward", "pull_request"]
+    },
+    {
+      "reglage": "HTTPS imposé par redirection sur la zone (Always Use HTTPS)",
+      "commande": "curl -sS \"https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/always_use_https\" -H \"Authorization: Bearer $CLOUDFLARE_API_TOKEN\" | jq -r '.result.value'",
+      "lu": "on"
+    },
+    {
+      "reglage": "En-tête HSTS de la zone (max-age 12 mois, sans includeSubDomains ni preload)",
+      "commande": "curl -sS \"https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/security_header\" -H \"Authorization: Bearer $CLOUDFLARE_API_TOKEN\" | jq '.result.value.strict_transport_security'",
+      "lu": { "enabled": true, "max_age": 31536000, "include_subdomains": false, "preload": false }
+    }
+  ]
+}

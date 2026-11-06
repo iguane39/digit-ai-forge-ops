@@ -2838,5 +2838,173 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(/O29 --convergence/.test(lire29("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2271 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
 }
 
+// ── TF-2230 (D-178 (a) du 06/11/2026, étude « Sécurité par défaut de bout en bout », pièce 6) : LES RÉGLAGES DE PLATEFORME SE COMPARENT À L'ATTENDU DU REGISTRE ─
+// Le fait : le plan O5 lisait ssl-enforcement et network-restrictions de Supabase sans les comparer à un attendu du registre, aucun
+// réglage de GitHub ni de Cloudflare ; le même plan prescrit `supabase db push`, connexion directe à Postgres impossible à déclarer
+// pour les exécuteurs hébergés de GitHub une fois la restriction d'adresses posée. Décision : un contrôle bloquant avant la MEP
+// compare chaque réglage lu à l'attendu du registre du pilot ; un écart décidé se vérifie tel que décidé ; `db push` est déclarée
+// incompatible. Le registre de la recette est une COPIE (fixtures/o28-reglages-plateforme/registre.json, les 9 entrées de l'étude),
+// jamais le fichier du pilot.
+{
+  console.log("");
+  const lib28 = await import("../scripts/lib-reglages.mjs");
+  const fx28 = f => fx(path.join("o28-reglages-plateforme", f));
+  const registre28 = fx28("registre.json");
+  const o28 = (releve, ...autres) => { try { return JSON.parse(run(oracle, ["--reglages-plateforme", releve, "--registre", registre28, ...autres, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const durs = r => (r.findings || []).filter(f => f.regle === "O28" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const tmp30 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2230-"));
+  const vert28 = JSON.parse(fs.readFileSync(fx28("releve-vert.json"), "utf8"));
+  const NOM = { ssl: "TLS imposé", reseau: "Restriction des adresses", mfa: "Double vérification", pitr: "Restauration à la minute", push: "Protection des secrets", dependabot: "Alertes Dependabot", ruleset: "Protection de la branche principale", https: "HTTPS imposé", hsts: "En-tête HSTS" };
+  // Un relevé dérivé du vert : `modif` change la valeur lue du réglage dont le nom commence par `debut`.
+  const variante = (debut, modif, nom) => {
+    const r = JSON.parse(JSON.stringify(vert28));
+    const l = r.reglages.find(x => x.reglage.startsWith(debut)); modif(l, r);
+    const f = path.join(tmp30, `${nom}.json`); fs.writeFileSync(f, JSON.stringify(r), "utf8"); return f;
+  };
+  try {
+    // Verte : les 9 réglages des 3 plateformes sont lus et conformes -> PASS, 9 comparés.
+    const rV = o28(fx28("releve-vert.json"));
+    ok(rV.verdict === "PASS" && durs(rV).length === 0 && rV.findings.filter(f => /conforme à l'attendu/.test(f.msg)).length === 9, `O28 : 9 réglages (Supabase, GitHub, Cloudflare) lus et conformes -> PASS, 9 comparés (obtenu ${rV.verdict}, ${rV.findings.filter(f => /conforme à l'attendu/.test(f.msg)).length})`);
+    // Rouges classées défaut : un écart nu est un constat bloquant qui nomme le réglage, la valeur lue et la commande d'application.
+    const rouges = [
+      ["ssl", l => { l.lu = false; }, /lu false, attendu true/, /ssl-enforcement/],
+      ["reseau-ouvert", l => { l.lu = { v4: ["0.0.0.0/0"], v6: ["::/0"], status: "applied" }; }, /plage ouverte à tous/, /network-restrictions\/apply/],
+      ["reseau-vide", l => { l.lu = { v4: [], v6: [], status: "applied" }; }, /une liste vide laisse tout passer/, /network-restrictions\/apply/],
+      ["reseau-en-attente", l => { l.lu = { v4: ["203.0.113.0/24"], v6: [], status: "applying" }; }, /status « applying »/, /network-restrictions\/apply/],
+      ["dependabot", l => { l.lu = 1; }, /code de sortie 1/, /vulnerability-alerts/],
+      ["https", l => { l.lu = "off"; }, /lu "off", attendu « on »/, /always_use_https/],
+      ["hsts-court", l => { l.lu = { enabled: true, max_age: 3600, include_subdomains: false, preload: false }; }, /max_age = 3600/, /security_header/],
+      ["hsts-sous-domaines", l => { l.lu = { enabled: true, max_age: 31536000, include_subdomains: true, preload: false }; }, /include_subdomains = true/, /security_header/],
+    ];
+    const debuts = { ssl: "TLS imposé", reseau: "Restriction des adresses", dependabot: "Alertes Dependabot", https: "HTTPS imposé", hsts: "En-tête HSTS" };
+    for (const [nom, modif, motif, appliquer] of rouges) {
+      const r = o28(variante(debuts[nom.split("-")[0]], l => modif(l), nom));
+      ok(r.verdict === "FAIL" && durs(r).length === 1 && durs(r)[0].sev === "bloquant" && motif.test(durs(r)[0].msg) && /écart NU/.test(durs(r)[0].msg) && appliquer.test(durs(r)[0].msg),
+        `O28 rouge « ${nom} » : réglage classé défaut hors de son attendu -> FAIL bloquant, écart nu, commande d'application citée (obtenu ${r.verdict}, ${durs(r).length})`);
+    }
+    // Classé décision : même exigence, et le message renvoie à la décision de l'humain, pas à une commande.
+    const rMfa = o28(variante(NOM.mfa, l => { l.lu = false; }, "mfa-faux"));
+    ok(rMfa.verdict === "FAIL" && durs(rMfa).length === 1 && /classé decision/.test(durs(rMfa)[0].msg) && /poser la décision de l'humain/.test(durs(rMfa)[0].msg), `O28 rouge « mfa » : réglage classé décision hors de son attendu, sans écart décidé -> FAIL, renvoie à la décision (obtenu ${rMfa.verdict})`);
+    const rRs = o28(variante(NOM.ruleset, l => { l.lu = ["deletion", "non_fast_forward"]; }, "ruleset-sans-pr"));
+    ok(rRs.verdict === "FAIL" && /manque : pull_request/.test(durs(rRs)[0].msg), "O28 rouge « ruleset » : la demande de fusion n'est pas exigée -> FAIL qui nomme pull_request");
+    // L'écart décidé : vérifié TEL QUE DÉCIDÉ.
+    const mfaFaux = variante(NOM.mfa, l => { l.lu = false; }, "mfa-faux");
+    const rEc = o28(mfaFaux, "--ecarts", fx28("ecarts-mfa.json"));
+    ok(rEc.verdict === "PASS" && durs(rEc).length === 0 && rEc.findings.some(f => /écart ACCEPTÉ tel que décidé le 2026-11-06/.test(f.msg)), `O28 : l'écart décidé (mots, date, valeur lue acceptée) est vérifié tel que décidé -> PASS (obtenu ${rEc.verdict})`);
+    const ecartsNouveau = (nom, modif) => { const e = JSON.parse(fs.readFileSync(fx28("ecarts-mfa.json"), "utf8")); modif(e); const f = path.join(tmp30, `${nom}.json`); fs.writeFileSync(f, JSON.stringify(e), "utf8"); return f; };
+    const rBouge = o28(variante(NOM.mfa, l => { l.lu = [false, true]; }, "mfa-bouge"), "--ecarts", fx28("ecarts-mfa.json"));
+    ok(rBouge.verdict === "FAIL" && durs(rBouge).length === 1 && /n'est plus celui qui a été accepté/.test(durs(rBouge)[0].msg), "O28 : l'état lu a bougé depuis la décision -> FAIL, l'écart n'est plus celui qui a été décidé");
+    const rSans = o28(mfaFaux, "--ecarts", ecartsNouveau("ecart-sans-mots", e => { e.ecarts[0].decision = "ok"; }));
+    ok(rSans.verdict === "FAIL" && /sans décision/.test(durs(rSans)[0].msg), "O28 : un écart sans les mots de l'humain -> FAIL");
+    const rDate = o28(mfaFaux, "--ecarts", ecartsNouveau("ecart-sans-date", e => { delete e.ecarts[0].date; }));
+    ok(rDate.verdict === "FAIL" && /sans date/.test(durs(rDate)[0].msg), "O28 : un écart non daté -> FAIL");
+    const rOrph = o28(fx28("releve-vert.json"), "--ecarts", ecartsNouveau("ecart-orphelin", e => { e.ecarts[0].reglage = "Réglage inventé"; }));
+    ok(rOrph.verdict === "FAIL" && durs(rOrph).length === 1 && durs(rOrph)[0].sev === "majeur" && /écart orphelin/.test(durs(rOrph)[0].msg), "O28 : un écart sur un réglage qui n'est pas au registre -> FAIL majeur (écart orphelin)");
+    const rSansObjet = o28(fx28("releve-vert.json"), "--ecarts", fx28("ecarts-mfa.json"));
+    ok(rSansObjet.verdict === "PASS" && rSansObjet.findings.some(f => /devenu sans objet/.test(f.msg)), "O28 : un écart accepté dont le réglage est redevenu conforme -> PASS, dit « sans objet »");
+    // Un réglage non lu, une lecture en échec : jamais un PASS.
+    const rNonLu = o28(variante(NOM.hsts, (l, r) => { r.reglages = r.reglages.filter(x => x !== l); }, "hsts-non-lu"));
+    ok(rNonLu.verdict === "FAIL" && durs(rNonLu).length === 1 && /NON LU/.test(durs(rNonLu)[0].msg) && /security_header/.test(durs(rNonLu)[0].msg), "O28 : un réglage du registre que le relevé ne porte pas -> FAIL « NON LU » qui donne la commande de lecture");
+    const rEchec = o28(variante(NOM.https, l => { delete l.lu; l.erreur = "commande en échec (exit 22)"; }, "https-echec"));
+    ok(rEchec.verdict === "FAIL" && /la lecture a échoué/.test(durs(rEchec)[0].msg), "O28 : une lecture en échec -> FAIL, jamais un PASS");
+    // Plateformes : seules les déclarées sont exigées ; une plateforme sans entrée au registre est dite, pas jugée.
+    const sousEns = JSON.parse(JSON.stringify(vert28)); sousEns.plateformes = ["Cloudflare"];
+    const fSous = path.join(tmp30, "cloudflare-seul.json"); fs.writeFileSync(fSous, JSON.stringify(sousEns), "utf8");
+    ok(o28(fSous).verdict === "PASS" && o28(fSous).findings.filter(f => /conforme à l'attendu/.test(f.msg)).length === 2, "O28 : seul Cloudflare déclaré -> 2 réglages comparés (HTTPS, HSTS), les autres plateformes ne sont pas exigées");
+    const azure = JSON.parse(JSON.stringify(vert28)); azure.plateformes = ["Azure"];
+    const fAz = path.join(tmp30, "azure.json"); fs.writeFileSync(fAz, JSON.stringify(azure), "utf8");
+    const rAz = o28(fAz);
+    ok(rAz.verdict === "SKIP" && rAz.findings.some(f => /plateforme « Azure » : aucun réglage au registre/.test(f.msg)), "O28 : une plateforme sans entrée au registre -> SKIP qui le dit, jamais un PASS");
+    // Bornes.
+    ok(o28(path.join(tmp30, "absent.json")).verdict === "SKIP", "O28 borne : relevé introuvable -> SKIP");
+    const ecrire30 = (nom, t) => { const f = path.join(tmp30, nom); fs.writeFileSync(f, t, "utf8"); return f; };
+    ok((r => r.verdict === "FAIL" && /relevé illisible/.test(durs(r)[0].msg))(o28(ecrire30("casse.json", "{ pas du json"))), "O28 borne : relevé illisible -> FAIL dit");
+    ok((r => r.verdict === "FAIL" && durs(r).some(f => /sans `plateformes`/.test(f.msg)))(o28(ecrire30("sans-plateformes.json", JSON.stringify({ format: "forge-ops/reglages-plateforme@1", reglages: [] })))), "O28 borne : relevé sans plateformes déclarées -> FAIL (sinon aucun réglage n'est exigé)");
+    ok((r => r.verdict === "FAIL" && durs(r).some(f => /de format « forge-ops\/autre@9 »/.test(f.msg)))(o28(ecrire30("format.json", JSON.stringify({ ...vert28, format: "forge-ops/autre@9" })))), "O28 borne : format de relevé inconnu -> FAIL");
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1 && /introuvable ou illisible/.test(durs(r)[0].msg))(o28(fx28("releve-vert.json"), "--ecarts", path.join(tmp30, "nulle-part.json"))), "O28 borne : fichier d'écarts introuvable -> FAIL dit");
+    const regCasse = ecrire30("registre-casse.json", "[{ \"plateforme\": \"Supabase\" }]");
+    const rReg = (() => { try { return JSON.parse(run(oracle, ["--reglages-plateforme", fx28("releve-vert.json"), "--registre", regCasse, "--json-only"])); } catch (e) { return JSON.parse(String(e.stdout)); } })();
+    ok(rReg.verdict === "FAIL" && durs(rReg).some(f => /entrée 1 du registre invalide/.test(f.msg)), "O28 borne : une entrée de registre sans clés -> FAIL, un registre illisible ne vaut jamais PASS");
+    // Le registre du pilot se trouve par FORGE_ROOT (parc), sous forme de tableau ou d'objet qui le porte sous `reglages`.
+    const racine30 = path.join(tmp30, "parc"); fs.mkdirSync(path.join(racine30, "digit-ai-factory", "references"), { recursive: true });
+    fs.writeFileSync(path.join(racine30, "digit-ai-factory", "references", "REGLAGES-SURS-PAR-DEFAUT.json"), JSON.stringify({ verifie_le: "2026-11-06", reglages: JSON.parse(fs.readFileSync(registre28, "utf8")) }), "utf8");
+    const sansRegistre = (env) => { const r = spawnSync(process.execPath, [oracle, "--reglages-plateforme", fx28("releve-vert.json"), "--json-only"], { encoding: "utf8", env: { ...process.env, ...env } }); try { return JSON.parse(r.stdout); } catch { return { verdict: "ILLISIBLE", findings: [] }; } };
+    ok(sansRegistre({ FORGE_ROOT: racine30 }).verdict === "PASS", "O28 : sans --registre, le registre du pilot est lu par FORGE_ROOT (objet à clé `reglages`) -> PASS");
+    ok((r => r.verdict === "SKIP" && r.findings.some(f => /registre des réglages introuvable/.test(f.msg)))(sansRegistre({ FORGE_ROOT: path.join(tmp30, "vide") })), "O28 : registre du pilot introuvable -> SKIP qui le dit, jamais un PASS");
+
+    // La comparaison, forme par forme (les attendus du registre).
+    const c = lib28.comparer;
+    ok(c("contient deletion, non_fast_forward et pull_request", ["deletion", "non_fast_forward", "pull_request", "required_signatures"]).ok && !c("contient deletion, non_fast_forward et pull_request", ["deletion"]).ok, "O28 comparer : « contient a, b et c » exige les trois");
+    ok(c("true pour chaque membre (l'obligation elle-même n'est pas lisible par l'API)", "true").ok && !c("true pour chaque membre (…)", "false").ok, "O28 comparer : « true… » lit un booléen, y compris donné en chaîne");
+    ok(c("enabled", "enabled").ok && !c("enabled", "disabled").ok && !c("enabled", "").ok, "O28 comparer : chaîne égale à la lettre, une valeur vide n'est jamais conforme");
+    ok(c("v4 et v6 égales aux plages déclarées par le produit", { v4: ["203.0.113.0/24"], v6: [], status: "applied" }, { v4: ["203.0.113.0/24"], v6: [] }).ok && !c("v4 et v6 égales aux plages déclarées par le produit", { v4: ["203.0.113.0/24"], v6: [], status: "applied" }, { v4: ["198.51.100.0/24"], v6: [] }).ok, "O28 comparer : avec `declare`, les plages lues doivent être égales à celles que le produit déclare");
+
+    // Le relevé : lecture seule, secrets dans l'environnement, rien d'écrit.
+    const entrees28 = lib28.chargerRegistre(fs.readFileSync(registre28, "utf8")).entrees;
+    ok(entrees28.length === 9 && entrees28.filter(e => e.classement === "defaut").length === 5 && entrees28.filter(e => e.classement === "decision").length === 4, "O28 : le registre de la recette porte les 9 entrées de l'étude (5 défaut, 4 décision)");
+    ok(entrees28.every(e => lib28.estLecture(e.cmd_lire)) && !entrees28.filter(e => /^(curl|gh) /.test(e.cmd_appliquer)).some(e => lib28.estLecture(e.cmd_appliquer)), "O28 relever : les 9 commandes de lecture du registre sont des lectures, aucune commande d'application n'en est une");
+    ok(!lib28.estLecture("curl -sS -X POST https://x") && !lib28.estLecture("curl -sS --request PUT https://x") && !lib28.estLecture("curl -d '{}' https://x") && !lib28.estLecture("gh api repos/o/r -f a=b") && lib28.estLecture("gh api repos/o/r --jq '.a'"), "O28 relever : un verbe d'écriture, un corps ou un champ de gh api disqualifient une commande de lecture");
+    const valeursParCommande = new Map(vert28.reglages.map(r => [r.commande, r.lu]));
+    const env28 = { PROJECT_REF: "ref", SUPABASE_ACCESS_TOKEN: "jeton-secret-fictif", ORG_SLUG: "org", OWNER: "o", REPO: "r", ZONE_ID: "z", CLOUDFLARE_API_TOKEN: "jeton-cf-fictif" };
+    const jouees = [];
+    const lancer28 = (commande, env) => { jouees.push({ commande, env }); const v = valeursParCommande.get(commande); return { status: 0, stdout: typeof v === "string" ? v + "\n" : JSON.stringify(v), stderr: "" }; };
+    const horloge = () => "2026-11-06T12:00:00.000Z";
+    const rel = lib28.relever({ entrees: entrees28, plateformes: ["Supabase", "GitHub", "Cloudflare"], env: env28, lancer: lancer28, horloge });
+    ok(jouees.length === 9 && jouees.every(j => entrees28.some(e => e.cmd_lire === j.commande)) && !jouees.some(j => entrees28.some(e => e.cmd_appliquer === j.commande || e.cmd_retour === j.commande)), "O28 relever : 9 commandes jouées, toutes des cmd_lire du registre, jamais cmd_appliquer ni cmd_retour");
+    ok(!JSON.stringify(rel.releve).includes("jeton-secret-fictif") && !JSON.stringify(rel.releve).includes("jeton-cf-fictif"), "O28 relever : le relevé ne porte aucune valeur de secret (variables non développées)");
+    const fRel = path.join(tmp30, "releve-pris.json"); fs.writeFileSync(fRel, JSON.stringify(rel.releve), "utf8");
+    ok(o28(fRel).verdict === "PASS", "O28 relever -> comparer : le relevé pris par le script passe l'oracle (de la lecture au verdict)");
+    const sansJeton = lib28.relever({ entrees: entrees28, plateformes: ["Cloudflare"], env: { ZONE_ID: "z" }, lancer: lancer28, horloge });
+    ok(sansJeton.releve.reglages.every(r => /variable\(s\) d'environnement absente\(s\) : CLOUDFLARE_API_TOKEN/.test(r.erreur)), "O28 relever : une variable d'environnement absente est une lecture en échec qui nomme la variable");
+    const fSans = path.join(tmp30, "releve-sans-jeton.json"); fs.writeFileSync(fSans, JSON.stringify({ ...sansJeton.releve }), "utf8");
+    ok(o28(fSans).verdict === "FAIL", "O28 relever : le relevé aux lectures en échec est refusé par l'oracle");
+    const ecrit = entrees28.map(e => (e.plateforme === "GitHub" ? { ...e, cmd_lire: "gh api -X DELETE repos/$OWNER/$REPO" } : e));
+    const nAvant = jouees.length;
+    const refusee = lib28.relever({ entrees: ecrit, plateformes: ["GitHub"], env: env28, lancer: lancer28, horloge });
+    ok(refusee.refus.length === 3 && jouees.length === nAvant && refusee.releve.reglages.every(r => /refusée : elle écrit/.test(r.erreur)), "O28 relever : une commande de lecture qui écrit n'est jamais jouée (3 refusées, 0 jouée)");
+    ok(lib28.relever({ entrees: entrees28, plateformes: ["GitHub"], env: env28, lancer: () => ({ status: 22, stdout: "", stderr: "HTTP 403" }), horloge }).releve.reglages.filter(r => /exit 22/.test(r.erreur)).length === 2, "O28 relever : une commande en échec est dite (exit 22), sauf la lecture dont le code de sortie est la valeur (`echo $?`)");
+
+    // La ligne de commande du relevé : liste sans --executer, refus d'usage.
+    const cli30 = path.join(ici, "..", "scripts", "relever-reglages.mjs");
+    const sortie30 = (a, env = {}) => { const r = spawnSync(process.execPath, [cli30, ...a], { encoding: "utf8", env: { ...process.env, ...env } }); return { status: r.status, out: String(r.stdout) + String(r.stderr) }; };
+    const liste = sortie30(["Supabase", "--registre", registre28]);
+    ok(liste.status === 0 && /4 lecture\(s\) à jouer, rien n'est exécuté sans --executer/.test(liste.out) && /\[variables : PROJECT_REF, SUPABASE_ACCESS_TOKEN\]/.test(liste.out), `relever-reglages : sans --executer, les 4 lectures Supabase sont listées avec leurs variables et rien n'est joué (exit ${liste.status})`);
+    ok(sortie30([]).status === 2 && sortie30(["Azure", "--registre", registre28]).status === 2 && sortie30(["Supabase", "--registre", path.join(tmp30, "nulle-part.json")]).status === 2, "relever-reglages : sans plateforme, plateforme sans réglage, registre introuvable -> exit 2");
+
+    // Le plan O5 : relève et compare les réglages, déclare `db push` incompatible.
+    const plan30 = c => JSON.parse(run(ops, ["plan", c, "<BUILD>"]));
+    const o5 = (p) => { const f = path.join(tmp30, "plan.json"); fs.writeFileSync(f, JSON.stringify(p), "utf8");
+      try { return JSON.parse(run(oracle, ["--plan", f, "--json-only"])); } catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+    const planSup = plan30("supabase"), planCf = plan30("cloudflare-workers");
+    for (const [nom, p, pf] of [["supabase", planSup, "Supabase"], ["cloudflare-workers", planCf, "Cloudflare"]]) {
+      ok(o5(p).verdict === "PASS", `TF-2230 O-5 : le plan ${nom} généré -> PASS`);
+      ok(p.placeholders.includes("<FORGE_OPS>") && p.placeholders.includes("<ECARTS_ACCEPTES>"), `TF-2230 : le plan ${nom} déclare <FORGE_OPS> et <ECARTS_ACCEPTES>`);
+      ok(new RegExp(`relever-reglages\\.mjs ${pf} --sortie reglages-plateforme\\.json --executer`).test(p.phases.provision.join("\n")) && /oracle-ops\.mjs --reglages-plateforme reglages-plateforme\.json/.test(p.phases.provision.join("\n")), `TF-2230 : le plan ${nom} relève les réglages ${pf} puis les compare (O-28) dans sa phase provision, avant tout déploiement`);
+      const sansReleve = JSON.parse(JSON.stringify(p)); sansReleve.phases.provision = sansReleve.phases.provision.filter(l => !/relever-reglages/.test(l));
+      const r1 = o5(sansReleve);
+      ok(r1.verdict === "FAIL" && r1.findings.filter(f => f.sev === "majeur" && /ne relève pas les réglages/.test(f.msg)).length === 1, `TF-2230 O-5 : un plan ${nom} qui ne relève pas les réglages -> FAIL majeur, seul constat (obtenu ${r1.verdict})`);
+      const sansCompare = JSON.parse(JSON.stringify(p)); sansCompare.phases.provision = sansCompare.phases.provision.filter(l => !/--reglages-plateforme/.test(l));
+      const r2 = o5(sansCompare);
+      ok(r2.verdict === "FAIL" && r2.findings.filter(f => f.sev === "majeur" && /ne compare pas les réglages/.test(f.msg)).length === 1, `TF-2230 O-5 : un plan ${nom} qui ne compare pas les réglages relevés -> FAIL majeur, seul constat (obtenu ${r2.verdict})`);
+    }
+    const toutSup = Object.values(planSup.phases).flat().join("\n");
+    ok(/supabase db push/.test(toutSup) && /INCOMPATIBLE avec la restriction des adresses \(network-restrictions\)/.test(toutSup) && /5 622 plages IPv4/.test(toutSup) && /database\/query/.test(toutSup), "TF-2230 : le plan supabase déclare `supabase db push` INCOMPATIBLE avec la restriction réseau depuis un exécuteur hébergé, mesure à l'appui, et nomme la voie compatible (API de gestion)");
+    const sansDecl = JSON.parse(JSON.stringify(planSup));
+    sansDecl.phases.provision = sansDecl.phases.provision.filter(l => !/INCOMPATIBLE/.test(l));
+    const r3 = o5(sansDecl);
+    ok(r3.verdict === "FAIL" && r3.findings.filter(f => f.sev === "majeur" && /INCOMPATIBLE avec la restriction réseau/.test(f.msg)).length === 1, `TF-2230 O-5 : un plan supabase qui pousse par db push sans déclarer l'incompatibilité -> FAIL majeur, seul constat (obtenu ${r3.verdict})`);
+    const sansPush = JSON.parse(JSON.stringify(sansDecl));
+    for (const ph of Object.keys(sansPush.phases)) sansPush.phases[ph] = sansPush.phases[ph].map(l => l.replace(/supabase db push/g, "migrer par l'API de gestion"));
+    ok(o5(sansPush).verdict === "PASS", "TF-2230 O-5 : un plan supabase qui ne pousse pas par db push n'a rien à déclarer -> PASS (la voie compatible n'est pas exigée de qui ne s'en sert pas)");
+  } finally {
+    fs.rmSync(tmp30, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // Loi n° 1 : l'outil, la règle et le plan sont appelés ; l'en-tête de l'oracle dit O28.
+  const lire30 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire30(f); return t.includes("--reglages-plateforme") && t.includes("relever-reglages.mjs") && t.includes("TF-2230") && t.includes("db push"); }), "TF-2230 : l'outil, la règle et la voie db push sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(/O28 --reglages-plateforme/.test(lire30("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2230 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

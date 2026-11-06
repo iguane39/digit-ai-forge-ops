@@ -253,6 +253,20 @@ findings,non_juge}`, exit 0/1/2 :
   Foundry ; la machine est restée 2 jours sans usage. Le plan `azure` capture `az resource list` et rejoue O-27 après la
   bascule. `ops.mjs etat` n'est pas un genre (aucun nom de composant). Fixtures : `fixtures/o27-inventaire-a-jour/`.
 
+- **O28** `--reglages-plateforme <releve.json> [--registre <fichier>] [--ecarts <fichier>]` (TF-2230, décision humaine D-178 (a)
+  du 06/11/2026 : « réglage admissible appliqué à la création, vérifié à chaque livraison, exception décidée »). Chaque réglage des
+  plateformes que le relevé déclare (Supabase, GitHub, Cloudflare) est LU et conforme à l'`attendu` du registre du pilot
+  (`references/REGLAGES-SURS-PAR-DEFAUT.json`, lu par `$FORGE_ROOT`, sinon le parent de ce dépôt ; la recette en porte une copie,
+  `fixtures/o28-reglages-plateforme/registre.json`, jamais le fichier du pilot). Un réglage non lu, une lecture en échec, un réglage
+  hors de son attendu sans décision enregistrée est un constat bloquant : « prêt » est refusé, avant la MEP. Un réglage classé
+  `decision` se juge de même ; l'écart que l'humain a accepté se déclare dans `--ecarts` (`forge-ops/ecarts-acceptes@1` : ses mots,
+  sa date, la valeur lue qu'il accepte) et se vérifie TEL QUE DÉCIDÉ : si l'état lu bouge, l'écart n'est plus le sien. Le relevé se
+  prend par `node scripts/relever-reglages.mjs <Plateforme> --executer` (chaque `cmd_lire` du registre, lecture seule : une commande
+  qui écrit n'est jamais jouée ; les secrets restent dans l'environnement du run). Les plans `supabase` et `cloudflare-workers` le
+  prescrivent dans leur phase provision, et O-5 les refuse sans lui. Le plan `supabase` déclare aussi que `supabase db push` est
+  INCOMPATIBLE avec la restriction des adresses (`network-restrictions`) depuis un exécuteur hébergé : connexion directe à Postgres,
+  filtrée, et 5 622 plages IPv4 d'exécuteurs GitHub (mesuré le 06/11/2026) impossibles à déclarer ; la voie compatible est l'API de
+  gestion (HTTPS), ou un poste aux adresses déclarées sous GO humain.
 - **O29** `--convergence <capture>` (TF-2271, lot Produit-86 20261106a RP-44). Une chaîne Terraform n'est réussie que si le
   plan SUIVANT son apply est vide. La capture est celle de `terraform show -json <plan>` (ou la sortie texte de `terraform
   plan`) pris juste après l'apply, par `node scripts/convergence-terraform.mjs verifier <pile> --sortie capture.json` ; un plan

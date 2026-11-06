@@ -17,7 +17,9 @@
     "<FICHIER_SECRETS>",
     "<REF_GIT_PRECEDENTE>",
     "<FONCTION>",
-    "<NOM_SECRET>"
+    "<NOM_SECRET>",
+    "<FORGE_OPS>",
+    "<ECARTS_ACCEPTES>"
   ],
   "phases": {
     "provision": [
@@ -30,7 +32,10 @@
       "supabase start   # pile locale du rejeu ci-dessous ; « A container manager compatible with Docker APIs is a prerequisite for supabase start » ; source : https://supabase.com/docs/guides/local-development, lue le 29/10/2026",
       "supabase db reset --local --no-seed   # REJEU de toutes les migrations sur une base locale vide AVANT tout push : « Resets the local database with local migrations. » ; une migration qui ne passe que sur la base de developpement echoue ici, pas en production ; source : https://supabase.com/docs/reference/cli/supabase-db-reset, lue le 29/10/2026",
       "supabase db diff --linked   # DERIVE du projet distant : « Diffs local migration files against the linked project. » ; une sortie non vide = un schema change hors des migrations (tableau de bord) : le capturer par `supabase db diff --linked -f <NOM_MIGRATION_DERIVE>` (« Saves schema diff to a new migration file. »), le relire et le versionner AVANT le push ; « Under the legacy migra engine, the diff is known to miss some changes. » ; source : https://supabase.com/docs/reference/cli/supabase-db-diff, lue le 29/10/2026",
-      "verify_jwt des fonctions : « By default, Edge Functions require a valid JWT in the authorization header. » ; relire supabase/config.toml : toute fonction a `verify_jwt = false` (ou deployee avec --no-verify-jwt) est nommee au dossier de MEP avec sa raison (webhook signe), car « it will allow anyone to invoke your Edge Function without a valid JWT » ; source : https://supabase.com/docs/guides/functions/function-configuration, lue le 29/10/2026"
+      "verify_jwt des fonctions : « By default, Edge Functions require a valid JWT in the authorization header. » ; relire supabase/config.toml : toute fonction a `verify_jwt = false` (ou deployee avec --no-verify-jwt) est nommee au dossier de MEP avec sa raison (webhook signe), car « it will allow anyone to invoke your Edge Function without a valid JWT » ; source : https://supabase.com/docs/guides/functions/function-configuration, lue le 29/10/2026",
+      "node <FORGE_OPS>/scripts/relever-reglages.mjs Supabase --sortie reglages-plateforme.json --executer   # TF-2230 : chaque reglage Supabase du registre du pilot (references/REGLAGES-SURS-PAR-DEFAUT.json, lu par FORGE_ROOT) est LU par sa commande de lecture, en lecture seule ; les secrets (SUPABASE_ACCESS_TOKEN) restent dans l'environnement du run, le releve ne porte que les valeurs lues",
+      "node <FORGE_OPS>/oracles/oracle-ops.mjs --reglages-plateforme reglages-plateforme.json [--ecarts <ECARTS_ACCEPTES>]   # O-28, BLOQUANT avant la MEP : un reglage non lu, ou hors de son attendu sans decision enregistree, refuse « pret » ; un ecart decide par l'humain (ses mots, sa date, la valeur lue qu'il accepte) est verifie tel que decide ; omettre --ecarts s'il n'y en a aucun",
+      "la voie `supabase db push` est INCOMPATIBLE avec la restriction des adresses (network-restrictions) quand elle est jouee depuis un executeur heberge : « Network restrictions apply to all connection routes, whether pooled or direct. » ; `db push` ouvre une connexion directe a Postgres, et les executeurs heberges de GitHub publient 5 622 plages IPv4 (GET https://api.github.com/meta, cle actions, mesure le 06/11/2026), impossibles a declarer ; la restriction « ne s'applique pas aux API HTTPS » (« They don't apply to HTTPS APIs such as PostgREST, Storage, and Auth ») ; voie compatible depuis une chaine : migrer par l'API de gestion (POST https://api.supabase.com/v1/projects/<PROJECT_REF>/database/query, HTTPS), voie du produit de reference de l'etude du pilot du 06/11/2026, non rejouee par la forge ; sinon jouer `db push` depuis un poste dont l'adresse est declaree, sous GO humain (R-38) ; source : https://supabase.com/docs/guides/platform/network-restrictions, lue le 06/11/2026"
     ],
     "deploiement": [
       "deploiement fait a la main depuis le tableau de bord   # aucune commande du CLI : refuse par O-5"

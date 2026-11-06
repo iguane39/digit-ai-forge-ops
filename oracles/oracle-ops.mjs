@@ -82,6 +82,13 @@
 //   O27 --inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …] : chaque composant que les sorties
 //       d'état nomment (terraform state list, docker ps, az resource list, export noms) figure mot pour mot dans l'inventaire ;
 //       un composant présent et non inventorié refuse « prêt » (FAIL). Sans sortie d'état : SKIP (TF-2209).
+//   O28 --reglages-plateforme <releve.json> [--registre <fichier>] [--ecarts <fichier>] : chaque réglage des plateformes que le
+//       relevé déclare (Supabase, GitHub, Cloudflare) est LU et conforme à l'`attendu` du registre du pilot
+//       (`references/REGLAGES-SURS-PAR-DEFAUT.json`, lu par `$FORGE_ROOT`) ; un réglage non lu, en échec de lecture ou hors de
+//       son attendu sans décision enregistrée refuse « prêt » (FAIL bloquant). Un écart décidé par l'humain (`--ecarts`, ses
+//       mots, sa date, la valeur lue qu'il accepte) se vérifie tel que décidé. Le relevé se prend par
+//       `scripts/relever-reglages.mjs <Plateforme> --executer`. Le plan O5 d'une cible qui touche le registre le prescrit ; un
+//       plan supabase déclare aussi que `supabase db push` est incompatible avec la restriction réseau depuis un exécuteur (TF-2230).
 //   O29 --convergence <capture> : la capture du plan pris juste après l'apply (`terraform show -json <plan>` ou la sortie
 //       texte de `terraform plan`) est VIDE ; un plan qui change encore une ressource refuse la chaîne (FAIL, une ressource
 //       par constat, avec ses attributs et `terraform apply -replace='<adresse>'`), une capture illisible aussi. La capture
@@ -118,6 +125,8 @@ import { lireYaml } from "../scripts/lib-yaml.mjs";
 import { defautsDuSecret } from "../scripts/lib-secret-humain.mjs";
 import { jugerVersionServie } from "../scripts/lib-version-servie.mjs";
 import { lireCapture, commandeRemplacement } from "../scripts/lib-convergence.mjs";
+import { chargerRegistre, cheminRegistreDuPilot, jugerReglages } from "../scripts/lib-reglages.mjs";
+import { fileURLToPath } from "node:url";
 
 const DOM = "Exploitation : cible déployée saine et restaurable";
 const NON_JUGE = [
@@ -201,6 +210,24 @@ if (planPath) {
       add("majeur", "O5", `la construction de l'image ne passe pas le commit (${PASSE_LE_COMMIT[p.cible][1]}) : /healthz n'a aucun commit à rendre, et la version servie se reconstitue au lieu de se lire (TF-2201${p.cible === "gcp" || p.cible === "railway" ? ", TF-2244" : ""})`, planPath);
     if (!lignesSante.some(c => /version-servie\.mjs\s+lire\b/.test(c)))
       add("majeur", "O5", `la phase healthcheck ne relit pas la version servie (node <FORGE_OPS>/scripts/version-servie.mjs lire <URL> --attendu <COMMIT>) : le dossier de MEP citerait un commit reconstitué, pas lu (TF-2201)`, planPath);
+  }
+  // TF-2230 (D-178 (a), 06/11/2026) : un plan qui touche une plateforme du registre des réglages sûrs par défaut du pilot (supabase,
+  // cloudflare-workers) RELÈVE ces réglages dans sa phase provision et les COMPARE à l'attendu (O-28, bloquant avant la MEP). Et
+  // un plan supabase qui pousse ses migrations par `supabase db push` déclare que cette voie est incompatible avec la restriction
+  // réseau depuis un exécuteur hébergé (connexion directe à Postgres, que la restriction filtre) et nomme la voie compatible.
+  const PLATEFORME_DU_REGISTRE = { supabase: "Supabase", "cloudflare-workers": "Cloudflare" };
+  if (PLATEFORME_DU_REGISTRE[p.cible] && p.phases && typeof p.phases === "object") {
+    const nom = PLATEFORME_DU_REGISTRE[p.cible];
+    const prov = (Array.isArray(p.phases.provision) ? p.phases.provision : []).map(String);
+    if (!prov.some(c => new RegExp(`relever-reglages\\.mjs\\s+\\S*${nom}\\b`).test(c)))
+      add("majeur", "O5", `la phase provision ne relève pas les réglages ${nom} du registre du pilot (node <FORGE_OPS>/scripts/relever-reglages.mjs ${nom} --executer) : un réglage non lu n'est pas vérifié à la livraison (TF-2230)`, planPath);
+    if (!prov.some(c => /oracle-ops\.mjs\s+--reglages-plateforme\b/.test(c)))
+      add("majeur", "O5", `la phase provision ne compare pas les réglages relevés à l'attendu du registre (node <FORGE_OPS>/oracles/oracle-ops.mjs --reglages-plateforme <relevé> : O-28, bloquant avant la MEP) : un écart nu passerait à la MEP (TF-2230)`, planPath);
+  }
+  if (p.cible === "supabase" && p.phases && typeof p.phases === "object") {
+    const toutes = Object.values(p.phases).flat().map(String);
+    if (toutes.some(c => /supabase\s+db\s+push/.test(c)) && !toutes.some(c => /INCOMPATIBLE/.test(c) && /db push/.test(c) && /network-restrictions/.test(c) && /database\/query/.test(c)))
+      add("majeur", "O5", "le plan pousse les migrations par `supabase db push` sans déclarer cette voie INCOMPATIBLE avec la restriction réseau (network-restrictions) depuis un exécuteur hébergé, ni nommer la voie compatible (API de gestion, POST …/database/query) : `db push` ouvre une connexion directe à Postgres, que la restriction filtre (TF-2230)", planPath);
   }
   const brut = JSON.stringify(p);
   if (/AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|sk-[a-zA-Z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY/.test(brut))
@@ -2177,6 +2204,61 @@ if (args.includes("--inventaire-a-jour")) {
   const durs27 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   if (!durs27.length && !compares27) { add("info", "O27", "aucun composant comparé", docPath); fin27("SKIP", 2); }
   fin27(durs27.length ? "FAIL" : "PASS", durs27.length ? 1 : 0);
+}
+// ── O28 · les réglages de plateforme lus se comparent à l'attendu du registre du pilot, bloquant avant la MEP (TF-2230) ───
+//
+// LA DÉCISION (D-178 (a), 06/11/2026, étude « Sécurité par défaut de bout en bout » du pilot, pièce 6, point d'injection du
+// déploiement). Le principe « réglage admissible appliqué à la création, vérifié à chaque livraison, exception décidée » devient
+// une loi transverse. Mesure de départ : le plan O5 lisait ssl-enforcement et network-restrictions de Supabase sans les comparer
+// à un attendu du registre, et ne lisait aucun réglage de GitHub ni de Cloudflare.
+//
+// CE QUI EST JUGÉ, sur un RELEVÉ déjà pris (`scripts/relever-reglages.mjs <Plateforme> --executer`, lecture seule, aucun appel
+// ici) comparé au REGISTRE `references/REGLAGES-SURS-PAR-DEFAUT.json` du pilot (`$FORGE_ROOT`, sinon le parent de ce dépôt ;
+// `--registre` pour une autre copie) : chaque réglage des plateformes que le relevé déclare est LU, et conforme à son `attendu`.
+// Un réglage non lu, une lecture en échec ou un réglage hors de son attendu sans décision enregistrée est un constat
+// bloquant : « prêt » est refusé. Un réglage classé `decision` se juge comme un `defaut` ; l'écart que l'humain a accepté se
+// déclare dans `--ecarts <fichier>` (`forge-ops/ecarts-acceptes@1`, avec ses mots, sa date et la valeur lue qu'il accepte) et
+// se vérifie TEL QUE DÉCIDÉ : si l'état lu bouge depuis la décision, l'écart n'est plus le sien. Pas d'écart nu.
+// Logique : scripts/lib-reglages.mjs.
+if (args.includes("--reglages-plateforme")) {
+  const fichier28 = args[args.indexOf("--reglages-plateforme") + 1];
+  const valeur28 = (nom) => { const i = args.indexOf(nom); return i >= 0 ? args[i + 1] : null; };
+  const DOM28 = "Exploitation : les réglages de plateforme lus sont conformes à l'attendu du registre du pilot, écarts décidés vérifiés tels que décidés (O-28)";
+  const NJ28 = [
+    "que la valeur lue est celle que la plateforme sert : le relevé est celui que `relever-reglages.mjs` a pris (ou que l'appelant donne), l'oracle ne rejoue aucune lecture",
+    "la VÉRITÉ du registre : l'attendu, le classement et les commandes sont ceux que le pilot a promus (daté, sourcé, loi n° 4) ; l'oracle ne relit pas les pages des éditeurs",
+    "les plateformes que le produit utilise sans les déclarer au relevé : un réglage n'est exigé que pour une plateforme déclarée, et une plateforme sans entrée au registre n'est pas jugée (dit à côté du verdict)",
+    "l'égalité aux plages d'adresses que le produit déclare (restriction réseau de Supabase) : elle n'est jugée que si la lecture porte `declare` ({ v4, v6 }) ; sans elle, l'oracle juge qu'il y a au moins une plage, aucune ouverte à tous, et que la restriction est appliquée",
+    "le bien-fondé d'une décision humaine : l'oracle vérifie qu'elle existe (mots, date) et que l'état lu est celui qu'elle a accepté, jamais qu'elle est sage",
+  ];
+  const fin28 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM28, artefact: fichier28 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O28", msg: "chaque réglage des plateformes déclarées est lu et conforme à l'attendu du registre, ou son écart est décidé et vérifié tel que décidé", where: fichier28 }], non_juge: NJ28 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier28 || !fs.existsSync(fichier28)) { add("info", "O28", "relevé des réglages introuvable — les réglages de plateforme ne sont pas prouvés (le prendre par `scripts/relever-reglages.mjs`)", String(fichier28)); fin28("SKIP", 2); }
+  const chemin28 = valeur28("--registre") ?? cheminRegistreDuPilot(process.env, path.dirname(path.dirname(fileURLToPath(import.meta.url))));
+  if (!chemin28 || !fs.existsSync(chemin28)) { add("info", "O28", `registre des réglages introuvable (${chemin28 ?? "aucun chemin"}) — rien n'est comparé ; le donner par --registre, ou poser FORGE_ROOT sur la racine du parc`, String(chemin28)); fin28("SKIP", 2); }
+  const reg28 = chargerRegistre(fs.readFileSync(chemin28, "utf8"));
+  for (const c of reg28.constats) add("bloquant", "O28", `${c} — le registre est illisible, aucun réglage ne se compare (un registre non lu ne vaut jamais PASS)`, path.basename(chemin28));
+  let releve28 = null, ecarts28 = [];
+  try { releve28 = JSON.parse(fs.readFileSync(fichier28, "utf8")); } catch { add("bloquant", "O28", "relevé illisible (JSON invalide) : un relevé non lu ne vaut jamais PASS", path.basename(fichier28)); }
+  const fichierEcarts28 = valeur28("--ecarts");
+  if (fichierEcarts28) {
+    try {
+      const e28 = JSON.parse(fs.readFileSync(fichierEcarts28, "utf8"));
+      if (e28?.format !== "forge-ops/ecarts-acceptes@1" || !Array.isArray(e28.ecarts)) add("bloquant", "O28", `fichier d'écarts acceptés de format « ${e28?.format} » ou sans liste \`ecarts\` (attendu forge-ops/ecarts-acceptes@1)`, path.basename(fichierEcarts28));
+      else ecarts28 = e28.ecarts;
+    } catch { add("bloquant", "O28", "fichier d'écarts acceptés introuvable ou illisible : un écart décidé qu'on ne sait pas lire ne couvre rien", String(fichierEcarts28)); }
+  }
+  let compares28 = 0;
+  if (releve28 && !reg28.constats.length) {
+    const j28 = jugerReglages({ entrees: reg28.entrees, releve: releve28, ecarts: ecarts28 });
+    compares28 = j28.compares;
+    for (const c of j28.constats) add(c.sev, "O28", c.msg, path.basename(fichier28));
+  }
+  const durs28 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  if (!durs28.length && !compares28) { add("info", "O28", "aucun réglage comparé : les plateformes déclarées n'ont aucune entrée au registre", fichier28); fin28("SKIP", 2); }
+  fin28(durs28.length ? "FAIL" : "PASS", durs28.length ? 1 : 0);
 }
 // ── O29 · une chaîne Terraform n'est réussie que si le plan SUIVANT son apply est vide (TF-2271) ───
 //

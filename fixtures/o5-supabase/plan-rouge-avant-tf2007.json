@@ -12,14 +12,19 @@
   "placeholders": [
     "<PROJECT_REF>",
     "<NOM_CORRECTIF>",
-    "<URL_SERVICE>"
+    "<URL_SERVICE>",
+    "<FORGE_OPS>",
+    "<ECARTS_ACCEPTES>"
   ],
   "phases": {
     "provision": [
       "identite de deploiement : variables SUPABASE_ACCESS_TOKEN (jeton personnel a portee limitee), SUPABASE_DB_PASSWORD et SUPABASE_PROJECT_ID fournies par l'environnement du run, jamais une valeur dans le plan ; source : https://supabase.com/docs/guides/deployment/managing-environments, lue le 16/10/2026",
       "supabase link --project-ref <PROJECT_REF>   # liaison au projet distant <PROJECT_REF> ; source : https://supabase.com/docs/reference/cli/introduction, lue le 16/10/2026",
       "supabase ssl-enforcement get --project-ref <PROJECT_REF> --experimental   # attendu « SSL is being enforced. » ; « SSL is *NOT* being enforced. » = ecart a traiter (l'activation redemarre la base) ; source : https://supabase.com/docs/guides/platform/ssl-enforcement, lue le 16/10/2026",
-      "supabase network-restrictions get --project-ref <PROJECT_REF> --experimental   # 0.0.0.0/0 + ::/0 = aucune restriction ; couvre Postgres et le pooler, PAS les API HTTPS (PostgREST, Storage, Auth) ; source : https://supabase.com/docs/guides/platform/network-restrictions, lue le 16/10/2026"
+      "supabase network-restrictions get --project-ref <PROJECT_REF> --experimental   # 0.0.0.0/0 + ::/0 = aucune restriction ; couvre Postgres et le pooler, PAS les API HTTPS (PostgREST, Storage, Auth) ; source : https://supabase.com/docs/guides/platform/network-restrictions, lue le 16/10/2026",
+      "node <FORGE_OPS>/scripts/relever-reglages.mjs Supabase --sortie reglages-plateforme.json --executer   # TF-2230 : chaque reglage Supabase du registre du pilot (references/REGLAGES-SURS-PAR-DEFAUT.json, lu par FORGE_ROOT) est LU par sa commande de lecture, en lecture seule ; les secrets (SUPABASE_ACCESS_TOKEN) restent dans l'environnement du run, le releve ne porte que les valeurs lues",
+      "node <FORGE_OPS>/oracles/oracle-ops.mjs --reglages-plateforme reglages-plateforme.json [--ecarts <ECARTS_ACCEPTES>]   # O-28, BLOQUANT avant la MEP : un reglage non lu, ou hors de son attendu sans decision enregistree, refuse « pret » ; un ecart decide par l'humain (ses mots, sa date, la valeur lue qu'il accepte) est verifie tel que decide ; omettre --ecarts s'il n'y en a aucun",
+      "la voie `supabase db push` est INCOMPATIBLE avec la restriction des adresses (network-restrictions) quand elle est jouee depuis un executeur heberge : « Network restrictions apply to all connection routes, whether pooled or direct. » ; `db push` ouvre une connexion directe a Postgres, et les executeurs heberges de GitHub publient 5 622 plages IPv4 (GET https://api.github.com/meta, cle actions, mesure le 06/11/2026), impossibles a declarer ; la restriction « ne s'applique pas aux API HTTPS » (« They don't apply to HTTPS APIs such as PostgREST, Storage, and Auth ») ; voie compatible depuis une chaine : migrer par l'API de gestion (POST https://api.supabase.com/v1/projects/<PROJECT_REF>/database/query, HTTPS), voie du produit de reference de l'etude du pilot du 06/11/2026, non rejouee par la forge ; sinon jouer `db push` depuis un poste dont l'adresse est declaree, sous GO humain (R-38) ; source : https://supabase.com/docs/guides/platform/network-restrictions, lue le 06/11/2026"
     ],
     "deploiement": [
       "supabase db push --dry-run --linked   # essai a blanc (--dry-run), sa sortie relue avant le GO",

@@ -1,0 +1,11 @@
+{
+  "format": "forge-ops/ecarts-acceptes@1",
+  "ecarts": [
+    {
+      "reglage": "Double vérification imposée aux membres de l'organisation (Require MFA to access organization)",
+      "decision": "Écart accepté par le porteur : l'organisation reste en offre Free, la double vérification obligatoire exige une offre Pro (dépense), décision de l'humain du 06/11/2026 (essai).",
+      "date": "2026-11-06",
+      "lu": false
+    }
+  ]
+}

@@ -1,0 +1,164 @@
+[
+  {
+    "plateforme": "Supabase",
+    "reglage": "TLS imposé sur les connexions Postgres (ssl-enforcement, database=true)",
+    "source_url": "https://supabase.com/docs/guides/platform/ssl-enforcement",
+    "source_lue_le": "2026-11-06",
+    "criteres": {
+      "c1": {"verdict": "tenu", "preuve": "Page de l'éditeur, mot pour mot : « For increased security, you can prevent clients from connecting if they're not using SSL. »"},
+      "c2": {"verdict": "tenu", "preuve": "grep -ciE '\\bplan\\b|pricing|billing|add-on' sur le texte brut de la page = 0 : aucune condition d'offre ; réglage par l'API de gestion sans paramètre de facturation."},
+      "c3": {"verdict": "tenu", "preuve": "Coupure annoncée, mot pour mot : « On small projects this usually completes in a few seconds, but larger databases may see a longer interruption. » (la même page dit aussi « involves a few minutes of downtime ») : admise à la création. Produit de référence : migrations par POST https://api.supabase.com/v1/projects/${ref}/database/query (scripts/migrer.mjs:31), tests par /rest/v1 et /auth/v1 (tests/rls/test_rls_dev.py:40,53), 0 chaîne postgres:// ni sslmode : aucune connexion en clair. La page dit que les API HTTP imposent déjà TLS."},
+      "c4": {"verdict": "tenu", "preuve": "PUT database=true, GET, PUT database=false, tous trois donnés par la page de l'éditeur."},
+      "c5": {"verdict": "tenu", "preuve": "GET rend currentConfig.database (booléen, schéma SslEnforcementResponse de l'OpenAPI de gestion) : comparable à true."}
+    },
+    "cmd_appliquer": "curl -sS -X PUT \"https://api.supabase.com/v1/projects/$PROJECT_REF/ssl-enforcement\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" -H \"Content-Type: application/json\" -d '{\"requestedConfig\":{\"database\":true}}'",
+    "cmd_lire": "curl -sS \"https://api.supabase.com/v1/projects/$PROJECT_REF/ssl-enforcement\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" | jq '.currentConfig.database'",
+    "attendu": "true",
+    "cmd_retour": "curl -sS -X PUT \"https://api.supabase.com/v1/projects/$PROJECT_REF/ssl-enforcement\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" -H \"Content-Type: application/json\" -d '{\"requestedConfig\":{\"database\":false}}'",
+    "classement": "defaut"
+  },
+  {
+    "plateforme": "Supabase",
+    "reglage": "Restriction des adresses admises sur Postgres et le pooler (network-restrictions)",
+    "source_url": "https://supabase.com/docs/guides/platform/network-restrictions",
+    "source_lue_le": "2026-11-06",
+    "criteres": {
+      "c1": {"verdict": "tenu", "preuve": "Page de l'éditeur, mot pour mot : « Network restrictions let you control which IP ranges can connect to Postgres and its pooler, reducing your project's exposure to unauthorized access. »"},
+      "c2": {"verdict": "tenu", "preuve": "La page ne pose aucune condition d'offre (seule occurrence : l'« IPv4 add-on », hors sujet). La réponse de l'API porte un champ entitlement (allowed | disallowed) à lire avant d'appliquer ; l'audit de Client-A lit status applied sur une organisation en offre pro."},
+      "c3": {"verdict": "tenu", "preuve": "Page, mot pour mot : « They don't apply to HTTPS APIs such as PostgREST, Storage, and Auth ». Produit de référence : migrations et jeu fictif par l'API de gestion en HTTPS (scripts/migrer.mjs:31, scripts/charger-jeu-fictif.mjs:18), aucune connexion directe à Postgres dans .github/, scripts/, tests/ (0 occurrence de psql, postgres://, psycopg, supabase db push), aucune Edge Function (pas de supabase/functions). Les 5 622 plages IPv4 des exécuteurs de GitHub (GET https://api.github.com/meta, clé actions) rendent toute connexion directe depuis la chaîne impossible à déclarer : la voie API est une condition, citée au point d'injection."},
+      "c4": {"verdict": "tenu", "preuve": "POST /network-restrictions/apply (schéma NetworkRestrictionsRequest), GET /network-restrictions, retour par apply sur 0.0.0.0/0 et ::/0, donné par la page comme « remove all restrictions »."},
+      "c5": {"verdict": "tenu", "preuve": "GET rend config.dbAllowedCidrs, config.dbAllowedCidrsV6 et status : comparables à la liste déclarée."}
+    },
+    "cmd_appliquer": "curl -sS -X POST \"https://api.supabase.com/v1/projects/$PROJECT_REF/network-restrictions/apply\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" -H \"Content-Type: application/json\" -d \"{\\\"dbAllowedCidrs\\\":[\\\"$CIDR_DECLAREE_V4\\\"],\\\"dbAllowedCidrsV6\\\":[\\\"$CIDR_DECLAREE_V6\\\"]}\"",
+    "cmd_lire": "curl -sS \"https://api.supabase.com/v1/projects/$PROJECT_REF/network-restrictions\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" | jq '{v4: .config.dbAllowedCidrs, v6: .config.dbAllowedCidrsV6, status: .status}'",
+    "attendu": "v4 et v6 égales aux plages déclarées par le produit (au moins une : une liste vide laisse tout passer), sans 0.0.0.0/0 ni ::/0 ; status = applied",
+    "cmd_retour": "curl -sS -X POST \"https://api.supabase.com/v1/projects/$PROJECT_REF/network-restrictions/apply\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" -H \"Content-Type: application/json\" -d '{\"dbAllowedCidrs\":[\"0.0.0.0/0\"],\"dbAllowedCidrsV6\":[\"::/0\"]}'",
+    "classement": "defaut"
+  },
+  {
+    "plateforme": "Supabase",
+    "reglage": "Double vérification imposée aux membres de l'organisation (Require MFA to access organization)",
+    "source_url": "https://supabase.com/docs/guides/platform/mfa/org-mfa-enforcement",
+    "source_lue_le": "2026-11-06",
+    "criteres": {
+      "c1": {"verdict": "tenu", "preuve": "Page de l'éditeur, mot pour mot : « With MFA enforcement, you can ensure that all organization members use MFA. »"},
+      "c2": {"verdict": "echoue", "preuve": "Page, mot pour mot : « MFA enforcement is only available on the [Pro, Team and Enterprise plans](https://supabase.com/pricing). » : une organisation en offre Free doit changer d'offre (tenu pour Client-A, en offre pro)."},
+      "c3": {"verdict": "tenu", "preuve": "Page, mot pour mot : « Personal access tokens are not affected by MFA enforcement. » : la chaîne (API de gestion par jeton) ne change pas ; un membre sans second facteur perd l'accès jusqu'à son inscription, d'où l'ordre inscrire puis imposer."},
+      "c4": {"verdict": "echoue", "preuve": "Aucune route de l'API de gestion ne règle l'obligation : sur l'OpenAPI https://api.supabase.com/api/v1-json lue le 06/11/2026, les routes d'organisation sont /v1/organizations, /{slug}, /{slug}/entitlements, /{slug}/members, /{slug}/project-claim/{token}, /{slug}/projects. Le réglage se pose au tableau de bord seulement."},
+      "c5": {"verdict": "echoue", "preuve": "L'obligation elle-même n'est lisible par aucune route ; seul mfa_enabled de chaque membre l'est (GET /v1/organizations/{slug}/members)."}
+    },
+    "cmd_appliquer": "aucune commande : tableau de bord, page security de l'organisation, « Require MFA to access organization » (geste du propriétaire, lui-même inscrit à un second facteur)",
+    "cmd_lire": "curl -sS \"https://api.supabase.com/v1/organizations/$ORG_SLUG/members\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" | jq '[.[] | .mfa_enabled] | all'",
+    "attendu": "true pour chaque membre (l'obligation elle-même n'est pas lisible par l'API)",
+    "cmd_retour": "aucune commande : tableau de bord, même réglage désactivé",
+    "classement": "decision"
+  },
+  {
+    "plateforme": "GitHub",
+    "reglage": "Protection des secrets à la poussée d'un dépôt privé (secret_scanning_push_protection)",
+    "source_url": "https://docs.github.com/en/code-security/concepts/secret-security/push-protection",
+    "source_lue_le": "2026-11-06",
+    "criteres": {
+      "c1": {"verdict": "tenu", "preuve": "Page de l'éditeur (github-security-features), mot pour mot : « Push protection proactively scans your code, and any repository contributors' code, for hardcoded secrets during the push process and blocks the push if any credential leaks are detected. »"},
+      "c2": {"verdict": "echoue", "preuve": "Page push-protection, mot pour mot : « Requires GitHub Secret Protection to be enabled » ; page github-security-features : « Some of these features are available for public repositories free of charge, meaning that you don't need to purchase GitHub Secret Protection to enable the feature on a public repository. » : en dépôt privé, achat requis."},
+      "c3": {"verdict": "tenu", "preuve": "Bloque une poussée qui porte un secret ; aucun flux nominal du produit de référence ne pousse de secret (les secrets vivent dans les environnements GitHub, audit, ligne C6)."},
+      "c4": {"verdict": "tenu", "preuve": "PATCH repos/{owner}/{repo} security_and_analysis.secret_scanning_push_protection.status enabled | disabled ; GET repos/{owner}/{repo}."},
+      "c5": {"verdict": "tenu", "preuve": "GET rend security_and_analysis.secret_scanning_push_protection.status : comparable à enabled."}
+    },
+    "cmd_appliquer": "gh api -X PATCH repos/$OWNER/$REPO -f 'security_and_analysis[secret_scanning][status]=enabled' -f 'security_and_analysis[secret_scanning_push_protection][status]=enabled'",
+    "cmd_lire": "gh api repos/$OWNER/$REPO --jq '.security_and_analysis.secret_scanning_push_protection.status'",
+    "attendu": "enabled",
+    "cmd_retour": "gh api -X PATCH repos/$OWNER/$REPO -f 'security_and_analysis[secret_scanning_push_protection][status]=disabled'",
+    "classement": "decision"
+  },
+  {
+    "plateforme": "GitHub",
+    "reglage": "Alertes Dependabot sur les dépendances vulnérables (vulnerability-alerts)",
+    "source_url": "https://docs.github.com/en/code-security/concepts/supply-chain-security/dependabot-alerts",
+    "source_lue_le": "2026-11-06",
+    "criteres": {
+      "c1": {"verdict": "tenu", "preuve": "ASVS 5.0 V15.2.1 (asvs-l1.md de forge-websec) ; page de l'éditeur, mot pour mot : « Dependabot alerts help you find and fix vulnerable dependencies before they become security risks. »"},
+      "c2": {"verdict": "tenu", "preuve": "Page github-security-features, mot pour mot : « The following security features are available for you to use, regardless of the GitHub plan you are on. », section « Dependabot alerts and security updates »."},
+      "c3": {"verdict": "tenu", "preuve": "Une alerte ne modifie ni la poussée ni la fusion ; les mises à jour de sécurité (demandes de fusion automatiques) restent hors de ce réglage. Page : « When enabled, GitHub immediately generates the dependency graph and creates alerts »."},
+      "c4": {"verdict": "tenu", "preuve": "PUT, GET et DELETE repos/{owner}/{repo}/vulnerability-alerts (lu par l'audit de Client-A : 404 quand désactivé)."},
+      "c5": {"verdict": "tenu", "preuve": "GET rend 204 si actif, 404 sinon : comparable au code de sortie 0 de gh api."}
+    },
+    "cmd_appliquer": "gh api -X PUT repos/$OWNER/$REPO/vulnerability-alerts",
+    "cmd_lire": "gh api repos/$OWNER/$REPO/vulnerability-alerts --silent; echo $?",
+    "attendu": "0 (réponse 204)",
+    "cmd_retour": "gh api -X DELETE repos/$OWNER/$REPO/vulnerability-alerts",
+    "classement": "defaut"
+  },
+  {
+    "plateforme": "GitHub",
+    "reglage": "Protection de la branche principale par ruleset (demande de fusion exigée, suppression et poussée forcée refusées)",
+    "source_url": "https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches/about-protected-branches",
+    "source_lue_le": "2026-11-06",
+    "criteres": {
+      "c1": {"verdict": "tenu", "preuve": "Page de l'éditeur, mot pour mot : « You can protect important branches by setting branch protection rules, which define whether collaborators can delete or force push to the branch and set requirements for any pushes to the branch »."},
+      "c2": {"verdict": "tenu", "preuve": "Page, mot pour mot : « You can enable branch restrictions in public repositories owned by a GitHub Free organization and in all repositories owned by an organization using GitHub Team or GitHub Enterprise Cloud. » : tenu pour Client-A (offre team, audit ligne D21-1), échoue pour un dépôt privé d'une organisation Free."},
+      "c3": {"verdict": "echoue", "preuve": "Produit de référence, .github/workflows/qualif.yml:2 « env/uat reçoit main après fusion » et « on: push: branches: [env/uat] » : la promotion se fait par poussée directe ; une demande de fusion exigée la refuse. Le flux nominal change de résultat."},
+      "c4": {"verdict": "tenu", "preuve": "POST, GET et DELETE repos/{owner}/{repo}/rulesets ; lecture effective par GET repos/{owner}/{repo}/rules/branches/{branch}."},
+      "c5": {"verdict": "tenu", "preuve": "GET rules/branches/main rend la liste des types de règle : comparable à l'attendu."}
+    },
+    "cmd_appliquer": "gh api -X POST repos/$OWNER/$REPO/rulesets --input ruleset-branche-principale.json",
+    "cmd_lire": "gh api repos/$OWNER/$REPO/rules/branches/main --jq '[.[].type] | sort'",
+    "attendu": "contient deletion, non_fast_forward et pull_request",
+    "cmd_retour": "gh api -X DELETE repos/$OWNER/$REPO/rulesets/$RULESET_ID",
+    "classement": "decision"
+  },
+  {
+    "plateforme": "Cloudflare",
+    "reglage": "HTTPS imposé par redirection sur la zone (Always Use HTTPS)",
+    "source_url": "https://developers.cloudflare.com/ssl/edge-certificates/additional-options/always-use-https/",
+    "source_lue_le": "2026-11-06",
+    "criteres": {
+      "c1": {"verdict": "tenu", "preuve": "ASVS 5.0 V12.2.1 (asvs-l1.md de forge-websec) ; page de l'éditeur, mot pour mot : « Always Use HTTPS redirects all your visitor requests from `http` to `https`, for all subdomains and hosts in your application. »"},
+      "c2": {"verdict": "tenu", "preuve": "Page, tableau Availability : « | Availability | Yes | Yes | Yes | Yes | » sous Free, Pro, Business, Enterprise."},
+      "c3": {"verdict": "tenu", "preuve": "Produit de référence : page servie sur pages.dev, 0 zone (audit, ligne D6-04), en-tête connect-src limité à https (dist/_headers, audit ligne AI-DATA-01) : aucun flux en http. La page avertit seulement d'une application dont une partie ne supporte pas HTTPS."},
+      "c4": {"verdict": "tenu", "preuve": "Page, mot pour mot : « Send a [`PATCH`](…) request with `always_use_https` as the setting name in the URI path, and the `value` parameter set to your desired setting ( `\"on\"` or `\"off\"`). »"},
+      "c5": {"verdict": "tenu", "preuve": "GET zones/{zone_id}/settings/always_use_https rend result.value : comparable à on."}
+    },
+    "cmd_appliquer": "curl -sS -X PATCH \"https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/always_use_https\" -H \"Authorization: Bearer $CLOUDFLARE_API_TOKEN\" -H \"Content-Type: application/json\" -d '{\"value\":\"on\"}'",
+    "cmd_lire": "curl -sS \"https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/always_use_https\" -H \"Authorization: Bearer $CLOUDFLARE_API_TOKEN\" | jq -r '.result.value'",
+    "attendu": "on",
+    "cmd_retour": "curl -sS -X PATCH \"https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/always_use_https\" -H \"Authorization: Bearer $CLOUDFLARE_API_TOKEN\" -H \"Content-Type: application/json\" -d '{\"value\":\"off\"}'",
+    "classement": "defaut"
+  },
+  {
+    "plateforme": "Cloudflare",
+    "reglage": "En-tête HSTS de la zone (max-age 12 mois, sans includeSubDomains ni preload)",
+    "source_url": "https://developers.cloudflare.com/ssl/edge-certificates/additional-options/http-strict-transport-security/",
+    "source_lue_le": "2026-11-06",
+    "criteres": {
+      "c1": {"verdict": "tenu", "preuve": "ASVS 5.0 V3.4.1 (asvs-l1.md de forge-websec) ; page de l'éditeur, mot pour mot : « HSTS protects HTTPS web servers from downgrade attacks. »"},
+      "c2": {"verdict": "tenu", "preuve": "Page, tableau Availability : « | Availability | Yes | Yes | Yes | Yes | » sous Free, Pro, Business, Enterprise."},
+      "c3": {"verdict": "tenu", "preuve": "Produit de référence : dist/_headers porte déjà max-age=31536000 (audit, ligne D20-4) : aucun flux ne change. includeSubDomains et preload restent hors du défaut, la page les dit capables de rendre des sous-domaines « inaccessible »."},
+      "c4": {"verdict": "tenu", "preuve": "PATCH zones/{zone_id}/settings/security_header pour poser et retirer, GET pour lire. Limite citée, mot pour mot : « If you remove HTTPS before disabling HSTS or before waiting for the duration of the original **Max Age Header** … your website becomes inaccessible » : le retour arrière ne s'efface chez le navigateur qu'au bout de max-age."},
+      "c5": {"verdict": "tenu", "preuve": "GET rend result.value.strict_transport_security {enabled, max_age, include_subdomains, preload} : comparable à l'attendu."}
+    },
+    "cmd_appliquer": "curl -sS -X PATCH \"https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/security_header\" -H \"Authorization: Bearer $CLOUDFLARE_API_TOKEN\" -H \"Content-Type: application/json\" -d '{\"value\":{\"strict_transport_security\":{\"enabled\":true,\"max_age\":31536000,\"include_subdomains\":false,\"preload\":false,\"nosniff\":true}}}'",
+    "cmd_lire": "curl -sS \"https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/security_header\" -H \"Authorization: Bearer $CLOUDFLARE_API_TOKEN\" | jq '.result.value.strict_transport_security'",
+    "attendu": "enabled = true, max_age >= 31536000, include_subdomains = false, preload = false",
+    "cmd_retour": "curl -sS -X PATCH \"https://api.cloudflare.com/client/v4/zones/$ZONE_ID/settings/security_header\" -H \"Authorization: Bearer $CLOUDFLARE_API_TOKEN\" -H \"Content-Type: application/json\" -d '{\"value\":{\"strict_transport_security\":{\"enabled\":false,\"max_age\":0}}}'",
+    "classement": "defaut"
+  },
+  {
+    "plateforme": "Supabase",
+    "reglage": "Restauration à la minute (PITR, 7 jours) — entrée de contrôle, hors matrice et hors liste fermée",
+    "source_url": "https://supabase.com/docs/guides/platform/backups",
+    "source_lue_le": "2026-11-06",
+    "criteres": {
+      "c1": {"verdict": "tenu", "preuve": "Page de l'éditeur, mot pour mot : « Even with daily backups, you could still lose a day's worth of data. With PITR, you can back up to the point of disaster. »"},
+      "c2": {"verdict": "echoue", "preuve": "Page backups : « Note: Pro, Team and Enterprise Plan projects can enable PITR as an add-on. » ; page pricing, mot pour mot : « | Point-in-Time Recovery (PITR) | $100 per month per 7 days retention »."},
+      "c3": {"verdict": "non_mesure", "preuve": "Effet d'une souscription sur le calcul du projet non mesurable sans geste distant."},
+      "c4": {"verdict": "tenu", "preuve": "PATCH /v1/projects/{ref}/billing/addons, GET /database/backups, DELETE /billing/addons/{addon_variant} (OpenAPI de gestion)."},
+      "c5": {"verdict": "tenu", "preuve": "GET /database/backups rend pitr_enabled (lu par l'audit de Client-A : false)."}
+    },
+    "cmd_appliquer": "curl -sS -X PATCH \"https://api.supabase.com/v1/projects/$PROJECT_REF/billing/addons\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" -H \"Content-Type: application/json\" -d '{\"addon_type\":\"pitr\",\"addon_variant\":\"pitr_7\"}'",
+    "cmd_lire": "curl -sS \"https://api.supabase.com/v1/projects/$PROJECT_REF/database/backups\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\" | jq '.pitr_enabled'",
+    "attendu": "true",
+    "cmd_retour": "curl -sS -X DELETE \"https://api.supabase.com/v1/projects/$PROJECT_REF/billing/addons/pitr_7\" -H \"Authorization: Bearer $SUPABASE_ACCESS_TOKEN\"",
+    "classement": "decision"
+  }
+]
