@@ -2641,5 +2641,60 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(/O27 --inventaire-a-jour/.test(lire28("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2209 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
 }
 
+// ── TF-2244 (reste de TF-2201, campagne du 06/11/2026) : LES PLANS GCP ET RAILWAY PASSENT LE COMMIT À L'IMAGE ─────────────
+// Le fait : seuls azure et aws passaient COMMIT_SHA et relisaient la version servie ; `gcloud builds submit --tag` n'accepte
+// aucun argument de construction (il faut un fichier de construction et des substitutions), et la variable de service Railway
+// n'était pas éprouvée. Décision R-58 du 06/11/2026 : les deux plans passent le commit et relisent la version servie, ou le
+// non_juge d'O-26 le dit avec la raison mesurée.
+{
+  console.log("");
+  const { lireYaml } = await import("../scripts/lib-yaml.mjs");
+  const tmp44 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2244-"));
+  const plan44 = c => JSON.parse(run(ops, ["plan", c, "<BUILD>"]));
+  const o5 = (p) => { const f = path.join(tmp44, "plan.json"); fs.writeFileSync(f, JSON.stringify(p), "utf8");
+    try { return JSON.parse(run(oracle, ["--plan", f, "--json-only"])); } catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  try {
+    const gcp = plan44("gcp"), rw = plan44("railway");
+    const depGcp = gcp.phases.deploiement.join("\n"), sanGcp = gcp.phases.healthcheck.join("\n");
+    // gcp : un fichier de construction et des substitutions, jamais --tag (qui n'accepte pas d'argument de construction).
+    ok(/gcloud builds submit <BUILD> --config <FICHIER_CONSTRUCTION> --substitutions _IMAGE=<IMAGE>,_COMMIT_SHA=<COMMIT>/.test(depGcp) && !/builds submit[^\n]*--tag/.test(depGcp),
+      "TF-2244 : le plan gcp construit par fichier de construction et substitutions (_COMMIT_SHA=<COMMIT>), sans --tag");
+    ok(["<COMMIT>", "<FICHIER_CONSTRUCTION>", "<FORGE_OPS>"].every(j => gcp.placeholders.includes(j)), "TF-2244 : le plan gcp déclare <COMMIT>, <FICHIER_CONSTRUCTION> et <FORGE_OPS>");
+    ok(/version-servie\.mjs lire https:\/\/candidat---<SERVICE>-<HASH>\.a\.run\.app --attendu <COMMIT>/.test(sanGcp), "TF-2244 : le plan gcp relit la version servie par la revision candidate, AVANT la bascule");
+    ok(/update-traffic[\s\S]*version-servie\.mjs lire https:\/\/<SERVICE>-<HASH>\.a\.run\.app --attendu <COMMIT> --sortie version-servie\.json/.test(sanGcp), "TF-2244 : le plan gcp relit la version servie APRÈS la bascule et en écrit la capture");
+    // railway : variable de service lue à la construction par ARG, posée sans redéploiement, avant `railway up`.
+    const depRw = rw.phases.deploiement.join("\n"), sanRw = rw.phases.healthcheck.join("\n");
+    ok(/railway variable set COMMIT_SHA=<COMMIT> --skip-deploys[\s\S]*railway up --ci/.test(depRw), "TF-2244 : le plan railway pose COMMIT_SHA=<COMMIT> sans redéploiement (--skip-deploys) AVANT `railway up --ci`");
+    ok(/ARG COMMIT_SHA/.test(depRw), "TF-2244 : le plan railway dit que le Dockerfile déclare ARG COMMIT_SHA (variable de construction)");
+    ok(["<COMMIT>", "<FORGE_OPS>"].every(j => rw.placeholders.includes(j)), "TF-2244 : le plan railway déclare <COMMIT> et <FORGE_OPS>");
+    ok(/version-servie\.mjs lire <URL_SERVICE> --attendu <COMMIT> --sortie version-servie\.json/.test(sanRw), "TF-2244 : le plan railway relit la version servie et en écrit la capture");
+    // O-5 : fixture verte (le plan généré passe) et rouges (sans l'argument, sans la lecture) pour gcp ET railway.
+    for (const [nom, p, retirer] of [["gcp", gcp, c => c.replace(/ --substitutions \S+/, "")], ["railway", rw, c => (/COMMIT_SHA=/.test(c) ? "" : c)]]) {
+      const v = o5(p);
+      ok(v.verdict === "PASS", `TF-2244 O-5 : le plan ${nom} généré -> PASS (obtenu ${v.verdict})`);
+      const sansArg = JSON.parse(JSON.stringify(p)); sansArg.phases.deploiement = sansArg.phases.deploiement.map(retirer).filter(Boolean);
+      const r1 = o5(sansArg);
+      ok(r1.verdict === "FAIL" && r1.findings.filter(f => f.sev === "majeur" && /passe pas le commit/.test(f.msg)).length === 1, `TF-2244 O-5 : un plan ${nom} dont la construction ne passe pas le commit -> FAIL majeur, seul constat (obtenu ${r1.verdict})`);
+      const sansLecture = JSON.parse(JSON.stringify(p)); sansLecture.phases.healthcheck = sansLecture.phases.healthcheck.filter(c => !/version-servie\.mjs/.test(c));
+      const r2 = o5(sansLecture);
+      ok(r2.verdict === "FAIL" && r2.findings.filter(f => f.sev === "majeur" && /version servie/.test(f.msg)).length === 1, `TF-2244 O-5 : un plan ${nom} qui ne relit pas la version servie -> FAIL majeur, seul constat (obtenu ${r2.verdict})`);
+    }
+    // Le gabarit de construction : c'est lui que le plan gcp nomme ; il passe le commit à l'image par une substitution propre.
+    const cb = lireYaml(fs.readFileSync(path.join(ici, "..", "gabarits", "cloudbuild-commit.yaml"), "utf8")).valeur;
+    ok(Array.isArray(cb.steps) && cb.steps[0].args.includes("--build-arg") && cb.steps[0].args.includes("COMMIT_SHA=${_COMMIT_SHA}") && cb.images.includes("${_IMAGE}"),
+      "TF-2244 : gabarits/cloudbuild-commit.yaml passe --build-arg COMMIT_SHA=${_COMMIT_SHA} et publie ${_IMAGE}");
+    ok(/_COMMIT_SHA/.test(cb.steps[0].args.join(" ")) && !/\$\{COMMIT_SHA\}/.test(fs.readFileSync(path.join(ici, "..", "gabarits", "cloudbuild-commit.yaml"), "utf8").replace(/#.*$/gm, "")),
+      "TF-2244 : le gabarit n'emploie pas la variable intégrée COMMIT_SHA (vide hors déclencheur), seulement _COMMIT_SHA");
+    // Le non_juge d'O-26 ne dit plus « ne passent pas encore » : il dit ce qui reste non éprouvé, avec sa raison.
+    const capt44 = path.join(tmp44, "capture.json"); fs.writeFileSync(capt44, JSON.stringify({ commit: "abcdef1" }), "utf8");
+    const nj = JSON.parse(run(oracle, ["--version-servie", capt44, "--json-only"])).non_juge.join("\n");
+    ok(!/ne passent pas encore le commit/.test(nj) && /gcp et railway/.test(nj) && /jamais éprouvé/.test(nj), "TF-2244 : le non_juge d'O-26 dit que gcp et railway ne sont pas éprouvés par un déploiement réel, plus qu'ils ne passent pas le commit");
+  } finally {
+    fs.rmSync(tmp44, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  const lire44 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire44(f); return t.includes("cloudbuild-commit.yaml") && t.includes("TF-2244"); }), "TF-2244 : le gabarit de construction et la règle sont appelés par README.md et CLAUDE.md (loi n° 1)");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

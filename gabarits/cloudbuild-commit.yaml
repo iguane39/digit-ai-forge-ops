@@ -1,0 +1,18 @@
+# Gabarit forge-ops : construction Cloud Build qui passe le commit à l'image (TF-2244, suite de TF-2201).
+#
+# `gcloud builds submit --tag` n'accepte aucun argument de construction : le commit ne peut pas entrer dans
+# l'image par ce chemin. Il faut un fichier de construction et des substitutions (page « Substitute variable
+# values » de Cloud Build, lue le 06/11/2026 : « User-defined substitutions must conform to the following rules:
+# Substitutions must begin with an underscore ( _ ) and use only uppercase-letters and numbers »). La variable
+# intégrée COMMIT_SHA n'est remplie que pour un build lancé par un déclencheur : un `gcloud builds submit` à la
+# main la laisse vide, d'où la substitution propre `_COMMIT_SHA`.
+#
+# Le plan gcp l'appelle ainsi (le Dockerfile du produit déclare `ARG COMMIT_SHA`, son /healthz rend `commit`) :
+#   gcloud builds submit <BUILD> --config <FICHIER_CONSTRUCTION> \
+#     --substitutions _IMAGE=<IMAGE>,_COMMIT_SHA=<COMMIT> --project <PROJET>
+# Jugé par O-5 (`oracle-ops.mjs --plan`) ; la version servie se relit par `scripts/version-servie.mjs lire`.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '--build-arg', 'COMMIT_SHA=${_COMMIT_SHA}', '-t', '${_IMAGE}', '.']
+images:
+  - '${_IMAGE}'

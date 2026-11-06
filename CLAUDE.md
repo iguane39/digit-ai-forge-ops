@@ -236,8 +236,11 @@ findings,non_juge}`, exit 0/1/2 :
   capture.json] [--attendu <commit>]` (un GET, aucune écriture distante) : exit 0 lu, 1 autre version, 2 illisible.
   Les plans `azure` et `aws` passent le commit à l'image (`--build-arg COMMIT_SHA=<COMMIT>`, `<COMMIT>` = `git rev-parse
   HEAD` du produit) et relisent la version servie ; O-5 refuse (majeur) un plan de ces deux cibles qui ne le fait pas.
-  Le Dockerfile du produit déclare `ARG COMMIT_SHA` et son `/healthz` rend `commit`. `gcp` et `railway` ne passent pas
-  encore le commit à la construction (non jugé, dit au verdict). Le dossier de MEP cite la sortie JSON de `lire`.
+  Le Dockerfile du produit déclare `ARG COMMIT_SHA` et son `/healthz` rend `commit`. `gcp` (fichier de construction
+  `gabarits/cloudbuild-commit.yaml` et substitution `_COMMIT_SHA`, `gcloud builds submit --tag` n'acceptant aucun argument de
+  construction) et `railway` (variable de service `COMMIT_SHA` posée par `railway variable set … --skip-deploys`, lue par
+  `ARG`) le passent depuis TF-2244, d'après les pages de l'éditeur lues le 06/11/2026 ; O-5 les refuse sans lui, et le
+  non_juge d'O-26 dit que ni l'un ni l'autre n'est éprouvé par un déploiement réel. Le dossier de MEP cite la sortie JSON de `lire`.
 
 - **O27** `--inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …]` (TF-2209, lot Produit-86
   20261105e RP-29). L'inventaire des composants est confronté aux sorties d'état de la MEP, et « prêt » est refusé sur un

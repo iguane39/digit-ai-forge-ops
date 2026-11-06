@@ -260,7 +260,7 @@ const PLANS = {
   railway: {
     service: "Railway service (conteneur)",
     fiche: "experts-forge/fiches/expert-ops-railway.md",
-    placeholders: ["<PROJET>", "<ENVIRONNEMENT>", "<URL_SERVICE>", "<ID_DEPLOIEMENT_PRECEDENT>", "<SERVICE>", "<PRODUIT>"],
+    placeholders: ["<PROJET>", "<ENVIRONNEMENT>", "<URL_SERVICE>", "<ID_DEPLOIEMENT_PRECEDENT>", "<SERVICE>", "<PRODUIT>", "<COMMIT>", "<FORGE_OPS>"],
     provision: [
       "railway link <PROJET> --environment <ENVIRONNEMENT>",
       // TF-0845 (lot Produit-61 20260905a + seq 75) : `railway up -p <id>` (ou --project) NE
@@ -289,6 +289,11 @@ const PLANS = {
       "si un volume est monte : verifier RAILWAY_RUN_UID=0 (conteneur root, aligne avec le volume) ou l'UID du conteneur explicitement aligne sur celui du volume (root, uid 0) — sinon ecriture refusee a l'usage",
     ],
     deploiement: [
+      // TF-2244 (reste de TF-2201) : Railway injecte a la construction les variables du service, et « you must specify them
+      // in the Dockerfile using the ARG command » (page Dockerfiles, lue le 06/11/2026) ; RAILWAY_GIT_COMMIT_SHA n'existe que
+      // « if the deploy originated from a GitHub trigger », jamais pour un `railway up`. Le commit passe donc par une variable
+      // de service posee sans redeploiement (`railway variable set … --skip-deploys`, page de la commande, lue le 06/11/2026).
+      "railway variable set COMMIT_SHA=<COMMIT> --skip-deploys   # TF-2244 : le commit est passe a la construction ; le Dockerfile du produit declare ARG COMMIT_SHA dans l'etape qui le lit (« you must specify them in the Dockerfile using the ARG command »), /healthz le rend ; <COMMIT> = git rev-parse HEAD du produit, lu au run ; sans --skip-deploys, poser la variable declenche un deploiement du code precedent",
       "railway up --ci   # build Dockerfile + deploiement ; trafic route seulement apres healthcheck vert",
       // TF-0258 (2/4) : l'edge public et le prober de healthcheck de Railway joignent le
       // conteneur en IPv4 ; un bind IPv6-seul (`::`) ou loopback est injoignable sans erreur
@@ -302,6 +307,7 @@ const PLANS = {
     healthcheck: [
       "railway status   # deploiement SUCCESS attendu",
       "curl -fsS <URL_SERVICE>/sante   # 200 attendu (contrat sante.mjs de forge-ops)",
+      "node <FORGE_OPS>/scripts/version-servie.mjs lire <URL_SERVICE> --attendu <COMMIT> --sortie version-servie.json   # TF-2244 : le commit passe a la construction est celui que /healthz rend ; la sortie JSON est citee au dossier de MEP, jamais un commit reconstitue ; la capture se juge par oracle-ops.mjs --version-servie",
     ],
     rollback: [
       "dashboard Railway → deployment <ID_DEPLOIEMENT_PRECEDENT> → Rollback (piege : `railway redeploy` rejoue le COURANT, pas l'anterieur)",
@@ -314,18 +320,24 @@ const PLANS = {
   gcp: {
     service: "Cloud Run — service conteneur managé",
     fiche: "experts-forge/fiches/expert-ops-gcp.md",
-    placeholders: ["<PROJET>", "<REGION>", "<SERVICE>", "<IMAGE>", "<HASH>", "<REVISION_PRECEDENTE>", "<DEPOT>", "<BUILD>"],
+    placeholders: ["<PROJET>", "<REGION>", "<SERVICE>", "<IMAGE>", "<HASH>", "<REVISION_PRECEDENTE>", "<DEPOT>", "<BUILD>", "<FICHIER_CONSTRUCTION>", "<COMMIT>", "<FORGE_OPS>"],
     provision: [
       "gcloud auth list   # identite de deploiement : roles/run.admin + iam.serviceAccountUser + artifactregistry.reader",
       "gcloud artifacts repositories describe <DEPOT> --location <REGION> --project <PROJET>",
     ],
     deploiement: [
-      "gcloud builds submit <BUILD> --tag <IMAGE> --project <PROJET>",
+      // TF-2244 (reste de TF-2201) : `gcloud builds submit --tag` n'accepte aucun argument de construction, le commit ne
+      // peut donc pas entrer dans l'image par ce chemin. Fichier de construction (gabarits/cloudbuild-commit.yaml, copie a
+      // <FICHIER_CONSTRUCTION>) et substitutions propres (« must begin with an underscore »), page « Substitute variable
+      // values » de Cloud Build lue le 06/11/2026 ; la variable integree COMMIT_SHA est vide hors declencheur.
+      "gcloud builds submit <BUILD> --config <FICHIER_CONSTRUCTION> --substitutions _IMAGE=<IMAGE>,_COMMIT_SHA=<COMMIT> --project <PROJET>   # TF-2244 : le commit est passe a l'image (gabarit forge-ops gabarits/cloudbuild-commit.yaml : --build-arg COMMIT_SHA=${_COMMIT_SHA}), /healthz le rend ; <COMMIT> = git rev-parse HEAD du produit, lu au run",
       "gcloud run deploy <SERVICE> --image <IMAGE> --region <REGION> --project <PROJET> --port 8080 --no-traffic --tag candidat   # revision creee SANS trafic",
     ],
     healthcheck: [
       "curl -fsS https://candidat---<SERVICE>-<HASH>.a.run.app/sante   # smoke sur l'URL taguee, 200 attendu",
+      "node <FORGE_OPS>/scripts/version-servie.mjs lire https://candidat---<SERVICE>-<HASH>.a.run.app --attendu <COMMIT>   # TF-2244 : la revision candidate sert le commit construit, AVANT la bascule ; exit 1 = autre version, exit 2 = version illisible (/healthz sans commit)",
       "gcloud run services update-traffic <SERVICE> --region <REGION> --to-latest   # bascule APRES healthcheck vert",
+      "node <FORGE_OPS>/scripts/version-servie.mjs lire https://<SERVICE>-<HASH>.a.run.app --attendu <COMMIT> --sortie version-servie.json   # TF-2244 : la version servie se LIT ; la sortie JSON est citee au dossier de MEP, jamais un commit reconstitue ; la capture se juge par oracle-ops.mjs --version-servie",
     ],
     rollback: [
       "gcloud run services update-traffic <SERVICE> --region <REGION> --to-revisions <REVISION_PRECEDENTE>=100   # instantane, sans rebuild",

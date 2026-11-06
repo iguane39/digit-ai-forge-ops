@@ -78,7 +78,7 @@
 //   O26 --version-servie <capture.json> [--depot <dossier git>] [--attendu <commit>] : la réponse /healthz d'une instance
 //       porte un champ `commit` de 7 à 40 caractères hexadécimaux ; avec `--depot`, c'est un commit du dépôt ; avec
 //       `--attendu`, c'est le commit que le dossier de MEP annonce. La capture se prend par `scripts/version-servie.mjs
-//       lire <url> --sortie capture.json` ; les plans azure et aws passent le commit à l'image (TF-2201).
+//       lire <url> --sortie capture.json` ; les plans azure, aws, gcp et railway passent le commit à l'image (TF-2201, TF-2244).
 //   O27 --inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …] : chaque composant que les sorties
 //       d'état nomment (terraform state list, docker ps, az resource list, export noms) figure mot pour mot dans l'inventaire ;
 //       un composant présent et non inventorié refuse « prêt » (FAIL). Sans sortie d'état : SKIP (TF-2209).
@@ -180,12 +180,20 @@ if (planPath) {
   // TF-2201 (Produit-86, lot 20261105b RP-21) : un plan qui CONSTRUIT une image (azure, aws) passe le commit à sa
   // construction (--build-arg COMMIT_SHA=…) et relit, après la bascule, le commit que l'instance sert
   // (scripts/version-servie.mjs lire). Sans l'un, /healthz n'a rien à rendre ; sans l'autre, le dossier de MEP
-  // reconstitue la version. gcp et railway ne sont pas jugés ici : voir le non-jugé d'O26.
-  if ((p.cible === "azure" || p.cible === "aws") && p.phases && typeof p.phases === "object") {
+  // reconstitue la version. TF-2244 : gcp (fichier de construction et substitution _COMMIT_SHA, `builds submit --tag`
+  // n'acceptant aucun argument de construction) et railway (variable de service COMMIT_SHA lue par ARG) sont jugés de même ;
+  // ce qui n'en est pas éprouvé se dit au non-jugé d'O26.
+  const PASSE_LE_COMMIT = {
+    azure: [/--build-arg\s+COMMIT_SHA=/, "--build-arg COMMIT_SHA=<COMMIT>"],
+    aws: [/--build-arg\s+COMMIT_SHA=/, "--build-arg COMMIT_SHA=<COMMIT>"],
+    gcp: [/--substitutions\s+\S*_COMMIT_SHA=/, "--config <FICHIER_CONSTRUCTION> --substitutions _COMMIT_SHA=<COMMIT>"],
+    railway: [/variables?\s+(?:set\s+COMMIT_SHA=|--set\s+COMMIT_SHA=)/, "railway variable set COMMIT_SHA=<COMMIT> --skip-deploys"],
+  };
+  if (PASSE_LE_COMMIT[p.cible] && p.phases && typeof p.phases === "object") {
     const lignesDep = (Array.isArray(p.phases.deploiement) ? p.phases.deploiement : []).map(String);
     const lignesSante = (Array.isArray(p.phases.healthcheck) ? p.phases.healthcheck : []).map(String);
-    if (!lignesDep.some(c => /--build-arg\s+COMMIT_SHA=/.test(c)))
-      add("majeur", "O5", `la construction de l'image ne passe pas le commit (--build-arg COMMIT_SHA=<COMMIT>) : /healthz n'a aucun commit à rendre, et la version servie se reconstitue au lieu de se lire (TF-2201)`, planPath);
+    if (!lignesDep.some(c => PASSE_LE_COMMIT[p.cible][0].test(c)))
+      add("majeur", "O5", `la construction de l'image ne passe pas le commit (${PASSE_LE_COMMIT[p.cible][1]}) : /healthz n'a aucun commit à rendre, et la version servie se reconstitue au lieu de se lire (TF-2201${p.cible === "gcp" || p.cible === "railway" ? ", TF-2244" : ""})`, planPath);
     if (!lignesSante.some(c => /version-servie\.mjs\s+lire\b/.test(c)))
       add("majeur", "O5", `la phase healthcheck ne relit pas la version servie (node <FORGE_OPS>/scripts/version-servie.mjs lire <URL> --attendu <COMMIT>) : le dossier de MEP citerait un commit reconstitué, pas lu (TF-2201)`, planPath);
   }
@@ -2047,17 +2055,17 @@ if (args.includes("--identifiants-test")) {
 // `scripts/version-servie.mjs lire <url> --sortie capture.json`) : elle porte un champ `commit` de 7 à 40
 // caractères hexadécimaux ; avec `--depot <dossier git>`, ce commit est un commit du dépôt, et sans `--attendu` le
 // verdict dit de combien de commits l'instance est en retard sur la tête ; avec `--attendu <commit>`, c'est le commit
-// que le dossier de MEP annonce. Le remède est dans les plans azure et aws (`--build-arg COMMIT_SHA=<COMMIT>`).
+// que le dossier de MEP annonce. Le remède est dans les plans azure et aws (`--build-arg COMMIT_SHA=<COMMIT>`), gcp (substitution `_COMMIT_SHA`) et railway (variable `COMMIT_SHA`), TF-2244.
 // Logique : scripts/lib-version-servie.mjs.
 if (args.includes("--version-servie")) {
   const fichier26 = args[args.indexOf("--version-servie") + 1];
   const valeur26 = (nom) => { const i = args.indexOf(nom); return i >= 0 ? args[i + 1] : null; };
   const DOM26 = "Exploitation : la version servie se lit dans /healthz, elle ne se reconstitue pas (O-26)";
   const NJ26 = [
-    "que l'image a REÇU le commit à sa construction : l'oracle juge la réponse de l'instance, il ne lit ni le Dockerfile ni la commande de construction (les plans azure et aws portent `--build-arg COMMIT_SHA=<COMMIT>`, O-5 les juge)",
+    "que l'image a REÇU le commit à sa construction : l'oracle juge la réponse de l'instance, il ne lit ni le Dockerfile ni la commande de construction (les plans azure, aws, gcp et railway le passent, O-5 le juge)",
     "que la capture vient de l'instance de PRODUCTION ou de préproduction visée : le fichier est celui que l'appelant donne, `version-servie.mjs lire` cite l'URL lue dans sa sortie",
     "un arbre de travail modifié depuis le commit servi : un commit dit le dernier état commité, jamais des fichiers modifiés non commités au moment de la construction",
-    "gcp et railway : leurs plans ne passent pas encore le commit à la construction (`gcloud builds submit --tag` n'accepte pas d'argument de construction ; la variable de service Railway n'est pas éprouvée ici)",
+    "gcp et railway (TF-2244) : leurs plans passent le commit à la construction (gcp : fichier de construction et substitution `_COMMIT_SHA`, `gcloud builds submit --tag` n'acceptant aucun argument de construction ; railway : variable de service `COMMIT_SHA` lue par `ARG`, posée par `railway variable set … --skip-deploys`), d'après les pages de l'éditeur lues le 06/11/2026, jamais éprouvé par un déploiement réel : aucun projet Cloud Run ni Railway n'est à la disposition de la forge, et O-5 ne juge que la forme du plan",
   ];
   const fin26 = (verdict, code) => {
     process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM26, artefact: fichier26 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O26", msg: "/healthz rend un commit de 7 à 40 caractères hexadécimaux", where: fichier26 }], non_juge: NJ26 }, null, jsonOnly ? 0 : 2));

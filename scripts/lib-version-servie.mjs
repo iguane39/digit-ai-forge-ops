@@ -2,7 +2,7 @@
 // reconstitue pas (TF-2201, Produit-86, lot 20261105b RP-21, décision du 06/11/2026).
 //
 // LE CONTRAT. `/healthz` rend un objet JSON qui porte `commit` : le commit git que l'image a reçu à sa
-// construction (`--build-arg COMMIT_SHA=<commit>` des plans azure et aws). Un commit se dit en 7 à 40
+// construction (`--build-arg COMMIT_SHA=<commit>` des plans azure et aws, substitution `_COMMIT_SHA` de gcp, variable `COMMIT_SHA` de railway). Un commit se dit en 7 à 40
 // caractères hexadécimaux. Une empreinte calculée dans le code, une étiquette d'image ou un numéro tenu à la
 // main ne sont pas un commit : le 05/11/2026, l'empreinte servie (`23ea38d71963`) ne correspondait à aucun
 // des 25 derniers commits, et le dossier de MEP citait deux commits servis.
