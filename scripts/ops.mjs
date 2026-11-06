@@ -337,7 +337,7 @@ const PLANS = {
   azure: {
     service: "Azure Container Apps",
     fiche: "experts-forge/fiches/expert-ops-azure.md",
-    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>", "<ENV>", "<DOMAINE_ENV>", "<BUILD>", "<BUDGET_MENSUEL>", "<SEUIL_ALERTE_PCT>", "<DESTINATAIRE_ALERTE_COUT>", "<DEBUT_MOIS>", "<REGION_REPLI>", "<TAILLE_MACHINE>"],
+    placeholders: ["<RG>", "<REGION>", "<APP>", "<ACR>", "<IMAGE>", "<SUFFIXE>", "<SUFFIXE_PRECEDENT>", "<FORGE_OPS>", "<ENV>", "<DOMAINE_ENV>", "<BUILD>", "<BUDGET_MENSUEL>", "<SEUIL_ALERTE_PCT>", "<DESTINATAIRE_ALERTE_COUT>", "<DEBUT_MOIS>", "<REGION_REPLI>", "<TAILLE_MACHINE>", "<COMMIT>"],
     provision: [
       // TF-2129 (lot Produit-86 20261103d, RO-1) : la region de convention d'une souscription a manque de
       // capacite (northeurope, 6 echecs 409 SkuNotAvailable le 03/11 entre 21:52 et 21:58) alors qu'`az vm list-skus`
@@ -369,13 +369,17 @@ const PLANS = {
       "menage PERIODIQUE independant des runs : planifier la MEME etape de menage (garde N-1, desactive le reste) au moins chaque jour sur chaque environnement, avec un mode d'exercice a la demande (O-8) — une revision activee a la main ou un run interrompu entre bascule et menage reste sinon facture sans fin (TF-1639)",
     ],
     deploiement: [
-      "az acr build --registry <ACR> --image <IMAGE> <BUILD>",
+      // TF-2201 (Produit-86, lot 20261105b RP-21) : le commit entre dans l'image à sa construction (COMMIT_SHA, que le
+      // Dockerfile du produit déclare en ARG puis rend dans /healthz) ; <COMMIT> = git rev-parse HEAD du produit, lu au run.
+      "az acr build --registry <ACR> --image <IMAGE> --build-arg COMMIT_SHA=<COMMIT> <BUILD>   # TF-2201 : le commit est passe a l'image, /healthz le rend",
       "az containerapp update --name <APP> --resource-group <RG> --image <IMAGE> --revision-suffix <SUFFIXE>   # nouvelle revision, ingress targetPort=8080",
     ],
     healthcheck: [
       "curl -fsS https://<APP>--<SUFFIXE>.<DOMAINE_ENV>/sante   # URL de revision, 200 attendu",
+      "node <FORGE_OPS>/scripts/version-servie.mjs lire https://<APP>--<SUFFIXE>.<DOMAINE_ENV> --attendu <COMMIT>   # TF-2201 : la revision candidate sert le commit construit, AVANT la bascule ; exit 1 = autre version, exit 2 = version illisible (/healthz sans commit)",
       "az containerapp ingress traffic set --name <APP> --resource-group <RG> --revision-weight <SUFFIXE>=100   # bascule APRES healthcheck vert",
       "curl -fsS https://<APP>.<DOMAINE_ENV>/sante   # controle post-bascule sur l'URL servie, 200 attendu",
+      "node <FORGE_OPS>/scripts/version-servie.mjs lire https://<APP>.<DOMAINE_ENV> --attendu <COMMIT> --sortie version-servie-<APP>.json   # TF-2201 : la version servie se LIT ; la sortie JSON est citee au dossier de MEP, jamais un commit reconstitue ; la capture se juge par oracle-ops.mjs --version-servie",
       // TF-1638 : menage APRES le controle post-bascule, rejouable (idempotent : rejoue, il ne
       // trouve plus rien a desactiver). Garde N-1 = la plus recente revision active a 0 % qui
       // n'est pas Unhealthy — meme regle qu'O-18. Desactiver est reversible (phase rollback :
@@ -392,19 +396,20 @@ const PLANS = {
   aws: {
     service: "AWS App Runner",
     fiche: "experts-forge/fiches/expert-ops-aws.md",
-    placeholders: ["<REGION>", "<ARN_SERVICE>", "<DEPOT_ECR>", "<TAG_IMMUABLE>", "<TAG_PRECEDENT>", "<URL_SERVICE>", "<BUILD>"],
+    placeholders: ["<REGION>", "<ARN_SERVICE>", "<DEPOT_ECR>", "<TAG_IMMUABLE>", "<TAG_PRECEDENT>", "<URL_SERVICE>", "<BUILD>", "<COMMIT>", "<FORGE_OPS>"],
     provision: [
       "aws ecr describe-repositories --repository-names <DEPOT_ECR> --region <REGION>   # tags IMMUABLES exiges (jamais :latest)",
       "verifier le role d'acces ECR : AWSAppRunnerServicePolicyForECRAccess + iam:PassRole restreint",
       "desactiver le deploiement automatique sur push ECR (la bascule reste un geste du run, pas un effet de bord)",
     ],
     deploiement: [
-      "docker build -t <DEPOT_ECR>:<TAG_IMMUABLE> <BUILD> && docker push <DEPOT_ECR>:<TAG_IMMUABLE>",
+      "docker build --build-arg COMMIT_SHA=<COMMIT> -t <DEPOT_ECR>:<TAG_IMMUABLE> <BUILD> && docker push <DEPOT_ECR>:<TAG_IMMUABLE>",
       "aws apprunner update-service --service-arn <ARN_SERVICE> --region <REGION> --source-configuration ImageRepository={ImageIdentifier=<DEPOT_ECR>:<TAG_IMMUABLE>}",
     ],
     healthcheck: [
       "aws apprunner describe-service --service-arn <ARN_SERVICE> --region <REGION>   # Status=RUNNING, HealthCheck Path=/sante",
       "curl -fsS <URL_SERVICE>/sante   # 200 attendu (echec de deploiement = auto-rollback par le service)",
+      "node <FORGE_OPS>/scripts/version-servie.mjs lire <URL_SERVICE> --attendu <COMMIT> --sortie version-servie.json   # TF-2201 : le commit passe a l'image (--build-arg) est celui que /healthz rend ; la sortie JSON est citee au dossier de MEP, jamais un commit reconstitue",
     ],
     rollback: [
       "aws apprunner update-service --service-arn <ARN_SERVICE> --region <REGION> --source-configuration ImageRepository={ImageIdentifier=<DEPOT_ECR>:<TAG_PRECEDENT>}   # pas de bascule de trafic native : le rollback volontaire est un redeploiement du tag anterieur",

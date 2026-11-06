@@ -227,6 +227,18 @@ findings,non_juge}`, exit 0/1/2 :
   création hors fichier ou compte absent, et ce qui n'est pas suivi d'une connexion réussie. Mesure fondatrice : 14
   déploiements le 04/11, autant de mots de passe à recopier.
 
+- **O26** `--version-servie <capture.json> [--depot <dossier git>] [--attendu <commit>]` (TF-2201, lot Produit-86
+  20261105b RP-21). La version servie se LIT dans `/healthz`, elle ne se reconstitue pas : la réponse porte un champ
+  `commit` de 7 à 40 caractères hexadécimaux ; avec `--depot`, c'est un commit du dépôt ; avec `--attendu`, c'est
+  celui que le dossier de MEP annonce. Mesure fondatrice : l'empreinte servie `23ea38d71963` ne correspondait à aucun
+  des 25 derniers commits, le dossier de MEP citait deux commits servis, 25 commits recalculés pour dater la
+  préproduction. La lecture est `node scripts/version-servie.mjs lire <url ou capture> [--chemin /healthz] [--sortie
+  capture.json] [--attendu <commit>]` (un GET, aucune écriture distante) : exit 0 lu, 1 autre version, 2 illisible.
+  Les plans `azure` et `aws` passent le commit à l'image (`--build-arg COMMIT_SHA=<COMMIT>`, `<COMMIT>` = `git rev-parse
+  HEAD` du produit) et relisent la version servie ; O-5 refuse (majeur) un plan de ces deux cibles qui ne le fait pas.
+  Le Dockerfile du produit déclare `ARG COMMIT_SHA` et son `/healthz` rend `commit`. `gcp` et `railway` ne passent pas
+  encore le commit à la construction (non jugé, dit au verdict). Le dossier de MEP cite la sortie JSON de `lire`.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les

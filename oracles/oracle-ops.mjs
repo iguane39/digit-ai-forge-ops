@@ -75,6 +75,10 @@
 //       de scripts/identifiants-test.mjs, un mot de passe n'est renouvelé que sur demande de l'humain, n'est créé
 //       que si le fichier ou le compte manque, et ce qui est créé ou renouvelé est suivi d'une connexion réussie
 //       (TF-2166).
+//   O26 --version-servie <capture.json> [--depot <dossier git>] [--attendu <commit>] : la réponse /healthz d'une instance
+//       porte un champ `commit` de 7 à 40 caractères hexadécimaux ; avec `--depot`, c'est un commit du dépôt ; avec
+//       `--attendu`, c'est le commit que le dossier de MEP annonce. La capture se prend par `scripts/version-servie.mjs
+//       lire <url> --sortie capture.json` ; les plans azure et aws passent le commit à l'image (TF-2201).
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -105,6 +109,7 @@ import { createHash } from "node:crypto";
 import { correspond, hacherFichier } from "../scripts/lib-empreinte.mjs";
 import { lireYaml } from "../scripts/lib-yaml.mjs";
 import { defautsDuSecret } from "../scripts/lib-secret-humain.mjs";
+import { jugerVersionServie } from "../scripts/lib-version-servie.mjs";
 
 const DOM = "Exploitation : cible déployée saine et restaurable";
 const NON_JUGE = [
@@ -169,6 +174,18 @@ if (planPath) {
     add("bloquant", "O5", `aucune commande de déploiement n'utilise la CLI attendue « ${CLI[p.cible].trim()} » pour la cible ${p.cible}`, planPath);
   if (Array.isArray(p.phases?.healthcheck) && !p.phases.healthcheck.some(c => /sante|health/i.test(String(c))))
     add("majeur", "O5", "la phase healthcheck ne référence aucun contrôle de santé (/sante attendu)", planPath);
+  // TF-2201 (Produit-86, lot 20261105b RP-21) : un plan qui CONSTRUIT une image (azure, aws) passe le commit à sa
+  // construction (--build-arg COMMIT_SHA=…) et relit, après la bascule, le commit que l'instance sert
+  // (scripts/version-servie.mjs lire). Sans l'un, /healthz n'a rien à rendre ; sans l'autre, le dossier de MEP
+  // reconstitue la version. gcp et railway ne sont pas jugés ici : voir le non-jugé d'O26.
+  if ((p.cible === "azure" || p.cible === "aws") && p.phases && typeof p.phases === "object") {
+    const lignesDep = (Array.isArray(p.phases.deploiement) ? p.phases.deploiement : []).map(String);
+    const lignesSante = (Array.isArray(p.phases.healthcheck) ? p.phases.healthcheck : []).map(String);
+    if (!lignesDep.some(c => /--build-arg\s+COMMIT_SHA=/.test(c)))
+      add("majeur", "O5", `la construction de l'image ne passe pas le commit (--build-arg COMMIT_SHA=<COMMIT>) : /healthz n'a aucun commit à rendre, et la version servie se reconstitue au lieu de se lire (TF-2201)`, planPath);
+    if (!lignesSante.some(c => /version-servie\.mjs\s+lire\b/.test(c)))
+      add("majeur", "O5", `la phase healthcheck ne relit pas la version servie (node <FORGE_OPS>/scripts/version-servie.mjs lire <URL> --attendu <COMMIT>) : le dossier de MEP citerait un commit reconstitué, pas lu (TF-2201)`, planPath);
+  }
   const brut = JSON.stringify(p);
   if (/AKIA[0-9A-Z]{16}|ghp_[A-Za-z0-9]{20,}|sk-[a-zA-Z0-9]{20,}|BEGIN [A-Z ]*PRIVATE KEY/.test(brut))
     add("bloquant", "O5", "motif de credential détecté dans le plan — un plan ne transporte jamais de secret", planPath);
@@ -2015,6 +2032,42 @@ if (args.includes("--identifiants-test")) {
   }
   const durs25 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin25(durs25.length ? "FAIL" : "PASS", durs25.length ? 1 : 0);
+}
+// ── O26 · la version servie se lit dans /healthz, elle ne se reconstitue pas (TF-2201) ───
+//
+// LE FAIT (Produit-86, lot 20261105b RP-21, ledger seq 458, 05/11/2026). L'empreinte servie (`23ea38d71963`,
+// calculée dans le code) ne correspondait à aucun des 25 derniers commits, LF et CRLF recalculés ; le dossier de
+// MEP citait deux commits servis (lignes 10 et 195) ; seule l'étiquette de l'image (`ef30cc7`) disait la version.
+// Une session a recalculé 25 commits pour dater la préproduction.
+//
+// CE QUI EST JUGÉ, sur la CAPTURE d'une réponse /healthz (JSON, aucun appel réseau ; la lecture est
+// `scripts/version-servie.mjs lire <url> --sortie capture.json`) : elle porte un champ `commit` de 7 à 40
+// caractères hexadécimaux ; avec `--depot <dossier git>`, ce commit est un commit du dépôt, et sans `--attendu` le
+// verdict dit de combien de commits l'instance est en retard sur la tête ; avec `--attendu <commit>`, c'est le commit
+// que le dossier de MEP annonce. Le remède est dans les plans azure et aws (`--build-arg COMMIT_SHA=<COMMIT>`).
+// Logique : scripts/lib-version-servie.mjs.
+if (args.includes("--version-servie")) {
+  const fichier26 = args[args.indexOf("--version-servie") + 1];
+  const valeur26 = (nom) => { const i = args.indexOf(nom); return i >= 0 ? args[i + 1] : null; };
+  const DOM26 = "Exploitation : la version servie se lit dans /healthz, elle ne se reconstitue pas (O-26)";
+  const NJ26 = [
+    "que l'image a REÇU le commit à sa construction : l'oracle juge la réponse de l'instance, il ne lit ni le Dockerfile ni la commande de construction (les plans azure et aws portent `--build-arg COMMIT_SHA=<COMMIT>`, O-5 les juge)",
+    "que la capture vient de l'instance de PRODUCTION ou de préproduction visée : le fichier est celui que l'appelant donne, `version-servie.mjs lire` cite l'URL lue dans sa sortie",
+    "un arbre de travail modifié depuis le commit servi : un commit dit le dernier état commité, jamais des fichiers modifiés non commités au moment de la construction",
+    "gcp et railway : leurs plans ne passent pas encore le commit à la construction (`gcloud builds submit --tag` n'accepte pas d'argument de construction ; la variable de service Railway n'est pas éprouvée ici)",
+  ];
+  const fin26 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM26, artefact: fichier26 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O26", msg: "/healthz rend un commit de 7 à 40 caractères hexadécimaux", where: fichier26 }], non_juge: NJ26 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier26 || !fs.existsSync(fichier26)) { add("info", "O26", "capture de /healthz introuvable — la version servie n'est pas prouvée", String(fichier26)); fin26("SKIP", 2); }
+  let corps26 = null;
+  try { corps26 = JSON.parse(fs.readFileSync(fichier26, "utf8")); }
+  catch { add("bloquant", "O26", "capture illisible (JSON invalide) : un fichier non lu ne vaut jamais PASS", String(fichier26)); fin26("FAIL", 1); }
+  const jug26 = jugerVersionServie(corps26, { depot: valeur26("--depot"), attendu: valeur26("--attendu") });
+  for (const c of jug26.constats) add(c.sev, "O26", c.msg, path.basename(fichier26));
+  const durs26 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin26(durs26.length ? "FAIL" : "PASS", durs26.length ? 1 : 0);
 }
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
 // RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a

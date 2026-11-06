@@ -2471,5 +2471,114 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(verdictDoc26 === "PASS", `TF-2166 : IDENTIFIANTS-DE-TEST.md passe l'oracle de documents (O9, O12, O13, O16) (obtenu ${verdictDoc26})`);
 }
 
+// ── TF-2201 (Produit-86, lot 20261105b RP-21, ledger seq 458) : LA VERSION SERVIE SE LIT, ELLE NE SE RECONSTITUE PAS ─
+// Le fait : l'empreinte statique servie (« 23ea38d71963 ») ne correspondait à aucun des 25 derniers commits ; le dossier
+// de MEP citait deux commits servis ; seule l'étiquette de l'image disait la version. Décision du 06/11/2026 : le commit
+// est passé à l'image et rendu par /healthz ; le dossier de MEP lit la version servie.
+{
+  console.log("");
+  const { spawn } = await import("node:child_process");
+  const http = await import("node:http");
+  const script27 = path.join(ici, "..", "scripts", "version-servie.mjs");
+  const tmp27 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2201-"));
+  const git27 = (...a) => execFileSync("git", ["-C", tmp27, "-c", "user.name=essai", "-c", "user.email=essai@example.invalid", ...a], { encoding: "utf8" }).trim();
+  const o26 = (...a) => { try { return JSON.parse(run(oracle, [...a, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const durs = r => (r.findings || []).filter(f => f.regle === "O26" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const ecrire27 = (nom, obj) => { const f = path.join(tmp27, nom); fs.writeFileSync(f, typeof obj === "string" ? obj : JSON.stringify(obj), "utf8"); return f; };
+  const asynchrone = (args) => new Promise(resolve => {
+    const p = spawn(process.execPath, args, { encoding: "utf8" });
+    let stdout = "", stderr = "";
+    p.stdout.on("data", d => { stdout += d; }); p.stderr.on("data", d => { stderr += d; });
+    p.on("close", status => resolve({ status, stdout, stderr }));
+  });
+  let serveur = null;
+  try {
+    // Un dépôt jetable de 3 commits : le vrai commit servi en est un, l'empreinte du 05/11 n'en est aucun.
+    git27("init", "-q"); for (const m of ["un", "deux", "trois"]) git27("commit", "-q", "--allow-empty", "-m", m);
+    const [sha3, sha1] = [git27("rev-parse", "HEAD"), git27("rev-parse", "HEAD~2")];
+
+    // Rouge 1, le défaut du 05/11 : /healthz ne rend aucun commit, seulement une empreinte statique.
+    const rStat = o26("--version-servie", ecrire27("statique.json", { statut: "ok", version: "23ea38d71963" }));
+    ok(rStat.verdict === "FAIL" && durs(rStat).length === 1 && durs(rStat)[0].sev === "bloquant" && /ne rend aucun commit/.test(durs(rStat)[0].msg),
+      `O26 : /healthz sans champ « commit » (empreinte statique) -> FAIL bloquant, seul constat (obtenu ${rStat.verdict}, ${durs(rStat).length})`);
+    // Rouge 2 : un commit rendu, mais qui n'est aucun commit du dépôt (l'empreinte de 12 caractères du 05/11).
+    const rFaux = o26("--version-servie", ecrire27("faux.json", { commit: "23ea38d71963" }), "--depot", tmp27);
+    ok(rFaux.verdict === "FAIL" && durs(rFaux).length === 1 && /23ea38d71963/.test(durs(rFaux)[0].msg) && /aucun commit du dépôt/.test(durs(rFaux)[0].msg),
+      `O26 : un commit servi inconnu du dépôt -> FAIL bloquant qui le nomme (obtenu ${rFaux.verdict}, ${durs(rFaux).length})`);
+    // Rouge 3 : le commit servi n'est pas celui que le dossier de MEP annonce.
+    const rAncien = o26("--version-servie", ecrire27("ancien.json", { commit: sha1 }), "--depot", tmp27, "--attendu", sha3);
+    ok(rAncien.verdict === "FAIL" && durs(rAncien).length === 1 && /n'est pas le commit attendu/.test(durs(rAncien)[0].msg),
+      `O26 : le commit servi n'est pas celui attendu -> FAIL bloquant (obtenu ${rAncien.verdict}, ${durs(rAncien).length})`);
+    // Verts : commit complet, commit abrégé, avec et sans dépôt.
+    const vert = ecrire27("vert.json", { statut: "ok", commit: sha3 });
+    ok(o26("--version-servie", vert).verdict === "PASS", "O26 : /healthz qui rend un commit complet, sans dépôt -> PASS");
+    ok(o26("--version-servie", vert, "--depot", tmp27, "--attendu", sha3).verdict === "PASS", "O26 : commit servi = commit attendu, dans le dépôt -> PASS");
+    ok(o26("--version-servie", ecrire27("court.json", { commit: sha3.slice(0, 7) }), "--depot", tmp27, "--attendu", sha3).verdict === "PASS", "O26 : commit abrégé à 7 caractères, même commit -> PASS");
+    const rInfo = o26("--version-servie", ecrire27("ancien-ok.json", { commit: sha1 }), "--depot", tmp27);
+    ok(rInfo.verdict === "PASS" && (rInfo.findings || []).some(f => f.sev === "info" && /2 commit\(s\) derrière/.test(f.msg)),
+      "O26 : sans --attendu, le verdict dit de combien de commits l'instance servie est en retard sur la tête");
+    // Bornes.
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1)(o26("--version-servie", ecrire27("court3.json", { commit: "abc" }))), "O26 borne : « abc » n'est pas un commit (7 à 40 hexadécimaux) -> FAIL");
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1)(o26("--version-servie", ecrire27("casse.json", "{ pas du json"))), "O26 borne : capture illisible -> FAIL dit, jamais un PASS");
+    ok((r => r.verdict === "SKIP" && (r.findings || []).some(f => f.regle === "O26"))(o26("--version-servie", path.join(tmp27, "absente.json"))), "O26 borne : capture introuvable -> SKIP");
+    ok((r => r.verdict === "FAIL" && durs(r).length === 1)(o26("--version-servie", vert, "--depot", path.join(tmp27, "nulle-part"))), "O26 borne : dépôt illisible -> FAIL dit, jamais un PASS sans l'avoir lu");
+
+    // L'outil de lecture : un vrai serveur HTTP local, GET seul. Le dossier de MEP cite sa sortie.
+    serveur = http.createServer((req, rep) => {
+      if (req.url === "/healthz") { rep.writeHead(200, { "content-type": "application/json" }); rep.end(JSON.stringify({ statut: "ok", commit: sha3 })); }
+      else if (req.url === "/ancien/healthz") { rep.writeHead(200, { "content-type": "application/json" }); rep.end(JSON.stringify({ statut: "ok", commit: sha1 })); }
+      else if (req.url === "/statique/healthz") { rep.writeHead(200, { "content-type": "application/json" }); rep.end(JSON.stringify({ statut: "ok", version: "23ea38d71963" })); }
+      else { rep.writeHead(404); rep.end("non"); }
+    });
+    await new Promise(r => serveur.listen(0, "127.0.0.1", r));
+    const base27 = `http://127.0.0.1:${serveur.address().port}`;
+    const capture = path.join(tmp27, "capture-lue.json");
+    const l1 = await asynchrone([script27, "lire", base27, "--sortie", capture]);
+    const j1 = (() => { try { return JSON.parse(l1.stdout); } catch { return {}; } })();
+    ok(l1.status === 0 && j1.commit === sha3 && j1.source === `${base27}/healthz`, `version-servie lire : GET /healthz -> le commit servi est lu et la source est citée (exit ${l1.status})`);
+    ok(fs.existsSync(capture) && o26("--version-servie", capture, "--depot", tmp27, "--attendu", sha3).verdict === "PASS", "version-servie lire --sortie : la capture écrite passe O26 (de la lecture au verdict)");
+    const l2 = await asynchrone([script27, "lire", base27, "--attendu", sha3]);
+    ok(l2.status === 0, `version-servie lire --attendu : même commit -> exit 0 (exit ${l2.status})`);
+    const l3 = await asynchrone([script27, "lire", `${base27}/ancien`, "--attendu", sha3]);
+    ok(l3.status === 1, `version-servie lire --attendu : instance en retard -> exit 1 (exit ${l3.status})`);
+    const l4 = await asynchrone([script27, "lire", `${base27}/statique`]);
+    ok(l4.status === 2 && /aucun commit/.test(l4.stderr), `version-servie lire : /healthz sans commit -> exit 2 qui le dit, la version n'est pas lisible (exit ${l4.status})`);
+    const l5 = await asynchrone([script27, "lire", `${base27}/absent`]);
+    ok(l5.status === 2 && /404/.test(l5.stderr), `version-servie lire : réponse 404 -> exit 2 qui la cite (exit ${l5.status})`);
+    const l6 = await asynchrone([script27, "lire", capture]);
+    ok(l6.status === 0 && JSON.parse(l6.stdout).commit === sha3, "version-servie lire : une capture sur disque se lit comme une URL");
+    ok((await asynchrone([script27, "lire"])).status === 2 && (await asynchrone([script27, "inconnu", base27])).status === 2, "version-servie : sans source, ou verbe inconnu -> exit 2");
+  } finally {
+    if (serveur) await new Promise(r => serveur.close(r));
+    fs.rmSync(tmp27, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  }
+  // Les plans qui construisent une image passent le commit à la construction et le relisent après la bascule.
+  const plan27 = c => JSON.parse(run(ops, ["plan", c, "<BUILD>"]));
+  for (const c of ["azure", "aws"]) {
+    const p = plan27(c);
+    const dep = p.phases.deploiement.join("\n"), san = p.phases.healthcheck.join("\n");
+    ok(/--build-arg COMMIT_SHA=<COMMIT>/.test(dep) && p.placeholders.includes("<COMMIT>"), `TF-2201 : le plan ${c} passe le commit à l'image (--build-arg COMMIT_SHA=<COMMIT>) et déclare <COMMIT>`);
+    ok(/version-servie\.mjs lire <URL[^>]*>\S* --attendu <COMMIT>/.test(san) || /version-servie\.mjs lire \S+ --attendu <COMMIT>/.test(san), `TF-2201 : le plan ${c} relit la version servie après la bascule (version-servie.mjs lire --attendu <COMMIT>)`);
+  }
+  const dPlan27 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2201-plans-"));
+  const pf27 = path.join(dPlan27, "plan-tf2201.json");
+  run(ops, ["plan", "azure", fx("app-verte"), "--sortie", pf27]);
+  const pAz27 = JSON.parse(fs.readFileSync(pf27, "utf8"));
+  const sansArg = JSON.parse(JSON.stringify(pAz27)); sansArg.phases.deploiement = sansArg.phases.deploiement.map(c => c.replace(/ --build-arg COMMIT_SHA=<COMMIT>/, ""));
+  const pSansArg = path.join(dPlan27, "plan-tf2201-sans-arg.json"); fs.writeFileSync(pSansArg, JSON.stringify(sansArg), "utf8");
+  const rPlan = (() => { try { return JSON.parse(run(oracle, ["--plan", pSansArg, "--json-only"])); } catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } })();
+  ok(rPlan.verdict === "FAIL" && rPlan.findings.filter(f => f.sev === "majeur" && /commit/.test(f.msg)).length === 1, `O5 : un plan azure dont la construction ne passe pas le commit -> FAIL majeur, seul constat (obtenu ${rPlan.verdict})`);
+  const sansLecture = JSON.parse(JSON.stringify(pAz27)); sansLecture.phases.healthcheck = sansLecture.phases.healthcheck.filter(c => !/version-servie\.mjs/.test(c));
+  const pSansLecture = path.join(dPlan27, "plan-tf2201-sans-lecture.json"); fs.writeFileSync(pSansLecture, JSON.stringify(sansLecture), "utf8");
+  const rPlan2 = (() => { try { return JSON.parse(run(oracle, ["--plan", pSansLecture, "--json-only"])); } catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } })();
+  ok(rPlan2.verdict === "FAIL" && rPlan2.findings.filter(f => f.sev === "majeur" && /version servie/.test(f.msg)).length === 1, `O5 : un plan azure qui ne relit pas la version servie -> FAIL majeur, seul constat (obtenu ${rPlan2.verdict})`);
+  fs.rmSync(dPlan27, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  // Loi n° 1 : l'outil et la règle sont appelés ; l'en-tête de l'oracle dit O26.
+  const lire27 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire27(f); return t.includes("--version-servie") && t.includes("version-servie.mjs") && t.includes("TF-2201"); }), "TF-2201 : l'outil et la règle sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(/O26 --version-servie/.test(lire27("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2201 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

@@ -123,6 +123,11 @@ node scripts/identifiants-test.mjs verifier identifiants-test.json --commande "<
 node scripts/identifiants-test.mjs renouveler identifiants-test.json --compte lecteur --demande "<mots de l'humain>"   # le seul geste qui change un mot de passe
 node oracles/oracle-ops.mjs --identifiants-test identifiants-test.json --journal identifiants-test.journal.jsonl
 
+# Version servie (TF-2201) : lire le commit que l'instance sert, au lieu de le reconstituer. Les plans azure et aws passent
+# le commit à l'image (--build-arg COMMIT_SHA=<COMMIT>) ; /healthz du produit rend { "commit": "<sha>" }
+node scripts/version-servie.mjs lire https://<instance> --attendu <commit> --sortie version-servie.json   # exit 0 lu · 1 autre version · 2 illisible
+node oracles/oracle-ops.mjs --version-servie version-servie.json --depot <dossier-git> [--attendu <commit>]   # O-26 : un commit du dépôt
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -185,6 +190,7 @@ FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 | O23 | `--reseau-docker <pile Terraform ou fichier.tf>` : chaque `docker_network` à `ipam_config` pose `lifecycle { ignore_changes = [ipam_config] }` et tient son `subnet` d'un relevé des plages prises (`data "external"` qui appelle `scripts/plages-docker.mjs`), jamais d'un CIDR écrit à la main ; gabarit `gabarits/reseau-docker.tf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2164) |
 | O24 | `--frontal-nginx <fichier.conf ou dossier>` : chaque `proxy_pass`, `fastcgi_pass`, `uwsgi_pass`, `scgi_pass` et `grpc_pass` vers un nom d'hôte passe par une variable, avec un `resolver` qui porte `valid=` ; un groupe `upstream` à serveur nommé porte `resolve` et son resolver dans son bloc ou dans `http` ; gabarit `gabarits/frontal-nginx.conf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2165, étendu par TF-2177) |
 | O25 | `--identifiants-test <fichier.json> [--journal <journal.jsonl>]` : sur un fichier `forge-ops/identifiants-test@1`, le mot de passe de chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni signe ; le constat nomme le compte et la position, jamais la valeur (générateur `scripts/tirer-secret-humain.mjs`, TF-2167). Avec le journal de `scripts/identifiants-test.mjs` : aucun renouvellement sans demande de l'humain, aucune création hors fichier ou compte absent, chaque création ou renouvellement suivi d'une connexion réussie (TF-2166) ; faits `references/IDENTIFIANTS-DE-TEST.md` |
+| O26 | `--version-servie <capture.json> [--depot <dossier git>] [--attendu <commit>]` : la réponse `/healthz` d'une instance porte un champ `commit` de 7 à 40 caractères hexadécimaux, qui est un commit du dépôt et, si le dossier de MEP l'annonce, le commit attendu ; les plans azure et aws passent le commit à l'image (`--build-arg COMMIT_SHA=<COMMIT>`) et O-5 les refuse sans lui (TF-2201). La capture se prend par `scripts/version-servie.mjs lire` |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.
