@@ -93,6 +93,11 @@
 //       texte de `terraform plan`) est VIDE ; un plan qui change encore une ressource refuse la chaîne (FAIL, une ressource
 //       par constat, avec ses attributs et `terraform apply -replace='<adresse>'`), une capture illisible aussi. La capture
 //       se prend par `scripts/convergence-terraform.mjs verifier <pile>` (TF-2271).
+//   O30 --etat-servi <releve.json> : le relevé `forge-ops/etat-servi@1` que prend gabarits/smoke-mise-en-production.mjs
+//       prouve que le test de mise en production a LU l'état servi avant ses épreuves, l'a RELU après la dernière, et que
+//       le corps de la réponse de santé (chemin `sante.chemin` du gabarit, `/healthz` par défaut), ou les champs que le test
+//       déclare, est identique : un champ changé est un constat bloquant, une relecture absente aussi (TF-2308, classe
+//       etat-servi-non-relu-apres-epreuve). Relevé introuvable : SKIP.
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -124,6 +129,7 @@ import { correspond, hacherFichier } from "../scripts/lib-empreinte.mjs";
 import { lireYaml } from "../scripts/lib-yaml.mjs";
 import { defautsDuSecret } from "../scripts/lib-secret-humain.mjs";
 import { jugerVersionServie } from "../scripts/lib-version-servie.mjs";
+import { jugerEtatServi } from "../scripts/lib-etat-servi.mjs";
 import { lireCapture, commandeRemplacement } from "../scripts/lib-convergence.mjs";
 import { chargerRegistre, cheminRegistreDuPilot, jugerReglages } from "../scripts/lib-reglages.mjs";
 import { fileURLToPath } from "node:url";
@@ -2300,6 +2306,40 @@ if (args.includes("--convergence")) {
   }
   const durs29 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin29(durs29.length ? "FAIL" : "PASS", durs29.length ? 1 : 0);
+}
+// ── O30 · un test de mise en production relit l'état servi à sa fin, et le laisse comme il l'a trouvé (TF-2308) ───
+//
+// LE FAIT (Produit-86, lot 20261109a RP-53, ledger seq 439, mesure du 04/11/2026 à 16:50 sur le commit 40a040e). Le test
+// de mise en production jouait un arrêt de mission en dernier ; le socle posait alors le verrou global de la passerelle et
+// l'instance restait en NO_EXTERNAL_AI pour toutes les missions jusqu'au redémarrage suivant. Aucun contrôle ne relisait la
+// santé : E-119, E-116 et E-125 sont passées en FAIL au second passage. L'instance répondait 200 en mode dégradé.
+//
+// CE QUI EST JUGÉ, sur le RELEVÉ `forge-ops/etat-servi@1` du gabarit gabarits/smoke-mise-en-production.mjs (aucun appel
+// réseau) : l'état de départ est lu ; l'état servi est RELU après la dernière épreuve (une relecture absente, ou antérieure
+// à la fin de la dernière épreuve, est un constat bloquant) ; le CORPS de la réponse de santé, ou les champs que le test
+// déclare, est identique à celui du départ, un constat bloquant par champ changé, avec sa valeur d'avant et d'après. Une
+// réponse qui ne porte aucun champ comparé est un constat majeur : seul le code serait comparable. Logique :
+// scripts/lib-etat-servi.mjs. Classe : etat-servi-non-relu-apres-epreuve.
+if (args.includes("--etat-servi")) {
+  const fichier30 = args[args.indexOf("--etat-servi") + 1];
+  const DOM30 = "Exploitation : l'état servi est relu à la fin du test de mise en production et laissé comme trouvé (O-30)";
+  const NJ30 = [
+    "que le relevé vient d'un test joué contre l'instance visée : le fichier est celui que l'appelant donne (le gabarit y cite l'adresse lue)",
+    "que le ou les champs déclarés dans `sante.champs` disent TOUT l'état servi : une comparaison restreinte par le test est signalée (info), pas contestée ; un état que la réponse de santé ne rend pas (verrou interne sans champ) n'est pas vu",
+    "un état qui se rétablit seul après la relecture (délai de grâce, cache) ou qui change entre deux relectures sans épreuve : l'oracle compare deux instants",
+    "que les épreuves du produit sont suffisantes : il juge la fin du test, pas sa couverture (porte M-3 de ETAPE-MEP.md du pilot)",
+  ];
+  const fin30 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM30, artefact: fichier30 || null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O30", msg: "l'état servi a été relu après la dernière épreuve et il est identique à celui du départ", where: fichier30 }], non_juge: NJ30 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (!fichier30 || !fs.existsSync(fichier30)) { add("info", "O30", "relevé de l'état servi introuvable — la fin du test de mise en production n'est pas prouvée", String(fichier30)); fin30("SKIP", 2); }
+  let releve30 = null;
+  try { releve30 = JSON.parse(fs.readFileSync(fichier30, "utf8")); }
+  catch { add("bloquant", "O30", "relevé illisible (JSON invalide) : un fichier non lu ne vaut jamais PASS", String(fichier30)); fin30("FAIL", 1); }
+  for (const c of jugerEtatServi(releve30).constats) add(c.sev, "O30", c.msg, path.basename(fichier30));
+  const durs30 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  fin30(durs30.length ? "FAIL" : "PASS", durs30.length ? 1 : 0);
 }
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
 // RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a

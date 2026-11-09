@@ -279,6 +279,23 @@ findings,non_juge}`, exit 0/1/2 :
   conteneur, « unhealthy » depuis 47 h, sous un apply rendu PASS. Remède éprouvé avec Terraform 1.12.2 le 06/11/2026
   (`FORGE_OPS_EXERCICE_TERRAFORM=1 node oracles/self-test.mjs`). Fixtures : `fixtures/o29-convergence/`.
 
+- **O30** `--etat-servi <releve.json>` (TF-2308, lot Produit-86 20261109a RP-53, classe `etat-servi-non-relu-apres-epreuve`).
+  Une épreuve qui change l'état de l'instance servie (arrêt, mode dégradé, verrou) ne le laisse pas au porteur : le test de
+  mise en production LIT la santé avant ses épreuves, joue les épreuves, la RELIT après la dernière, et échoue si l'état
+  servi diffère. Le gabarit est `gabarits/smoke-mise-en-production.mjs`, à copier chez le produit avec son
+  `smoke.config.json` : `url`, `sante.chemin` (adresse de santé, `/healthz` par défaut : un produit dont la santé ne s'expose
+  pas à `/healthz` la déclare), `sante.champs` (champs qui font l'état, tout le corps sinon), `sante.ignorer` (champs
+  volatils), `epreuves` (`{ nom, commande }`, l'adresse arrive dans `SMOKE_URL`). Il compare le CORPS de la réponse, jamais
+  le seul code : l'instance du cas fondateur répondait 200 en mode dégradé. Exit 0 identique · 1 état changé, instance muette
+  ou épreuve en échec (la relecture a lieu quand même) · 2 usage ou départ illisible (aucune épreuve jouée). Il écrit un
+  relevé `forge-ops/etat-servi@1` que l'oracle rejuge sans croire le gabarit : état de départ lu, relecture absente ou
+  antérieure à la fin de la dernière épreuve (bloquant), un constat bloquant par champ changé avec sa valeur d'avant et
+  d'après, réponse sans champ comparé (majeur). Remède : terminer par le geste qui remet l'état de départ (reprise de la
+  passerelle), ou jouer l'épreuve contre une instance jetable. Mesure fondatrice : arrêt de mission joué en dernier, passerelle
+  laissée en NO_EXTERNAL_AI pour toutes les missions, E-119, E-116 et E-125 en FAIL au second passage (04/11, 16:50). Fixtures :
+  `fixtures/o30-etat-servi/` ; recette contre un faux service local dont une épreuve bascule l'état. Lacune dite : la porte M-3
+  de `ETAPE-MEP.md` du pilot ne cite pas encore ce gabarit.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les

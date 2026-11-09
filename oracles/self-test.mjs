@@ -3006,5 +3006,159 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(/O28 --reglages-plateforme/.test(lire30("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2230 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
 }
 
+// ── TF-2308 (Produit-86, lot 20261109a RP-53, ledger seq 439) : LE TEST DE MISE EN PRODUCTION RELIT L'ÉTAT SERVI À SA FIN ─
+// Le fait : un arrêt de mission joué en dernier laissait la passerelle en NO_EXTERNAL_AI pour toutes les missions, sans
+// relecture de la santé ; l'instance répondait 200 en mode dégradé. Décision R-58 du 09/11/2026 : le gabarit relit la santé à
+// la fin et échoue si l'état servi diffère de celui d'avant. Un faux service local bascule son état sous une épreuve (POST
+// /arret) : le test qui ne relit pas, ou qui relit un état changé, est refusé ; celui qui remet l'état en fin passe.
+{
+  console.log("");
+  const { spawn } = await import("node:child_process");
+  const http = await import("node:http");
+  const gabarit30 = path.join(ici, "..", "gabarits", "smoke-mise-en-production.mjs");
+  const lib30 = await import("../scripts/lib-etat-servi.mjs");
+  const gab30 = await import("../gabarits/smoke-mise-en-production.mjs");
+  const tmp30 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2308-"));
+  const o30 = (...a) => { try { return JSON.parse(run(oracle, ["--etat-servi", ...a, "--json-only"])); }
+    catch (e) { try { return JSON.parse(String(e.stdout)); } catch { return { verdict: "ILLISIBLE", findings: [] }; } } };
+  const durs = r => (r.findings || []).filter(f => f.regle === "O30" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const asynchrone = (args) => new Promise(resolve => {
+    const p = spawn(process.execPath, args, { encoding: "utf8" });
+    let stdout = "", stderr = "";
+    p.stdout.on("data", d => { stdout += d; }); p.stderr.on("data", d => { stderr += d; });
+    p.on("close", status => resolve({ status, stdout, stderr }));
+  });
+  // Faux service : l'épreuve POST /arret pose le verrou global (mode NO_EXTERNAL_AI) ET la santé répond encore 200.
+  const faux = (chemin, { volatil = false } = {}) => new Promise(resolve => {
+    const etat = { mode: "normal", n: 0 };
+    const srv = http.createServer((q, r) => {
+      if (q.method === "POST" && q.url === "/arret") { etat.mode = "NO_EXTERNAL_AI"; r.writeHead(204); return r.end(); }
+      if (q.method === "POST" && q.url === "/reprise") { etat.mode = "normal"; r.writeHead(204); return r.end(); }
+      if (q.method === "POST" && q.url === "/couper") { r.writeHead(204); r.end(); return setImmediate(() => { srv.closeAllConnections(); srv.close(); }); }
+      if (q.method === "GET" && q.url === chemin) {
+        const corps = { statut: "ok", passerelle: { mode: etat.mode } };
+        if (volatil) corps.uptime_s = ++etat.n;
+        r.writeHead(200, { "content-type": "application/json" }); return r.end(JSON.stringify(corps));
+      }
+      r.writeHead(404); r.end();
+    });
+    srv.listen(0, "127.0.0.1", () => resolve({ srv, etat, url: `http://127.0.0.1:${srv.address().port}` }));
+  });
+  const epreuve = (nom, source) => { const f = path.join(tmp30, `${nom}.mjs`); fs.writeFileSync(f, source, "utf8"); return `node "${f}"`; };
+  const poster = (chemin, code = 0) => `await fetch(process.env.SMOKE_URL + "${chemin}", { method: "POST" }); process.exitCode = ${code};`;
+  const creer = epreuve("creer", `process.exitCode = 0;`);
+  const arret = epreuve("arret", poster("/arret"));
+  const arretEnEchec = epreuve("arret-echec", poster("/arret", 3));
+  const reprise = epreuve("reprise", poster("/reprise"));
+  const couper = epreuve("couper", poster("/couper"));
+  const jouer = async (nom, srvUrl, cfg, extra = []) => {
+    const config = path.join(tmp30, `${nom}.config.json`), sortie = path.join(tmp30, `${nom}.etat-servi.json`);
+    fs.writeFileSync(config, JSON.stringify({ url: srvUrl, ...cfg }), "utf8");
+    const r = await asynchrone([gabarit30, "--config", config, "--sortie", sortie, ...extra]);
+    return { ...r, sortie, releve: fs.existsSync(sortie) ? JSON.parse(fs.readFileSync(sortie, "utf8")) : null };
+  };
+  const serveurs = [];
+  const demarrer = async (...a) => { const s = await faux(...a); serveurs.push(s.srv); return s; };
+  try {
+    // ROUGE · l'épreuve d'arrêt est jouée en dernier : la santé répond 200 dans un autre mode (le cas du 04/11)
+    {
+      const s = await demarrer("/healthz", { volatil: true });
+      const r = await jouer("rouge-arret-en-dernier", s.url, { sante: { ignorer: ["uptime_s"] }, epreuves: [{ nom: "creer", commande: creer }, { nom: "arret", commande: arret }] });
+      ok(r.status === 1 && /« passerelle\.mode » : "normal" au départ, "NO_EXTERNAL_AI" à la fin/.test(r.stderr), `TF-2308 rouge : arrêt joué en dernier, santé encore à 200 -> le gabarit échoue (exit 1) et nomme passerelle.mode, normal -> NO_EXTERNAL_AI (obtenu ${r.status})`);
+      ok(r.releve && r.releve.avant.status === 200 && r.releve.apres.status === 200 && !/code de santé/.test(r.stderr), "TF-2308 rouge : le code de santé est 200 des deux côtés, donc un contrôle du seul code ne verrait rien");
+      ok(r.releve.chemin === "/healthz", "TF-2308 : sans « sante.chemin », la santé se lit à /healthz (défaut du gabarit)");
+      const o = o30(r.sortie);
+      ok(o.verdict === "FAIL" && durs(o).length === 1 && durs(o)[0].sev === "bloquant" && /passerelle\.mode/.test(durs(o)[0].msg), `O30 : le relevé de cet arrêt en dernier -> FAIL bloquant, seul constat, qui nomme passerelle.mode (obtenu ${o.verdict}, ${durs(o).length})`);
+      // Le même test SANS la relecture : on retire l'état de fin du relevé que le gabarit vient de prendre.
+      const sans = { ...r.releve, apres: null };
+      const fSans = path.join(tmp30, "rouge-meme-run-sans-relecture.json"); fs.writeFileSync(fSans, JSON.stringify(sans), "utf8");
+      const oSans = o30(fSans);
+      ok(oSans.verdict === "FAIL" && durs(oSans).length === 1 && /n'a pas été RELU/.test(durs(oSans)[0].msg), `O30 rouge : le même run sans relecture finale -> FAIL, « n'a pas été RELU » (obtenu ${oSans.verdict}, ${durs(oSans).length})`);
+    }
+    // VERT · le remède recommandé : la dernière épreuve remet l'état de départ (reprise de la passerelle)
+    {
+      const s = await demarrer("/healthz", { volatil: true });
+      const r = await jouer("vert-reprise", s.url, { sante: { ignorer: ["uptime_s"] }, epreuves: [{ nom: "creer", commande: creer }, { nom: "arret", commande: arret }, { nom: "reprise", commande: reprise }] });
+      ok(r.status === 0 && s.etat.mode === "normal", `TF-2308 vert : arrêt puis reprise -> le gabarit passe (exit 0), l'instance est revenue en normal (obtenu ${r.status}, mode ${s.etat.mode})`);
+      const o = o30(r.sortie);
+      ok(o.verdict === "PASS" && durs(o).length === 0, `O30 : le relevé du run avec reprise -> PASS (obtenu ${o.verdict}, ${durs(o).length})`);
+      ok(r.releve.epreuves.length === 3 && Date.parse(r.releve.apres.lu_a) >= Date.parse(r.releve.epreuves[2].fin), "TF-2308 vert : l'état de fin est lu après la fin de la dernière épreuve");
+    }
+    // Champ déclaré : « sante.champs » compare le seul état, une durée de fonctionnement volatile ne fait pas échouer
+    {
+      const s = await demarrer("/healthz", { volatil: true });
+      const ok1 = await jouer("champs-reprise", s.url, { sante: { champs: ["passerelle.mode"] }, epreuves: [{ nom: "arret", commande: arret }, { nom: "reprise", commande: reprise }] });
+      ok(ok1.status === 0 && o30(ok1.sortie).verdict === "PASS", `TF-2308 : champ déclaré (passerelle.mode), uptime_s qui bouge -> PASS (obtenu ${ok1.status})`);
+      const ko = await jouer("champs-arret", s.url, { sante: { champs: ["passerelle.mode"] }, epreuves: [{ nom: "arret", commande: arret }] });
+      ok(ko.status === 1 && o30(ko.sortie).verdict === "FAIL", `TF-2308 : champ déclaré, passerelle.mode change -> échec (obtenu ${ko.status})`);
+      await fetch(`${s.url}/reprise`, { method: "POST" });
+      const nu = await jouer("volatil-non-declare", s.url, { epreuves: [{ nom: "creer", commande: creer }] });
+      ok(nu.status === 1 && /« uptime_s »/.test(nu.stderr), `TF-2308 : un champ volatil non déclaré est un écart nommé, jamais ignoré en silence (obtenu ${nu.status})`);
+    }
+    // Santé qui ne s'expose pas à /healthz : le chemin vient de la configuration du gabarit
+    {
+      const s = await demarrer("/api/health");
+      const r = await jouer("chemin-declare", s.url, { sante: { chemin: "/api/health" }, epreuves: [{ nom: "arret", commande: arret }, { nom: "reprise", commande: reprise }] });
+      ok(r.status === 0 && r.releve.chemin === "/api/health" && o30(r.sortie).verdict === "PASS", `TF-2308 : produit dont la santé est à /api/health, chemin déclaré -> PASS, relevé au bon chemin (obtenu ${r.status})`);
+      const sans = await jouer("chemin-non-declare", s.url, { epreuves: [{ nom: "arret", commande: arret }] });
+      ok(sans.status === 2 && /sante\.chemin/.test(sans.stderr) && sans.releve.epreuves.length === 0 && s.etat.mode === "normal", `TF-2308 : santé introuvable à /healthz -> exit 2 qui nomme « sante.chemin », aucune épreuve jouée, instance intacte (obtenu ${sans.status}, mode ${s.etat.mode})`);
+      const parUrl = await jouer("url-en-argument", "http://127.0.0.1:9", { sante: { chemin: "/api/health" }, epreuves: [{ nom: "arret", commande: arret }, { nom: "reprise", commande: reprise }] }, ["--url", s.url]);
+      ok(parUrl.status === 0, `TF-2308 : --url l'emporte sur la configuration (obtenu ${parUrl.status})`);
+    }
+    // Une épreuve en échec n'empêche pas la relecture : c'est elle qui laisse le plus souvent l'instance à part
+    {
+      const s = await demarrer("/healthz");
+      const r = await jouer("epreuve-en-echec", s.url, { epreuves: [{ nom: "arret-en-echec", commande: arretEnEchec }] });
+      ok(r.status === 1 && r.releve.apres && r.releve.apres.status === 200 && r.releve.epreuves[0].code === 3 && /passerelle\.mode/.test(r.stderr), `TF-2308 : épreuve en échec (code 3) -> l'état de fin est relu quand même et l'écart nommé (obtenu ${r.status})`);
+    }
+    // Instance muette à la fin
+    {
+      const s = await demarrer("/healthz");
+      const r = await jouer("instance-coupee", s.url, { epreuves: [{ nom: "couper", commande: couper }] });
+      ok(r.status === 1 && r.releve.apres.status === null && /illisible/.test(r.stderr), `TF-2308 : l'instance ne répond plus à la fin -> exit 1, état de fin illisible (obtenu ${r.status})`);
+      ok(o30(r.sortie).verdict === "FAIL", "O30 : le relevé d'une instance muette à la fin -> FAIL");
+    }
+    // Usage
+    {
+      const sansConfig = await asynchrone([gabarit30, "--config", path.join(tmp30, "nulle-part.json")]);
+      ok(sansConfig.status === 2 && /configuration illisible/.test(sansConfig.stderr), "TF-2308 : configuration absente -> exit 2");
+      const cfgVide = path.join(tmp30, "vide.config.json"); fs.writeFileSync(cfgVide, JSON.stringify({ url: "http://127.0.0.1:9", epreuves: [] }), "utf8");
+      const sansEpreuve = await asynchrone([gabarit30, "--config", cfgVide]);
+      ok(sansEpreuve.status === 2 && /au moins une épreuve/.test(sansEpreuve.stderr), "TF-2308 : aucune épreuve déclarée -> exit 2 (rien à encadrer)");
+    }
+  } finally {
+    for (const srv of serveurs) { try { srv.closeAllConnections(); srv.close(); } catch { /* déjà coupé */ } }
+  }
+  // Fixtures statiques du juge : une verte, cinq rouges, chacune pour sa raison
+  const fx30 = f => fx(path.join("o30-etat-servi", f));
+  const attendus30 = [
+    ["rouge-sans-relecture.json", "bloquant", /n'a pas été RELU/],
+    ["rouge-etat-change-en-200.json", "bloquant", /« passerelle\.mode » : "normal" au départ, "NO_EXTERNAL_AI" à la fin/],
+    ["rouge-relecture-avant-la-fin.json", "bloquant", /précède la fin de la dernière épreuve/],
+    ["rouge-corps-sans-champ.json", "majeur", /aucun champ comparé/],
+    ["rouge-instance-muette-a-la-fin.json", "bloquant", /état de fin est illisible/],
+  ];
+  const vert30 = o30(fx30("verte.json"));
+  ok(vert30.verdict === "PASS" && durs(vert30).length === 0, `O30 : verte.json (reprise jouée, uptime_s ignoré) -> PASS (obtenu ${vert30.verdict}, ${durs(vert30).length})`);
+  for (const [f, sev, motif] of attendus30) {
+    const r = o30(fx30(f));
+    ok(r.verdict === "FAIL" && durs(r).length === 1 && durs(r)[0].sev === sev && motif.test(durs(r)[0].msg), `O30 : ${f} -> FAIL ${sev}, seul constat, pour la bonne raison (obtenu ${r.verdict}, ${durs(r).length})`);
+  }
+  ok(o30(path.join(tmp30, "absent.json")).verdict === "SKIP", "O30 borne : relevé introuvable -> SKIP");
+  const illisible = path.join(tmp30, "illisible.json"); fs.writeFileSync(illisible, "{pas du json", "utf8");
+  ok(o30(illisible).verdict === "FAIL", "O30 borne : relevé illisible -> FAIL, jamais PASS");
+  const autreFormat = path.join(tmp30, "autre-format.json"); fs.writeFileSync(autreFormat, JSON.stringify({ format: "autre@1" }), "utf8");
+  ok(o30(autreFormat).verdict === "FAIL", "O30 borne : format inconnu -> FAIL");
+  // La comparaison elle-même
+  ok(gab30.comparerEtats("OK", "OK").ecarts.length === 0 && gab30.comparerEtats("OK", "DEGRADE").ecarts.length === 1, "TF-2308 : un corps de santé en texte brut se compare tel quel");
+  ok(gab30.comparerEtats({ a: { b: 1 } }, { a: { b: 1 } }, { champs: ["x.y"] }).compares === 0, "TF-2308 : un champ déclaré absent des deux côtés ne compte pas comme comparé");
+  ok(lib30.jugerEtatServi(JSON.parse(fs.readFileSync(fx30("verte.json"), "utf8"))).constats.every(c => c.sev === "info"), "TF-2308 : le juge de la fixture verte ne rend que de l'information");
+  fs.rmSync(tmp30, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  // Loi n° 1 : le gabarit, l'oracle et la règle sont appelés ; l'en-tête de l'oracle dit O30.
+  const lire30 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lire30(f); return t.includes("--etat-servi") && t.includes("smoke-mise-en-production.mjs") && t.includes("TF-2308") && t.includes("sante.chemin"); }), "TF-2308 : le gabarit, l'oracle et le chemin de santé configurable sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(/O30 --etat-servi/.test(lire30("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2308 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

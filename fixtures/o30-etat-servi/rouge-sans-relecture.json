@@ -1,0 +1,13 @@
+{
+  "format": "forge-ops/etat-servi@1",
+  "url": "http://127.0.0.1:8000",
+  "chemin": "/healthz",
+  "champs": [],
+  "ignorer": ["uptime_s"],
+  "avant": { "lu_a": "2026-11-09T10:00:00.000Z", "status": 200, "corps": { "statut": "ok", "passerelle": { "mode": "normal" }, "uptime_s": 41 } },
+  "epreuves": [
+    { "nom": "creation-de-mission", "code": 0, "debut": "2026-11-09T10:00:01.000Z", "fin": "2026-11-09T10:00:02.000Z" },
+    { "nom": "arret-de-mission", "code": 0, "debut": "2026-11-09T10:00:02.000Z", "fin": "2026-11-09T10:00:03.000Z" }
+  ],
+  "apres": null
+}

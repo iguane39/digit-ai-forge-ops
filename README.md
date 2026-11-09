@@ -129,6 +129,11 @@ node oracles/oracle-ops.mjs --identifiants-test identifiants-test.json --journal
 node scripts/version-servie.mjs lire https://<instance> --attendu <commit> --sortie version-servie.json   # exit 0 lu · 1 autre version · 2 illisible
 node oracles/oracle-ops.mjs --version-servie version-servie.json --depot <dossier-git> [--attendu <commit>]   # O-26 : un commit du dépôt
 
+# Test de mise en production qui relit l'état servi à sa fin (TF-2308) : le gabarit lit la santé, joue les épreuves, la relit, échoue
+# si le corps de la réponse a changé (un 200 en mode dégradé ne passe pas). Santé à /healthz par défaut, sinon « sante.chemin » du smoke.config.json
+node gabarits/smoke-mise-en-production.mjs --config smoke.config.json --sortie etat-servi.json   # exit 0 identique · 1 état changé · 2 départ illisible
+node oracles/oracle-ops.mjs --etat-servi etat-servi.json                                          # O-30 : relecture présente, après la dernière épreuve, état identique
+
 # Inventaire des composants à jour (TF-2209) : COMPOSANTS-OPS.md comparé aux sorties d'état de la MEP, « prêt » refusé sur un
 # composant présent non inventorié. Exemple : fixtures/o27-inventaire-a-jour/ (verte et périmée, trois sorties d'état)
 terraform state list > etat-terraform.txt ; docker ps --format "{{.Names}}" > etat-docker.txt ; az resource list -g <groupe> -o json > etat-azure.json
@@ -214,6 +219,7 @@ FORGE_OPS_EXERCICE_TERRAFORM=1 node oracles/self-test.mjs
 | O27 | `--inventaire-a-jour <COMPOSANTS-OPS.md> --etat <genre>:<fichier> [--etat …]` : chaque composant que les sorties d'état nomment (`terraform state list`, `docker ps`, `az resource list`, export `noms`) figure mot pour mot dans l'inventaire ; un composant présent et non inventorié refuse « prêt » (FAIL) ; sans sortie d'état : SKIP. Le plan azure le rejoue à la MEP (TF-2209) |
 | O28 | `--reglages-plateforme <releve.json> [--registre <fichier>] [--ecarts <fichier>]` : chaque réglage des plateformes déclarées (Supabase, GitHub, Cloudflare) est lu et conforme à l'`attendu` du registre du pilot (`references/REGLAGES-SURS-PAR-DEFAUT.json`, lu par `$FORGE_ROOT`) ; un réglage non lu, en échec de lecture ou hors de son attendu sans décision enregistrée refuse « prêt » avant la MEP ; un écart décidé (`--ecarts` : mots, date, valeur lue acceptée) se vérifie tel que décidé. Le relevé se prend par `scripts/relever-reglages.mjs` (lecture seule) ; le plan `supabase` déclare `supabase db push` incompatible avec la restriction réseau depuis un exécuteur hébergé (TF-2230, D-178 (a)) |
 | O29 | `--convergence <capture>` : la capture du plan pris juste après l'apply (`terraform show -json <plan>` ou la sortie texte de `terraform plan`) est vide ; un plan qui change encore une ressource refuse la chaîne (une ressource par constat, avec ses attributs et `terraform apply -replace='<adresse>'`), une capture illisible aussi. La capture se prend par `scripts/convergence-terraform.mjs verifier <pile>` (TF-2271, lot Produit-86 20261106a RP-44) |
+| O30 | `--etat-servi <releve.json>` : le relevé que prend `gabarits/smoke-mise-en-production.mjs` prouve que l'état servi a été lu avant les épreuves, relu après la dernière, et que le corps de la réponse de santé (`sante.chemin` du gabarit, `/healthz` par défaut) ou les champs déclarés (`sante.champs`) sont identiques ; une relecture absente ou antérieure à la dernière épreuve, un champ changé, une instance muette à la fin sont bloquants, une réponse sans champ comparé est majeure (TF-2308, lot Produit-86 20261109a RP-53) |
 
 `non_juge` déclaré : santé applicative au-delà du healthcheck, GO production (humain),
 supervision continue, secrets/config d'environnement.
