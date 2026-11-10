@@ -1,0 +1,7 @@
+Error: Unable to update project settings
+
+  with supabase_settings.projet,
+  on main.tf line 14, in resource "supabase_settings" "projet":
+  14: resource "supabase_settings" "projet" {
+
+Project Services Unhealthy ... unhealthy service realtime

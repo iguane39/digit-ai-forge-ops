@@ -151,6 +151,12 @@ node scripts/convergence-terraform.mjs verifier <pile> --sortie plan-apres-apply
 node scripts/convergence-terraform.mjs converger <pile> [--executer]                   # sans --executer, la commande `terraform apply -replace=…` est écrite, rien n'est appliqué
 node oracles/oracle-ops.mjs --convergence plan-apres-apply.json                        # O-29 : un plan non vide refuse la chaîne, une ressource par constat
 
+# Application d'une pile Terraform qui pose des réglages Supabase (TF-2312) : la santé du projet est sondée AVANT l'apply, et l'erreur de santé
+# du fournisseur (« Project Services Unhealthy ») est relancée de façon bornée, jamais une autre erreur. Désactiver realtime reste au produit
+node scripts/appliquer-terraform.mjs <pile> --projet <ref>                              # sans --executer : les gestes sont écrits, rien n'est appelé ni appliqué
+node scripts/appliquer-terraform.mjs <pile> --projet <ref> --executer [--relances 3] [--attente 120]   # exit 0 appliqué · 1 projet malsain · 2 sonde ou Terraform en échec
+node scripts/appliquer-terraform.mjs <pile> --sans-sonde --executer                    # choix écrit : la santé n'est pas lue avant l'apply (SUPABASE_ACCESS_TOKEN sinon)
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
@@ -159,6 +165,7 @@ node oracles/self-test.mjs
 # ... plus l'exercice réel de reinitialiser-base sur un conteneur postgres:16-alpine jetable, créé puis détruit
 FORGE_OPS_EXERCICE_DOCKER=1 node oracles/self-test.mjs
 # ... plus l'exercice réel de convergence-terraform (init, apply, plan non vide, remplacement forcé) sur une pile terraform_data, sans réseau
+# ... l'exercice couvre aussi appliquer-terraform (erreur de santé relancée, borne tenue, erreur de validation sans relance)
 FORGE_OPS_EXERCICE_TERRAFORM=1 node oracles/self-test.mjs
 ```
 

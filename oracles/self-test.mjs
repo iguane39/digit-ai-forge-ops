@@ -3160,5 +3160,217 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(/O30 --etat-servi/.test(lire30("oracles/oracle-ops.mjs").split("import fs")[0]), "TF-2308 : la règle figure à l'en-tête d'oracle-ops.mjs, seule source de la liste des règles");
 }
 
+// ── TF-2312 (Produit-84, lot 20261109b, ledger seq 264) : L'APPLICATION TERRAFORM SONDE LA SANTÉ AVANT D'APPLIQUER ET RELANCE DE FAÇON BORNÉE ─
+// Le fait : le 09/11/2026, la pose des limites d'Auth par `supabase_settings` a échoué sur « Project Services Unhealthy … unhealthy
+// service realtime » (le fournisseur attend la santé de TOUS les services après chaque modification), puis passé à la relance
+// 5 minutes plus tard ; sur le projet de qualification, realtime est UNHEALTHY de façon durable. Décision : l'application relance de
+// façon bornée sur cette seule erreur et sonde la santé avant d'appliquer ; désactiver realtime reste au produit.
+// Aucun appel à un fournisseur réel : Terraform est injecté (lib) ou joué sur une pile `terraform_data` (exercice à la demande),
+// l'API de gestion est un faux serveur sur la boucle locale. Le texte exact de l'erreur n'est cité que par ses mots du ticket.
+{
+  console.log("");
+  console.log("TF-2312 — application Terraform : sonde de santé avant, relance bornée sur l'erreur de santé\n");
+  const lib31 = await import("../scripts/lib-application.mjs");
+  const http31 = await import("node:http");
+  const { spawn: spawn31 } = await import("node:child_process");
+  const fx31 = f => fx(path.join("appliquer-terraform", f));
+  const lire31 = f => fs.readFileSync(fx31(f), "utf8");
+  const msgSante = lire31("erreur-sante.txt"), msgAutre = lire31("erreur-autre.txt");
+  const REF = "abcdefghijklmnopqrst", JETON = "jeton-fictif-tf2312";
+  const tmp31 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2312-"));
+  const BASE = "http://127.0.0.1:1";
+
+  // Terraform injecté : une suite de réponses ({ status, stderr }), la dernière se répète ; chaque appel est gardé.
+  const fauxTf = (suite) => { const appels = []; return { appels, lancer: a => { appels.push(a); const r = suite[Math.min(appels.length - 1, suite.length - 1)]; return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" }; } }; };
+  const OK = { status: 0 }, SANTE = { status: 1, stderr: msgSante }, AUTRE = { status: 1, stderr: msgAutre };
+  // Une sonde qui rend, lecture après lecture, les corps de fixtures donnés (la dernière se répète).
+  const fauxSonde = (corps) => { const lectures = []; const sonder = () => sonderAvec(corps[Math.min(lectures.length, corps.length - 1)], lectures); return { lectures, sonder }; };
+  const sonderAvec = (c, lectures) => { lectures.push(c); return lib31.sonderSante({ projet: REF, jeton: JETON, base: BASE, appeler: async () => (typeof c === "string" ? { status: 200, corps: lire31(c) } : c) }); };
+  const dormirFaux = () => { const ms = []; return { ms, dormir: async (x) => { ms.push(x); } }; };
+  const SAINE = "sante-saine.json", MALSAIN = "sante-realtime-malsain.json", DEMARRE = "sante-realtime-demarre.json";
+
+  // 1) Le message du fournisseur : reconnu, service nommé ; une autre erreur n'est pas une erreur de santé.
+  ok(lib31.erreurDeSante({ stderr: msgSante }) && lib31.erreurDeSante({ stdout: "Error: Project Services Unhealthy" }) && lib31.erreurDeSante({ stderr: "unhealthy service auth" }), "TF-2312 : « Project Services Unhealthy » / « unhealthy service » reconnu, sur stderr comme sur stdout");
+  ok(!lib31.erreurDeSante({ stderr: msgAutre }) && !lib31.erreurDeSante({ stderr: "" }) && !lib31.erreurDeSante({}), "TF-2312 ROUGE : une erreur de validation, une sortie vide -> pas une erreur de santé");
+  ok(JSON.stringify(lib31.servicesDuMessage(msgSante)) === '["realtime"]' && lib31.servicesDuMessage("unhealthy services: realtime, auth.").join() === "realtime,auth" && lib31.servicesDuMessage(msgAutre).length === 0, "TF-2312 : le service malsain du message est nommé (realtime), plusieurs se lisent, aucun si le message n'en dit pas");
+
+  // 2) La sonde : l'adresse, l'en-tête, les lectures.
+  {
+    const vues = [];
+    const appeler = async (url, entetes) => { vues.push({ url, entetes }); return { status: 200, corps: lire31(SAINE) }; };
+    const s = await lib31.sonderSante({ projet: REF, jeton: JETON, base: "https://api.exemple.test/", appeler });
+    ok(s.etat === "sain" && s.services.length === 6, "TF-2312 sonde VERTE : six services ACTIVE_HEALTHY -> sain");
+    ok(vues[0].url === `https://api.exemple.test/v1/projects/${REF}/health?services=auth&services=db&services=pooler&services=realtime&services=rest&services=storage`, `TF-2312 sonde : GET /v1/projects/<ref>/health?services=… sur l'API de gestion (obtenu ${vues[0].url})`);
+    ok(vues[0].entetes.Authorization === `Bearer ${JETON}` && !JSON.stringify(s).includes(JETON), "TF-2312 sonde : le jeton part dans l'en-tête et ne figure dans aucun résultat");
+    const m = await sonderAvec(MALSAIN, []);
+    ok(m.etat === "malsain" && /realtime \(UNHEALTHY\)/.test(m.detail) && m.services.filter(x => !x.sain).length === 1, "TF-2312 sonde ROUGE : realtime UNHEALTHY (cas du projet de qualification) -> malsain, realtime nommé");
+    const d = await sonderAvec(DEMARRE, []);
+    ok(d.etat === "malsain" && /realtime \(COMING_UP\)/.test(d.detail), "TF-2312 sonde : COMING_UP n'est pas sain (le service démarre, la relecture dira)");
+    const sansStatut = await lib31.sonderSante({ projet: REF, jeton: JETON, base: BASE, appeler: async () => ({ status: 200, corps: JSON.stringify(["auth", "db", "pooler", "realtime", "rest", "storage"].map(name => ({ name, healthy: name !== "db" }))) }) });
+    ok(sansStatut.etat === "malsain" && /db/.test(sansStatut.detail), "TF-2312 sonde : sans champ « status », le booléen « healthy » fait foi");
+    const refus = [
+      ["HTTP 401", async () => ({ status: 401, corps: "{}" }), /HTTP 401/],
+      ["tableau vide", async () => ({ status: 200, corps: "[]" }), /vide ou illisible/],
+      ["corps non JSON", async () => ({ status: 200, corps: "<html>" }), /vide ou illisible/],
+      ["service demandé absent", async () => ({ status: 200, corps: JSON.stringify([{ name: "auth", status: "ACTIVE_HEALTHY" }]) }), /absent\(s\) de la réponse/],
+      ["API muette", async () => { throw new Error("ECONNREFUSED"); }, /ne répond pas/],
+    ];
+    for (const [nom, appelerR, motif] of refus) {
+      const r = await lib31.sonderSante({ projet: REF, jeton: JETON, base: BASE, appeler: appelerR });
+      ok(r.etat === "erreur" && motif.test(r.detail), `TF-2312 sonde borne : ${nom} -> erreur dite, jamais « sain » (obtenu ${r.etat})`);
+    }
+    let appele = false;
+    const spy = async () => { appele = true; return { status: 200, corps: lire31(SAINE) }; };
+    const sansJeton = await lib31.sonderSante({ projet: REF, jeton: "", base: BASE, appeler: spy });
+    const mauvaisRef = await lib31.sonderSante({ projet: "../x?y=1", jeton: JETON, base: BASE, appeler: spy });
+    const mauvaisSvc = await lib31.sonderSante({ projet: REF, jeton: JETON, base: BASE, services: ["auth&x=1"], appeler: spy });
+    ok(sansJeton.etat === "erreur" && /SUPABASE_ACCESS_TOKEN/.test(sansJeton.detail) && mauvaisRef.etat === "erreur" && mauvaisSvc.etat === "erreur" && !appele, "TF-2312 sonde borne : jeton absent, référence ou service qui sort du gabarit d'adresse -> erreur avant tout appel");
+  }
+
+  // 3) L'attente bornée : N lectures au plus, espacées, qui s'arrêtent à la première lecture saine ou en erreur.
+  {
+    const a = fauxSonde([MALSAIN, DEMARRE, SAINE]); const d = dormirFaux();
+    const r = await lib31.attendreSante({ sonder: a.sonder, lectures: 4, attenteMs: 7000, dormir: d.dormir });
+    ok(r.etat === "sain" && r.lectures === 3 && d.ms.join() === "7000,7000", `TF-2312 attente : malsain, démarre, sain -> 3 lectures, 2 attentes de 7 s (obtenu ${r.lectures} lectures, ${d.ms.join()})`);
+    const b = fauxSonde([MALSAIN]); const d2 = dormirFaux();
+    const r2 = await lib31.attendreSante({ sonder: b.sonder, lectures: 4, attenteMs: 1, dormir: d2.dormir });
+    ok(r2.etat === "malsain" && r2.lectures === 4 && b.lectures.length === 4, `TF-2312 attente ROUGE : realtime durablement UNHEALTHY -> la borne tient, 4 lectures puis malsain (obtenu ${r2.lectures})`);
+    const c = fauxSonde([{ status: 500, corps: "" }, SAINE]); const d3 = dormirFaux();
+    const r3 = await lib31.attendreSante({ sonder: c.sonder, lectures: 4, attenteMs: 1, dormir: d3.dormir });
+    ok(r3.etat === "erreur" && r3.lectures === 1, "TF-2312 attente : une sonde en erreur interrompt à la première lecture, elle ne se rejoue pas jusqu'à obtenir « sain »");
+  }
+
+  // 4) L'application : avant (le défaut) puis après.
+  {
+    // AVANT : l'apply nu de la chaîne, sans relance ni sonde — une seule tentative, échec sur la santé.
+    const nu = fauxTf([SANTE, OK]); const r0 = nu.lancer(["-chdir=pile", "apply", "-input=false", "-no-color", "-auto-approve"]);
+    ok(r0.status === 1 && lib31.erreurDeSante(r0) && nu.appels.length === 1, "TF-2312 AVANT (état de départ) : l'apply nu échoue sur la santé et la chaîne s'arrête là, le relancer à la main fait passer");
+    // a) vert au premier essai
+    { const t = fauxTf([OK]), s = fauxSonde([SAINE]), d = dormirFaux();
+      const r = await lib31.appliquer({ pile: "pile", lancer: t.lancer, sonder: s.sonder, relances: 3, attenteMs: 5, dormir: d.dormir });
+      ok(r.verdict === "applique" && r.code === 0 && r.relances === 0 && t.appels.length === 1 && s.lectures.length === 1 && d.ms.length === 0, "TF-2312 vert : projet sain, apply au premier essai -> appliqué, une sonde, une application, aucune attente"); }
+    // b) l'erreur de santé une fois, puis le succès : UNE relance
+    { const t = fauxTf([SANTE, OK]), s = fauxSonde([SAINE]), d = dormirFaux();
+      const r = await lib31.appliquer({ pile: "pile", lancer: t.lancer, sonder: s.sonder, relances: 3, attenteMs: 5, dormir: d.dormir });
+      ok(r.verdict === "applique" && r.relances === 1 && t.appels.length === 2, `TF-2312 APRÈS : erreur de santé puis succès -> appliqué après 1 relance, 2 applications (obtenu ${r.relances} relance(s), ${t.appels.length} apply)`);
+      ok(s.lectures.length === 2 && r.etapes.map(e => e.etape).join("|") === "sonde avant l'application|application, essai 1|sonde avant la relance 1|application, essai 2", "TF-2312 : la santé est RELUE entre l'échec et la relance (sonde, apply, sonde, apply)"); }
+    // c) l'erreur de santé à chaque essai : la borne tient
+    { const t = fauxTf([SANTE]), s = fauxSonde([SAINE]), d = dormirFaux();
+      const r = await lib31.appliquer({ pile: "pile", lancer: t.lancer, sonder: s.sonder, relances: 3, attenteMs: 5, dormir: d.dormir });
+      ok(r.verdict === "sante-persistante" && r.code === 1 && t.appels.length === 4 && /3 relance\(s\) permise\(s\)/.test(r.constat) && /realtime/.test(r.constat), `TF-2312 ROUGE : l'erreur de santé revient à chaque essai -> 1 + 3 applications puis exit 1 qui nomme realtime (obtenu ${t.appels.length} apply, ${r.verdict})`);
+      const z = fauxTf([SANTE]); const rz = await lib31.appliquer({ pile: "pile", lancer: z.lancer, sonder: fauxSonde([SAINE]).sonder, relances: 0, attenteMs: 5, dormir: dormirFaux().dormir });
+      ok(rz.verdict === "sante-persistante" && z.appels.length === 1, "TF-2312 borne : --relances 0 -> un seul essai, jamais de relance"); }
+    // d) toute autre erreur : aucune relance
+    { const t = fauxTf([AUTRE, OK]), s = fauxSonde([SAINE]), d = dormirFaux();
+      const r = await lib31.appliquer({ pile: "pile", lancer: t.lancer, sonder: s.sonder, relances: 3, attenteMs: 5, dormir: d.dormir });
+      ok(r.verdict === "erreur" && r.code === 2 && t.appels.length === 1 && d.ms.length === 0 && /n'est pas de santé, aucune relance/.test(r.etapes[r.etapes.length - 1].detail), `TF-2312 ROUGE : erreur de validation -> exit 2 au premier essai, aucune relance, aucune attente (obtenu ${t.appels.length} apply)`);
+      const e127 = fauxTf([{ status: 127, stderr: "terraform : ENOENT" }, OK]);
+      ok((await lib31.appliquer({ pile: "pile", lancer: e127.lancer, sonder: fauxSonde([SAINE]).sonder, relances: 3, attenteMs: 5, dormir: dormirFaux().dormir })).code === 2 && e127.appels.length === 1, "TF-2312 ROUGE : Terraform introuvable -> exit 2, pas de relance"); }
+    // e) le projet de qualification : realtime UNHEALTHY durable -> rien n'est appliqué
+    { const t = fauxTf([OK]), s = fauxSonde([MALSAIN]), d = dormirFaux();
+      const r = await lib31.appliquer({ pile: "pile", lancer: t.lancer, sonder: s.sonder, relances: 2, attenteMs: 9, dormir: d.dormir });
+      ok(r.verdict === "sante-refusee" && r.code === 1 && t.appels.length === 0 && s.lectures.length === 3 && d.ms.join() === "9,9", `TF-2312 ROUGE : realtime UNHEALTHY durable avant l'apply -> exit 1, AUCUN apply, 3 lectures puis refus (obtenu ${t.appels.length} apply, ${s.lectures.length} lectures)`);
+      ok(/realtime/.test(r.constat) && /SA décision/.test(r.constat) && /la forge ne le fait pas/.test(r.constat), "TF-2312 : le constat nomme realtime et laisse au produit la décision de le désactiver"); }
+    // f) le service revient pendant l'attente de la sonde d'ouverture
+    { const t = fauxTf([OK]), s = fauxSonde([MALSAIN, DEMARRE, SAINE]), d = dormirFaux();
+      const r = await lib31.appliquer({ pile: "pile", lancer: t.lancer, sonder: s.sonder, relances: 3, attenteMs: 5, dormir: d.dormir });
+      ok(r.verdict === "applique" && s.lectures.length === 3 && t.appels.length === 1, "TF-2312 VERT : realtime malsain puis démarre puis sain pendant l'attente de la sonde -> l'apply part ensuite, une fois"); }
+    // g) la sonde est en erreur : rien n'est appliqué, rien n'est deviné
+    { const t = fauxTf([OK]), s = fauxSonde([{ status: 401, corps: "{}" }]);
+      const r = await lib31.appliquer({ pile: "pile", lancer: t.lancer, sonder: s.sonder, relances: 3, attenteMs: 5, dormir: dormirFaux().dormir });
+      ok(r.verdict === "erreur" && r.code === 2 && t.appels.length === 0 && /HTTP 401/.test(r.constat), "TF-2312 ROUGE : sonde refusée (HTTP 401) -> exit 2, aucun apply : on n'applique pas sur une santé qu'on ne sait pas lire"); }
+    // h) la santé se dégrade entre deux essais et ne revient pas : pas de relance à l'aveugle
+    { const t = fauxTf([SANTE, OK]), s = fauxSonde([SAINE, MALSAIN]);
+      const r = await lib31.appliquer({ pile: "pile", lancer: t.lancer, sonder: s.sonder, relances: 1, attenteMs: 5, dormir: dormirFaux().dormir });
+      ok(r.verdict === "sante-persistante" && t.appels.length === 1, "TF-2312 ROUGE : la santé relue après l'échec reste malsaine jusqu'à la borne -> pas de seconde application"); }
+    // i) sans sonde : dit, et la relance attend sans lire
+    { const t = fauxTf([SANTE, OK]), d = dormirFaux();
+      const r = await lib31.appliquer({ pile: "pile", lancer: t.lancer, sonder: null, relances: 3, attenteMs: 4000, dormir: d.dormir });
+      ok(r.verdict === "applique" && r.relances === 1 && d.ms.join() === "4000" && r.etapes[0].etat === "non-jouee" && /--sans-sonde/.test(r.etapes[0].detail), "TF-2312 : --sans-sonde -> la sonde non jouée est dite à l'étape 1, la relance attend sans la lire"); }
+    // j) l'essai à blanc écrit les gestes
+    { const g = lib31.gestesPrevus({ pile: "pile", projet: REF, relances: 3, attenteS: 120, services: lib31.SERVICES_PAR_DEFAUT }).join("\n");
+      ok(/GET \/v1\/projects\/abcdefghijklmnopqrst\/health/.test(g) && /terraform -chdir=pile apply/.test(g) && /au plus 3/.test(g) && /rien n'est appliqué/.test(g), "TF-2312 plan-first : les gestes (sonde, apply, relances) sont écrits avec leurs bornes"); }
+  }
+
+  // 5) La ligne de commande : usages refusés, plan-first, API locale (jamais un fournisseur réel).
+  {
+    const cli = path.join(ici, "..", "scripts", "appliquer-terraform.mjs");
+    const jouer = (a, env = {}) => new Promise((resolve) => {
+      const p = spawn31(process.execPath, [cli, ...a], { env: { ...process.env, SUPABASE_ACCESS_TOKEN: JETON, ...env } });
+      let out = ""; p.stdout.on("data", d => out += d); p.stderr.on("data", d => out += d);
+      p.on("close", status => resolve({ status, out }));
+    });
+    const pile31 = path.join(tmp31, "pile"); fs.mkdirSync(pile31);
+    const TF_ABSENT = path.join(tmp31, "terraform-absent");
+    let reponse = SAINE, hits = 0;
+    const serveur = http31.createServer((req, res) => {
+      hits++;
+      if (!req.url.startsWith(`/v1/projects/${REF}/health`) || req.headers.authorization !== `Bearer ${JETON}`) { res.writeHead(401); res.end("{}"); return; }
+      res.writeHead(200, { "content-type": "application/json" }); res.end(lire31(reponse));
+    });
+    await new Promise(r => serveur.listen(0, "127.0.0.1", r));
+    const API = `http://127.0.0.1:${serveur.address().port}`;
+    try {
+      const u1 = await jouer([]); const u2 = await jouer([pile31]); const u3 = await jouer([pile31, "--projet", REF, "--sans-sonde"]); const u4 = await jouer([path.join(tmp31, "nulle-part"), "--sans-sonde"]);
+      ok(u1.status === 2 && /usage/.test(u1.out) && u2.status === 2 && /ni --projet/.test(u2.out) && u3.status === 2 && /se contredisent/.test(u3.out) && u4.status === 2 && /introuvable/.test(u4.out), "TF-2312 CLI : sans pile, sans choix de sonde, avec les deux, pile introuvable -> exit 2");
+      const u5 = await jouer([pile31, "--sans-sonde", "--relances", "x"]); const u6 = await jouer([pile31, "--sans-sonde", "--relances", "11"]);
+      ok(u5.status === 2 && u6.status === 2 && /borne est de 10/.test(u6.out), "TF-2312 CLI : --relances non entier ou au-delà de 10 -> exit 2");
+      const u7 = await jouer([pile31, "--projet", REF, "--executer"], { FORGE_OPS_SUPABASE_API: "http://exemple.test" });
+      ok(u7.status === 2 && /https/.test(u7.out), "TF-2312 CLI : une API de gestion en http hors boucle locale est refusée (le jeton ne part pas en clair)");
+      const pf = await jouer([pile31, "--projet", REF], { FORGE_OPS_SUPABASE_API: API, FORGE_OPS_TERRAFORM: TF_ABSENT });
+      ok(pf.status === 0 && /plan-first/.test(pf.out) && /GET \/v1\/projects/.test(pf.out) && hits === 0, `TF-2312 CLI plan-first : sans --executer, les gestes sont écrits, l'API n'est pas appelée (${hits} appel), Terraform non lancé`);
+      // sonde malsaine : exit 1, rien appliqué (Terraform absent : s'il était lancé, ce serait exit 2)
+      reponse = MALSAIN; hits = 0;
+      const m = await jouer([pile31, "--projet", REF, "--executer", "--relances", "1", "--attente", "0"], { FORGE_OPS_SUPABASE_API: API, FORGE_OPS_TERRAFORM: TF_ABSENT });
+      ok(m.status === 1 && /rien n'a été appliqué/.test(m.out) && /realtime/.test(m.out) && hits === 2 && !/terraform-absent/.test(m.out), `TF-2312 CLI ROUGE : realtime UNHEALTHY -> exit 1, rien appliqué, 2 lectures (relances 1 + 1), Terraform non lancé (obtenu exit ${m.status}, ${hits} lectures)`);
+      ok(!m.out.includes(JETON), "TF-2312 CLI : le jeton n'apparaît jamais dans la sortie");
+      // sonde saine, Terraform absent : l'apply est bien tenté (exit 2 qui nomme l'exécutable), sans relance
+      reponse = SAINE;
+      const s = await jouer([pile31, "--projet", REF, "--executer", "--attente", "0"], { FORGE_OPS_SUPABASE_API: API, FORGE_OPS_TERRAFORM: TF_ABSENT });
+      ok(s.status === 2 && /terraform-absent/.test(s.out) && /aucune relance/.test(s.out), `TF-2312 CLI VERT : projet sain -> l'apply est tenté ; Terraform absent -> exit 2 qui le dit, sans relance (obtenu ${s.status})`);
+      const j = await jouer([pile31, "--projet", REF, "--executer", "--attente", "0"], { FORGE_OPS_SUPABASE_API: API, FORGE_OPS_TERRAFORM: TF_ABSENT, SUPABASE_ACCESS_TOKEN: "mauvais" });
+      ok(j.status === 2 && /HTTP 401/.test(j.out) && !/terraform-absent/.test(j.out), "TF-2312 CLI ROUGE : jeton refusé par l'API (401) -> exit 2, Terraform non lancé");
+      const sj = await jouer([pile31, "--projet", REF, "--executer", "--attente", "0"], { FORGE_OPS_SUPABASE_API: API, FORGE_OPS_TERRAFORM: TF_ABSENT, SUPABASE_ACCESS_TOKEN: "" });
+      ok(sj.status === 2 && /SUPABASE_ACCESS_TOKEN/.test(sj.out), "TF-2312 CLI ROUGE : jeton absent de l'environnement -> exit 2 qui nomme la variable");
+
+      // L'exercice réel avec Terraform : à la demande, sur une pile terraform_data dont le provisionneur local échoue N fois avec l'erreur de santé.
+      if (process.env.FORGE_OPS_EXERCICE_TERRAFORM === "1") {
+        fs.writeFileSync(path.join(pile31, "main.tf"), 'resource "terraform_data" "reglages" {\n  provisioner "local-exec" {\n    command = "node ${path.module}/faux.mjs"\n  }\n}\n', "utf8");
+        fs.writeFileSync(path.join(pile31, "faux.mjs"), [
+          'import fs from "node:fs"; import path from "node:path"; import { fileURLToPath } from "node:url";',
+          'const d = path.dirname(fileURLToPath(import.meta.url)); const lire = (f, v) => { try { return fs.readFileSync(path.join(d, f), "utf8").trim(); } catch { return v; } };',
+          'const n = Number(lire("compteur.txt", "0")) + 1; fs.writeFileSync(path.join(d, "compteur.txt"), String(n));',
+          'const echecs = Number(lire("echecs.txt", "0")), genre = lire("genre.txt", "sante");',
+          'if (n <= echecs) { process.stderr.write(fs.readFileSync(path.join(d, genre === "sante" ? "erreur-sante.txt" : "erreur-autre.txt"), "utf8")); process.exit(1); }', ""].join("\n"), "utf8");
+        fs.copyFileSync(fx31("erreur-sante.txt"), path.join(pile31, "erreur-sante.txt")); fs.copyFileSync(fx31("erreur-autre.txt"), path.join(pile31, "erreur-autre.txt"));
+        const tf = (...a) => spawnSync("terraform", [`-chdir=${pile31}`, ...a, "-input=false", "-no-color"], { encoding: "utf8", timeout: 600000 });
+        const reinit = (echecs, genre = "sante") => { fs.rmSync(path.join(pile31, "terraform.tfstate"), { force: true }); fs.rmSync(path.join(pile31, "terraform.tfstate.backup"), { force: true }); fs.writeFileSync(path.join(pile31, "compteur.txt"), "0"); fs.writeFileSync(path.join(pile31, "echecs.txt"), String(echecs)); fs.writeFileSync(path.join(pile31, "genre.txt"), genre); };
+        const compteur = () => Number(fs.readFileSync(path.join(pile31, "compteur.txt"), "utf8"));
+        ok(tf("init").status === 0, "EXERCICE Terraform (TF-2312) : init de la pile terraform_data + local-exec");
+        reinit(0);
+        const nuAvant = (() => { reinit(1); const r = tf("apply", "-auto-approve"); return { status: r.status, sante: lib31.erreurDeSante(r), n: compteur() }; })();
+        ok(nuAvant.status !== 0 && nuAvant.sante && nuAvant.n === 1, `EXERCICE Terraform AVANT : l'apply nu échoue avec l'erreur de santé, le message traverse le provisionneur (exit ${nuAvant.status}, ${nuAvant.n} essai)`);
+        reinit(2);
+        const v = await jouer([pile31, "--sans-sonde", "--executer", "--relances", "3", "--attente", "0"], { FORGE_OPS_SUPABASE_API: API });
+        ok(v.status === 0 && compteur() === 3 && /après 2 relance\(s\)/.test(v.out), `EXERCICE Terraform APRÈS : 2 échecs de santé puis le succès -> exit 0 après 2 relances, 3 essais (exit ${v.status}, ${compteur()} essais)`);
+        reinit(99);
+        const p = await jouer([pile31, "--sans-sonde", "--executer", "--relances", "2", "--attente", "0"], {});
+        ok(p.status === 1 && compteur() === 3 && /NON ABOUTIE/.test(p.out) && /realtime/.test(p.out), `EXERCICE Terraform ROUGE : l'erreur de santé ne passe jamais -> la borne tient, 1 + 2 essais, exit 1 qui nomme realtime (exit ${p.status}, ${compteur()} essais)`);
+        reinit(99, "autre");
+        const a = await jouer([pile31, "--sans-sonde", "--executer", "--relances", "3", "--attente", "0"], {});
+        ok(a.status === 2 && compteur() === 1, `EXERCICE Terraform ROUGE : erreur de validation -> exit 2, un seul essai, aucune relance (exit ${a.status}, ${compteur()} essai)`);
+        reinit(1); reponse = SAINE;
+        const sonde = await jouer([pile31, "--projet", REF, "--executer", "--relances", "3", "--attente", "0"], { FORGE_OPS_SUPABASE_API: API });
+        ok(sonde.status === 0 && compteur() === 2 && /sonde avant la relance 1/.test(sonde.out), `EXERCICE Terraform avec sonde : la santé est lue avant l'apply puis entre l'échec et la relance, exit 0 (exit ${sonde.status}, ${compteur()} essais)`);
+      }
+    } finally { serveur.closeAllConnections?.(); serveur.close(); fs.rmSync(tmp31, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+  }
+
+  // Loi n° 1 : l'outil et la règle sont appelés depuis la documentation de la forge.
+  const lireDoc31 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lireDoc31(f); return t.includes("appliquer-terraform.mjs") && t.includes("TF-2312") && t.includes("--sans-sonde"); }), "TF-2312 : l'outil et la règle sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(/appliquer-terraform\.mjs/.test(lireDoc31("references/GESTES-EXPLOITATION.md")) && /G-06/.test(lireDoc31("references/GESTES-EXPLOITATION.md")), "TF-2312 : le geste G-06 de GESTES-EXPLOITATION.md nomme l'outil");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

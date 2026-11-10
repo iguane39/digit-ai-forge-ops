@@ -1,0 +1,6 @@
+Error: Invalid value for auth.jwt_exp
+
+  with supabase_settings.projet,
+  on main.tf line 14, in resource "supabase_settings" "projet":
+
+jwt_exp must be between 300 and 604800 seconds

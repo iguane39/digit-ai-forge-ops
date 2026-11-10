@@ -296,6 +296,25 @@ findings,non_juge}`, exit 0/1/2 :
   `fixtures/o30-etat-servi/` ; recette contre un faux service local dont une épreuve bascule l'état. Lacune dite : la porte M-3
   de `ETAPE-MEP.md` du pilot ne cite pas encore ce gabarit.
 
+- **Application Terraform bornée** (TF-2312, lot Produit-84 20261109b, ledger seq 264, classe
+  `attente-fournisseur-sur-service-inutilise`). Ce n'est pas une règle d'oracle mais un outil : `node
+  scripts/appliquer-terraform.mjs <pile> (--projet <ref> | --sans-sonde) [--executer] [--relances N] [--attente S]`. Le fournisseur
+  Supabase attend la santé de TOUS les services du projet après chaque modification (`supabase_settings` compris) : le 09/11/2026,
+  une chaîne a échoué sur « Project Services Unhealthy … unhealthy service realtime » et passé à la relance 5 minutes plus tard ;
+  sur le projet de qualification, realtime est UNHEALTHY de façon durable. L'outil (1) SONDE avant d'appliquer :
+  `GET /v1/projects/<ref>/health?services=…` (API de gestion, HTTPS, lecture seule, jeton dans `SUPABASE_ACCESS_TOKEN` du run, jamais
+  en argument), au plus N+1 lectures espacées de S secondes (défaut N = 3, S = 120) ; un projet encore malsain après la borne n'est
+  PAS appliqué (exit 1, le service nommé) ; une sonde en erreur (401, réponse vide) n'est jamais lue comme « sain » (exit 2) ;
+  (2) applique, et (3) ne relance QUE sur l'erreur de santé, au plus N fois, en relisant la santé entre deux essais ; toute autre erreur
+  de Terraform s'arrête au premier essai (exit 2). `--sans-sonde` est un choix écrit : la sonde non jouée est dite à la première
+  étape, la relance attend S secondes sans lire. Sans `--executer`, les gestes sont écrits et rien n'est appelé : l'application d'une
+  pile sur un service hébergé se joue sous le GO du run (R-38). Désactiver realtime quand le produit ne l'utilise pas reste la décision
+  du produit : la sortie la nomme, l'outil ne la prend jamais. Recette : `oracles/self-test.mjs` (faux serveur de santé sur la boucle
+  locale, fixtures `fixtures/appliquer-terraform/`), plus l'exercice réel `FORGE_OPS_EXERCICE_TERRAFORM=1` sur une pile
+  `terraform_data` dont le provisionneur local échoue N fois avec l'erreur de santé. Lacune dite : la liste des services et les statuts
+  (`ACTIVE_HEALTHY`, `COMING_UP`, `UNHEALTHY`) sont lus au rapport du lot et à la référence de l'API de gestion, non rejoués ici
+  (aucun appel au fournisseur) ; le texte exact de l'erreur n'est connu que par ses mots du rapport. Geste : `references/GESTES-EXPLOITATION.md` G-06.
+
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·
 l'EXERCICE d'un travail planifié (O-8 lit des définitions, pas des passages) et les
