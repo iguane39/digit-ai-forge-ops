@@ -311,9 +311,28 @@ findings,non_juge}`, exit 0/1/2 :
   pile sur un service hébergé se joue sous le GO du run (R-38). Désactiver realtime quand le produit ne l'utilise pas reste la décision
   du produit : la sortie la nomme, l'outil ne la prend jamais. Recette : `oracles/self-test.mjs` (faux serveur de santé sur la boucle
   locale, fixtures `fixtures/appliquer-terraform/`), plus l'exercice réel `FORGE_OPS_EXERCICE_TERRAFORM=1` sur une pile
-  `terraform_data` dont le provisionneur local échoue N fois avec l'erreur de santé. Lacune dite : la liste des services et les statuts
-  (`ACTIVE_HEALTHY`, `COMING_UP`, `UNHEALTHY`) sont lus au rapport du lot et à la référence de l'API de gestion, non rejoués ici
-  (aucun appel au fournisseur) ; le texte exact de l'erreur n'est connu que par ses mots du rapport. Geste : `references/GESTES-EXPLOITATION.md` G-06.
+  `terraform_data` dont le provisionneur local échoue N fois avec l'erreur de santé. Statuts rejoués le 12/11/2026 (TF-2397) : la liste
+  des services et les statuts (`ACTIVE_HEALTHY`, `COMING_UP`, `UNHEALTHY`, `healthy` déprécié) sont relus sur la référence publique de
+  l'API de gestion (`v1-get-services-health`, sans jeton), gardés en `fixtures/appliquer-terraform/api-sante-statuts.json` et rejoués
+  par la recette. Lacune dite : le texte exact de l'erreur n'est connu que par ses mots du rapport. Geste : `references/GESTES-EXPLOITATION.md` G-06.
+
+- **O31** `--application-terraform <racine ou fichier de chaîne> [--racine <dépôt>] [--releve <application.json>]` (TF-2397, suite de
+  TF-2312, classe `controle-ecrit-non-cable-a-son-etape`). Une chaîne qui garde son `terraform apply` direct contre une pile qui pose
+  `supabase_settings` retombe sur « Project Services Unhealthy », et rien ne la voyait. L'outil écrit désormais son relevé
+  `forge-ops/application@1` par `--sortie <fichier>` (pile, choix de sonde, étapes, verdict, dernière lecture de santé ; jamais la sortie
+  de Terraform ni le jeton ; écrit aussi en cas d'échec ; le dossier du relevé est vérifié AVANT l'apply). La règle lit les
+  fichiers de chaîne (`.yml`/`.yaml`, `.sh`, `.bash`, `.ps1`, `.cmd`, `.bat`, `.mk`, Makefile) sous la racine : si une pile de la racine
+  pose `supabase_settings` (directement ou par un module local), chaque `terraform` / `tofu` / `terragrunt apply` écrit en direct vers
+  elle est un constat bloquant (fichier:ligne, commande `node <FORGE_OPS>/scripts/appliquer-terraform.mjs <pile> --projet <ref>
+  --executer --sortie application.json`). La pile visée se lit à `-chdir=`, `cd <dossier> &&`, `working-directory:` de l'étape ou des
+  `defaults.run` ; une pile qu'on ne sait pas lire est tenue pour concernée (un faux négatif de sécurité coûte plus qu'un faux positif
+  qu'on lève en nommant la pile) ; un apply direct vers une autre pile est dit hors de la règle. L'outil appelé avec `--executer` sans
+  `--sortie` est majeur (le relevé ne serait jamais écrit) ; `--sans-sonde` est un choix écrit, dit en information. Avec `--releve`,
+  l'oracle juge que l'apply a abouti, que la santé a été lue saine avant, que les étapes sont cohérentes avec le verdict ; un projet
+  refusé (`sante-refusee`), une santé persistante ou une erreur sont bloquants. Aucune pile ne pose `supabase_settings` et aucun relevé : SKIP.
+  Logique : `scripts/lib-application-chaine.mjs`. Fixtures : `fixtures/o31-application-terraform/` (dix chaînes, onze relevés).
+  Lacunes dites : une chaîne configurée hors fichiers de la racine (interface d'un service d'intégration, étape pliée `>`) n'est pas
+  vue ; la porte M de `ETAPE-MEP.md` du pilot ne cite pas encore cette règle.
 
 `non_juge` : santé applicative au-delà du healthcheck déclaré · GO production (humain) ·
 supervision continue · secrets/config d'environnement (jamais transportés par la forge) ·

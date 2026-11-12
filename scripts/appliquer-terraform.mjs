@@ -4,6 +4,8 @@
 //
 //   node scripts/appliquer-terraform.mjs <pile> --projet <ref> [--executer] [--relances N] [--attente S] [--services a,b,c]
 //   node scripts/appliquer-terraform.mjs <pile> --sans-sonde  [--executer] [--relances N] [--attente S]
+//   … [--sortie application.json]   le relevé `forge-ops/application@1` de ce qui a été fait (TF-2397), que
+//                                   `node oracles/oracle-ops.mjs --application-terraform <chaîne> --releve application.json` juge (O-31)
 //
 // Sans --executer (plan-first) : les gestes sont écrits, rien n'est appelé ni appliqué. L'application d'une pile sur un
 // service hébergé est une publication : elle se joue sous le GO du run (R-38).
@@ -22,7 +24,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { setTimeout as attendre } from "node:timers/promises";
-import { appliquer, sonderSante, appelHttp, gestesPrevus, SERVICES_PAR_DEFAUT, RELANCES_PAR_DEFAUT, ATTENTE_PAR_DEFAUT_S } from "./lib-application.mjs";
+import { appliquer, sonderSante, appelHttp, gestesPrevus, construireReleve, SERVICES_PAR_DEFAUT, RELANCES_PAR_DEFAUT, ATTENTE_PAR_DEFAUT_S } from "./lib-application.mjs";
 
 const args = process.argv.slice(2);
 const fail = (m) => { process.stderr.write(`[APPLICATION] ${m}\n`); process.exit(2); };
@@ -50,11 +52,18 @@ const services = valeur("--services") ? valeur("--services").split(",").map(s =>
 const base = process.env.FORGE_OPS_SUPABASE_API || "https://api.supabase.com";
 if (!/^https:\/\//.test(base) && !/^http:\/\/(127\.0\.0\.1|localhost)(:|\/|$)/.test(base)) fail(`FORGE_OPS_SUPABASE_API doit être https (ou http sur la boucle locale) : ${base}`);
 
+const iSortie = args.indexOf("--sortie");
+const sortie = iSortie >= 0 ? args[iSortie + 1] : null;
+if (iSortie >= 0 && (!sortie || sortie.startsWith("--"))) fail("--sortie attend le chemin du relevé à écrire");
+
 if (!args.includes("--executer")) {
   dire("[APPLICATION, plan-first] rien n'est appelé ni appliqué ; gestes que --executer jouerait, sous le GO du run :");
   for (const g of gestesPrevus({ pile, projet, relances, attenteS, services })) dire(`  - ${g}`);
+  if (sortie) dire(`  - relevé : forge-ops/application@1 écrit dans ${sortie} (rien n'est écrit sans --executer)`);
   process.exit(0);
 }
+// Le relevé s'écrit après l'apply : son dossier se vérifie AVANT, pour ne pas appliquer sans pouvoir dire ce qui a été fait.
+if (sortie && !fs.existsSync(path.dirname(path.resolve(sortie)))) fail(`--sortie : le dossier de ${sortie} n'existe pas, rien n'a été appliqué`);
 
 const binaire = process.env.FORGE_OPS_TERRAFORM || "terraform";
 const lancer = (a) => {
@@ -64,8 +73,15 @@ const lancer = (a) => {
 };
 const sonder = sansSonde ? null : () => sonderSante({ projet, jeton: process.env.SUPABASE_ACCESS_TOKEN, base, services, appeler: appelHttp });
 
+const debut = new Date().toISOString();
 const res = await appliquer({ pile, lancer, sonder, relances, attenteMs: attenteS * 1000, dormir: (ms) => attendre(ms) });
 for (const e of res.etapes) dire(`  [${e.etat}] ${e.etape} : ${e.detail}`);
+if (sortie) {
+  try {
+    fs.writeFileSync(path.resolve(sortie), `${JSON.stringify(construireReleve({ pile: args[0], projet, sansSonde, res, debut, fin: new Date().toISOString() }), null, 2)}\n`, "utf8");
+    dire(`[RELEVÉ] forge-ops/application@1 écrit dans ${sortie}`);
+  } catch (e) { process.stderr.write(`[APPLICATION] relevé non écrit dans ${sortie} (${e.code ?? e.message}) : le verdict ci-dessous reste le sien\n`); }
+}
 if (res.verdict === "applique") {
   dire(`[APPLICATION OK] la pile est appliquée${res.relances ? ` après ${res.relances} relance(s) sur l'erreur de santé` : " au premier essai"}`);
   process.exit(0);

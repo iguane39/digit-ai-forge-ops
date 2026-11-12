@@ -3372,5 +3372,197 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(/appliquer-terraform\.mjs/.test(lireDoc31("references/GESTES-EXPLOITATION.md")) && /G-06/.test(lireDoc31("references/GESTES-EXPLOITATION.md")), "TF-2312 : le geste G-06 de GESTES-EXPLOITATION.md nomme l'outil");
 }
 
+// ── TF-2397 (suite de TF-2312, campagne du 12/11/2026) : UNE CHAÎNE QUI POSE supabase_settings PASSE PAR L'OUTIL, ET L'OUTIL ÉCRIT SON RELEVÉ ─
+// Le fait : TF-2312 a livré appliquer-terraform.mjs ; une chaîne qui garde son `terraform apply` direct retombe sur « Project Services
+// Unhealthy » (chaîne de dev du 09/11/2026), et rien dans la forge ne la voyait. Mesure de départ du 12/11/2026 : l'oracle lisait la
+// chaîne comme une cible de release (O1 « COURANT absent ») et l'outil n'écrivait aucun relevé. Décision : l'outil écrit
+// `forge-ops/application@1` (--sortie), la règle O-31 refuse l'apply direct et juge le relevé ; les statuts de santé sont rejoués sur
+// la référence de l'API de gestion avant d'écrire la règle (fixture api-sante-statuts.json, lue le 12/11/2026).
+// Aucun appel à un fournisseur réel : API de gestion simulée sur la boucle locale, Terraform injecté (ou joué sur une pile terraform_data
+// avec FORGE_OPS_EXERCICE_TERRAFORM=1).
+{
+  console.log("");
+  console.log("TF-2397 — O-31 : une chaîne qui pose supabase_settings passe par l'outil sondé, et l'outil écrit son relevé\n");
+  const lib97 = await import("../scripts/lib-application.mjs");
+  const http97 = await import("node:http");
+  const { spawn: spawn97 } = await import("node:child_process");
+  const F97 = fx("o31-application-terraform");
+  const fx97 = f => fx(path.join("appliquer-terraform", f));
+  const R97 = n => path.join(F97, "releves", n);
+  const REF97 = "abcdefghijklmnopqrst", JETON97 = "jeton-fictif-tf2397";
+  const tmp97 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2397-"));
+  const o31 = (args) => {
+    const r = spawnSync(process.execPath, [oracle, "--application-terraform", ...args, "--json-only"], { encoding: "utf8" });
+    let j; try { j = JSON.parse(r.stdout); } catch { j = { verdict: "ILLISIBLE", findings: [] }; }
+    return { ...j, exit: r.status };
+  };
+  const durs97 = r => r.findings.filter(f => f.regle === "O31" && (f.sev === "bloquant" || f.sev === "majeur"));
+  const infos97 = r => r.findings.filter(f => f.regle === "O31" && f.sev === "info");
+
+  try {
+    // 1) Les statuts de santé, rejoués sur la référence de l'API de gestion avant d'écrire la règle.
+    const doc97 = JSON.parse(fs.readFileSync(fx97("api-sante-statuts.json"), "utf8"));
+    ok(doc97.lue_le === "2026-11-12" && /v1-get-services-health/.test(doc97.source) && doc97.status.length === 3 && doc97.healthy.deprecated === true, "TF-2397 : l'extrait de la référence de l'API de gestion porte sa source, sa date de lecture (12/11/2026), trois statuts et le booléen déprécié");
+    ok(doc97.status.every(s => lib97.etatService({ name: "auth", status: s }).sain === (s === "ACTIVE_HEALTHY")), "TF-2397 statuts : parmi COMING_UP, ACTIVE_HEALTHY et UNHEALTHY, seul ACTIVE_HEALTHY est sain");
+    ok([...lib97.SERVICES_CONNUS].sort().join() === [...doc97.name].sort().join() && lib97.SERVICES_PAR_DEFAUT.every(s => doc97.name.includes(s)), "TF-2397 services : les services que l'outil connaît sont exactement ceux de la référence, et ses services par défaut y figurent");
+    ok(lib97.etatService({ name: "db", status: "STATUT_INCONNU" }).sain === false && lib97.etatService({ name: "db", healthy: true }).sain === true && lib97.etatService({ name: "db", healthy: true, status: "UNHEALTHY" }).sain === false, "TF-2397 statuts : un statut hors référence n'est jamais lu sain ; le booléen déprécié ne sert que sans `status`, et ne l'emporte jamais sur lui");
+
+    // 2) La chaîne : l'apply direct vers une pile qui pose supabase_settings est refusé, avec sa ligne et son remède.
+    const rouges97 = [
+      ["rouge-direct-workflow", /\.github\/workflows\/deploy\.yml:11 .*pile « infra » pose supabase_settings/],
+      ["rouge-direct-chdir", /\.github\/workflows\/deploy\.yml:12 .*pile « infra » pose supabase_settings/],
+      ["rouge-direct-script", /scripts\/deploy\.sh:4 .*pile « infra » pose supabase_settings/],
+      ["rouge-direct-module", /\.github\/workflows\/deploy\.yml:10 .*pile « infra » pose supabase_settings/],
+      ["rouge-direct-sans-chemin", /\.github\/workflows\/deploy\.yml:10 .*pile visée n'est pas lisible/],
+    ];
+    for (const [d, motif] of rouges97) {
+      const r = o31([path.join(F97, d)]), dd = durs97(r);
+      ok(r.verdict === "FAIL" && r.exit === 1 && dd.length === 1 && dd[0].sev === "bloquant" && motif.test(dd[0].msg) && /appliquer-terraform\.mjs/.test(dd[0].msg), `O31 ROUGE ${d} : l'apply direct -> FAIL bloquant, seul constat, avec fichier:ligne et la commande de l'outil (obtenu ${r.verdict}, ${dd.length} constat(s))`);
+    }
+    const dc97 = durs97(o31([path.join(F97, "rouge-direct-script")]));
+    ok(dc97.length === 1 && !/commentaire/.test(dc97[0].msg) && dc97[0].msg.startsWith("scripts/deploy.sh:4 "), "O31 : le `terraform apply` d'un commentaire (ligne 3 du script) n'est pas compté, seule la ligne 4 l'est");
+    const v97 = o31([path.join(F97, "verte")]);
+    ok(v97.verdict === "PASS" && v97.exit === 0 && durs97(v97).length === 0, "O31 VERT : la chaîne qui appelle l'outil avec --executer --sortie -> PASS");
+    const va97 = o31([path.join(F97, "verte-autre-pile")]);
+    ok(va97.verdict === "PASS" && durs97(va97).length === 0 && infos97(va97).some(f => /infra-docker/.test(f.msg) && /hors de la règle/.test(f.msg)), "O31 VERT : l'apply direct vers une AUTRE pile (infra-docker, sans supabase_settings) est dit hors de la règle, pas refusé");
+    const is97 = o31([path.join(F97, "info-sans-sonde")]);
+    ok(is97.verdict === "PASS" && infos97(is97).some(f => /--sans-sonde est un choix écrit/.test(f.msg)), "O31 : --sans-sonde est un choix écrit, dit en information, jamais refusé");
+    const so97 = o31([path.join(F97, "sans-objet")]);
+    ok(so97.verdict === "SKIP" && so97.exit === 2 && infos97(so97).some(f => /sans objet/.test(f.msg)), "O31 : aucune pile ne pose supabase_settings (apply direct vers une pile de conteneurs) -> SKIP, sans objet");
+    const os97 = o31([path.join(F97, "rouge-outil-sans-sortie")]), od97 = durs97(os97);
+    ok(os97.verdict === "FAIL" && od97.length === 1 && od97[0].sev === "majeur" && /--sortie/.test(od97[0].msg), "O31 ROUGE : l'outil appelé avec --executer sans --sortie -> FAIL majeur : le relevé ne serait jamais écrit");
+
+    // Le remède que le message propose est joué : la chaîne rouge, corrigée comme il le dit, passe.
+    {
+      const d = path.join(tmp97, "remede"); fs.cpSync(path.join(F97, "rouge-direct-workflow"), d, { recursive: true });
+      const avant = o31([d]), msg = durs97(avant)[0]?.msg ?? "";
+      const remede = /Remplacer par : (node .+? --sortie application\.json)/.exec(msg)?.[1] ?? "";
+      const cmd = remede.replace("<FORGE_OPS>", "forge-ops").replace("<ref>", "${{ vars.SUPABASE_PROJECT_REF }}");
+      const yml = path.join(d, ".github", "workflows", "deploy.yml");
+      fs.writeFileSync(yml, fs.readFileSync(yml, "utf8").replace(/ *working-directory: infra\r?\n( *)run: terraform apply -auto-approve/, (m, sp) => `${sp}run: ${cmd}`), "utf8");
+      const apres = o31([d]);
+      ok(avant.verdict === "FAIL" && /^node forge-ops\/scripts\/appliquer-terraform\.mjs infra --projet / .test(cmd) && apres.verdict === "PASS" && durs97(apres).length === 0, `O31 REMÈDE joué : la commande du message remplace l'apply direct, la même chaîne passe de FAIL à PASS (« ${cmd.slice(0, 80)}… »)`);
+    }
+    // Un fichier de chaîne seul se juge avec sa racine.
+    const fRouge = o31([path.join(F97, "rouge-direct-workflow", ".github", "workflows", "deploy.yml"), "--racine", path.join(F97, "rouge-direct-workflow")]);
+    const fVert = o31([path.join(F97, "verte", ".github", "workflows", "deploy.yml"), "--racine", path.join(F97, "verte")]);
+    ok(fRouge.verdict === "FAIL" && durs97(fRouge).length === 1 && fVert.verdict === "PASS", "O31 : un fichier de chaîne seul, avec --racine, se juge comme le dépôt entier (rouge FAIL, vert PASS)");
+
+    // 3) Le relevé forge-ops/application@1.
+    const relRouges97 = [
+      ["rouge-sante-refusee.json", /le projet n'était pas sain avant l'apply et rien n'a été appliqué/],
+      ["rouge-sante-persistante.json", /échoué sur la santé à chaque essai permis/],
+      ["rouge-erreur.json", /autre erreur de Terraform, ou sonde en erreur/],
+      ["rouge-applique-sur-sonde-malsaine.json", /une sonde a lu le projet non sain/],
+      ["rouge-applique-sans-apply.json", /sans étape « application, essai N » en succès/],
+      ["rouge-horodatage.json", /horodatage illisible/],
+      ["rouge-format.json", /format inconnu « forge-ops\/application@0 »/],
+      ["rouge-illisible.json", /JSON invalide/],
+    ];
+    for (const [n, motif] of relRouges97) {
+      const r = o31(["--releve", R97(n)]);
+      ok(r.verdict === "FAIL" && r.exit === 1 && durs97(r).some(f => f.sev === "bloquant" && motif.test(f.msg)), `O31 ROUGE relevé ${n} : FAIL bloquant (obtenu ${r.verdict}, ${durs97(r).length} constat(s))`);
+    }
+    const rv97 = o31(["--releve", R97("verte.json")]), rr97 = o31(["--releve", R97("verte-apres-relance.json")]), rs97 = o31(["--releve", R97("verte-sans-sonde.json")]);
+    ok(rv97.verdict === "PASS" && durs97(rv97).length === 0, "O31 VERT relevé : apply abouti au premier essai, six services sains lus avant -> PASS");
+    ok(rr97.verdict === "PASS" && infos97(rr97).some(f => /1 relance\(s\)/.test(f.msg)) && rs97.verdict === "PASS" && infos97(rs97).some(f => /--sans-sonde/.test(f.msg)), "O31 VERT relevé : appliquée après une relance (dite) et sans sonde (choix dit) -> PASS avec information");
+    const mix1 = o31([path.join(F97, "verte"), "--releve", R97("verte.json")]);
+    const mix2 = o31([path.join(F97, "rouge-direct-workflow"), "--releve", R97("verte.json")]);
+    const mix3 = o31([path.join(F97, "verte"), "--releve", R97("rouge-sante-refusee.json")]);
+    ok(mix1.verdict === "PASS" && mix2.verdict === "FAIL" && durs97(mix2).length === 1 && mix3.verdict === "FAIL", "O31 : chaîne et relevé se jugent ensemble — un relevé vert n'absout pas un apply direct, une chaîne verte n'absout pas un relevé refusé");
+
+    // 4) Usage : rien à juger n'est un SKIP, un relevé donné qu'on ne trouve pas est un FAIL.
+    const u1 = o31([]), u2 = o31([path.join(tmp97, "nulle-part")]), u3 = o31(["--releve", path.join(tmp97, "nulle-part.json")]), u4 = o31(["--releve"]);
+    ok(u1.verdict === "SKIP" && u1.exit === 2 && u2.verdict === "SKIP" && u2.exit === 2, "O31 usage : ni chaîne ni relevé, ou chaîne introuvable -> SKIP (exit 2)");
+    ok(u3.verdict === "FAIL" && u3.exit === 1 && u4.verdict === "FAIL" && u4.exit === 1, "O31 usage : un relevé donné introuvable ou sans chemin -> FAIL (un relevé qu'on ne trouve pas ne prouve rien)");
+
+    // 5) L'outil écrit le relevé que la règle juge. D'abord par la bibliothèque, Terraform et la sonde injectés.
+    const msgSante97 = fs.readFileSync(fx97("erreur-sante.txt"), "utf8"), msgAutre97 = fs.readFileSync(fx97("erreur-autre.txt"), "utf8");
+    const corpsSain97 = fs.readFileSync(fx97("sante-saine.json"), "utf8"), corpsMalsain97 = fs.readFileSync(fx97("sante-realtime-malsain.json"), "utf8");
+    const sonderSain97 = () => lib97.sonderSante({ projet: REF97, jeton: JETON97, base: "http://127.0.0.1:1", appeler: async () => ({ status: 200, corps: corpsSain97 }) });
+    const tf97 = (suite) => { let n = 0; return () => { const r = suite[Math.min(n++, suite.length - 1)]; return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? "" }; }; };
+    const OK97 = { status: 0 }, SANTE97 = { status: 1, stderr: msgSante97 }, AUTRE97 = { status: 1, stderr: msgAutre97 };
+    const releve97 = async (nom, { suite, sansSonde = false, relances = 3 }) => {
+      const res = await lib97.appliquer({ pile: "infra", lancer: tf97(suite), sonder: sansSonde ? null : sonderSain97, relances, attenteMs: 0, dormir: async () => {} });
+      const r = lib97.construireReleve({ pile: "infra", projet: REF97, sansSonde, res, debut: "2026-11-12T09:00:00.000Z", fin: "2026-11-12T09:01:00.000Z" });
+      const f = path.join(tmp97, nom); fs.writeFileSync(f, `${JSON.stringify(r, null, 2)}\n`, "utf8");
+      return { r, f, texte: JSON.stringify(r) };
+    };
+    {
+      const a = await releve97("a.json", { suite: [OK97] }), oa = o31(["--releve", a.f]);
+      ok(a.r.format === "forge-ops/application@1" && a.r.verdict === "applique" && a.r.code === 0 && a.r.sonde === "jouee" && a.r.derniere_sonde.services.length === 6 && oa.verdict === "PASS", "TF-2397 outil : l'apply abouti avec sonde écrit un relevé forge-ops/application@1 (verdict applique, six services lus) que O-31 juge PASS");
+      const b = await releve97("b.json", { suite: [SANTE97, OK97] }), ob = o31(["--releve", b.f]);
+      ok(b.r.relances === 1 && b.r.etapes.length === 4 && ob.verdict === "PASS" && infos97(ob).some(f => /1 relance/.test(f.msg)), "TF-2397 outil : une erreur de santé puis le succès -> relevé à 1 relance, quatre étapes (sonde, apply, sonde, apply), O-31 PASS avec la relance dite");
+      const c = await releve97("c.json", { suite: [OK97], sansSonde: true }), oc = o31(["--releve", c.f]);
+      ok(c.r.sonde === "non-jouee" && c.r.projet === null && c.r.derniere_sonde === null && oc.verdict === "PASS" && infos97(oc).some(f => /--sans-sonde/.test(f.msg)), "TF-2397 outil : --sans-sonde écrit un relevé « non-jouee », que O-31 accepte en le disant");
+      const d = await releve97("d.json", { suite: [AUTRE97] }), od = o31(["--releve", d.f]);
+      ok(d.r.verdict === "erreur" && d.r.code === 2 && od.verdict === "FAIL" && !/jwt_exp|supabase_settings\.projet/.test(d.texte) && /sortie de Terraform non conservée/.test(d.texte), "TF-2397 outil ROUGE : une erreur qui n'est pas de santé -> relevé « erreur », O-31 FAIL ; la sortie de Terraform (qui peut citer des valeurs de la pile) n'est pas conservée dans le relevé");
+      const e = await releve97("e.json", { suite: [SANTE97], relances: 2 }), oe = o31(["--releve", e.f]);
+      ok(e.r.verdict === "sante-persistante" && e.r.relances === 2 && oe.verdict === "FAIL", "TF-2397 outil ROUGE : l'erreur de santé à chaque essai -> relevé « sante-persistante », O-31 FAIL");
+      ok(![a, b, c, d, e].some(x => x.texte.includes(JETON97)), "TF-2397 outil : le jeton ne figure dans aucun relevé");
+    }
+
+    // 6) Puis par la ligne de commande, contre une API de gestion simulée : --sortie, ses refus, ses relevés.
+    const jouer97 = (a, env = {}) => new Promise((resolve) => {
+      const p = spawn97(process.execPath, [path.join(ici, "..", "scripts", "appliquer-terraform.mjs"), ...a], { env: { ...process.env, SUPABASE_ACCESS_TOKEN: JETON97, ...env } });
+      let out = ""; p.stdout.on("data", d => out += d); p.stderr.on("data", d => out += d);
+      p.on("close", status => resolve({ status, out }));
+    });
+    const pile97 = path.join(tmp97, "pile"); fs.mkdirSync(pile97);
+    const TF_ABSENT97 = path.join(tmp97, "terraform-absent");
+    let corps97 = corpsSain97;
+    const serveur97 = http97.createServer((req, res) => {
+      if (!req.url.startsWith(`/v1/projects/${REF97}/health`) || req.headers.authorization !== `Bearer ${JETON97}`) { res.writeHead(401); res.end("{}"); return; }
+      res.writeHead(200, { "content-type": "application/json" }); res.end(corps97);
+    });
+    await new Promise(r => serveur97.listen(0, "127.0.0.1", r));
+    const API97 = `http://127.0.0.1:${serveur97.address().port}`;
+    try {
+      const sortie97 = path.join(tmp97, "application.json");
+      const pf = await jouer97([pile97, "--projet", REF97, "--sortie", sortie97], { FORGE_OPS_SUPABASE_API: API97, FORGE_OPS_TERRAFORM: TF_ABSENT97 });
+      ok(pf.status === 0 && /rien n'est écrit sans --executer/.test(pf.out) && !fs.existsSync(sortie97), "TF-2397 CLI plan-first : avec --sortie mais sans --executer, le geste est écrit et aucun relevé n'est écrit");
+      const sv = await jouer97([pile97, "--sans-sonde", "--sortie"]);
+      ok(sv.status === 2 && /--sortie attend le chemin/.test(sv.out), "TF-2397 CLI : --sortie sans chemin -> exit 2");
+      const sd = await jouer97([pile97, "--sans-sonde", "--executer", "--sortie", path.join(tmp97, "nulle", "a.json")], { FORGE_OPS_TERRAFORM: TF_ABSENT97 });
+      ok(sd.status === 2 && /n'existe pas, rien n'a été appliqué/.test(sd.out) && !/terraform-absent/.test(sd.out), "TF-2397 CLI ROUGE : dossier du relevé inexistant -> exit 2 AVANT l'apply (Terraform non lancé) : on n'applique pas sans pouvoir dire ce qui a été fait");
+      corps97 = corpsMalsain97;
+      const m = await jouer97([pile97, "--projet", REF97, "--executer", "--relances", "1", "--attente", "0", "--sortie", sortie97], { FORGE_OPS_SUPABASE_API: API97, FORGE_OPS_TERRAFORM: TF_ABSENT97 });
+      const rm = fs.existsSync(sortie97) ? JSON.parse(fs.readFileSync(sortie97, "utf8")) : null;
+      ok(m.status === 1 && rm && rm.format === "forge-ops/application@1" && rm.verdict === "sante-refusee" && rm.code === 1 && rm.executer === true && rm.projet === REF97 && rm.derniere_sonde.services.some(s => s.nom === "realtime" && s.statut === "UNHEALTHY" && !s.sain), `TF-2397 CLI : realtime UNHEALTHY -> exit 1 et relevé « sante-refusee » écrit, realtime UNHEALTHY dedans (obtenu exit ${m.status}, relevé ${rm ? rm.verdict : "absent"})`);
+      const om = o31(["--releve", sortie97]);
+      ok(om.verdict === "FAIL" && durs97(om).some(f => /n'était pas sain avant l'apply/.test(f.msg)) && !fs.readFileSync(sortie97, "utf8").includes(JETON97), "TF-2397 CLI -> O-31 : le relevé de l'outil refusé par la santé est jugé FAIL ; le jeton n'y figure pas");
+      fs.rmSync(sortie97);
+      const j = await jouer97([pile97, "--projet", REF97, "--executer", "--attente", "0", "--sortie", sortie97], { FORGE_OPS_SUPABASE_API: API97, FORGE_OPS_TERRAFORM: TF_ABSENT97, SUPABASE_ACCESS_TOKEN: "mauvais" });
+      const rj = fs.existsSync(sortie97) ? JSON.parse(fs.readFileSync(sortie97, "utf8")) : null;
+      ok(j.status === 2 && rj && rj.verdict === "erreur" && rj.code === 2 && o31(["--releve", sortie97]).verdict === "FAIL", "TF-2397 CLI ROUGE : jeton refusé (401) -> exit 2, relevé « erreur » écrit, O-31 FAIL");
+      fs.rmSync(sortie97);
+      corps97 = corpsSain97;
+      const s = await jouer97([pile97, "--projet", REF97, "--executer", "--attente", "0", "--sortie", sortie97], { FORGE_OPS_SUPABASE_API: API97, FORGE_OPS_TERRAFORM: TF_ABSENT97 });
+      const rs = fs.existsSync(sortie97) ? JSON.parse(fs.readFileSync(sortie97, "utf8")) : null;
+      ok(s.status === 2 && rs && rs.verdict === "erreur" && rs.derniere_sonde.etat === "sain" && /terraform apply a échoué/.test(JSON.stringify(rs.etapes)), "TF-2397 CLI : santé saine puis Terraform absent -> exit 2, relevé « erreur » qui garde la sonde saine et l'échec de l'apply");
+      fs.rmSync(sortie97);
+
+      // L'exercice réel : Terraform joue une pile terraform_data, le relevé de l'outil est jugé par l'oracle.
+      if (process.env.FORGE_OPS_EXERCICE_TERRAFORM === "1") {
+        const reel = path.join(tmp97, "pile-reelle"); fs.mkdirSync(reel);
+        fs.writeFileSync(path.join(reel, "main.tf"), 'resource "terraform_data" "reglages" {\n  input = "exemple"\n}\n', "utf8");
+        const init = spawnSync("terraform", [`-chdir=${reel}`, "init", "-input=false", "-no-color"], { encoding: "utf8", timeout: 600000 });
+        ok(init.status === 0, "EXERCICE Terraform (TF-2397) : init de la pile terraform_data");
+        const avecSonde = await jouer97([reel, "--projet", REF97, "--executer", "--attente", "0", "--sortie", sortie97], { FORGE_OPS_SUPABASE_API: API97 });
+        const rr = fs.existsSync(sortie97) ? JSON.parse(fs.readFileSync(sortie97, "utf8")) : null;
+        ok(avecSonde.status === 0 && rr?.verdict === "applique" && rr?.sonde === "jouee" && o31(["--releve", sortie97]).verdict === "PASS", `EXERCICE Terraform APRÈS : l'outil applique réellement, sonde saine lue avant, relevé « applique » jugé PASS par O-31 (exit ${avecSonde.status})`);
+        fs.rmSync(sortie97, { force: true });
+        const sans = await jouer97([reel, "--sans-sonde", "--executer", "--attente", "0", "--sortie", sortie97], {});
+        ok(sans.status === 0 && o31(["--releve", sortie97]).verdict === "PASS", "EXERCICE Terraform : --sans-sonde applique réellement, relevé « non-jouee » jugé PASS avec information");
+      }
+    } finally { serveur97.closeAllConnections?.(); serveur97.close(); }
+  } finally { fs.rmSync(tmp97, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+
+  // Loi n° 1 : la règle, l'option et le relevé sont appelés depuis la documentation de la forge.
+  const lireDoc97 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+  ok(["README.md", "CLAUDE.md"].every(f => { const t = lireDoc97(f); return t.includes("O31") || t.includes("O-31") ? t.includes("--application-terraform") && t.includes("forge-ops/application@1") && t.includes("--sortie") && t.includes("TF-2397") : false; }), "TF-2397 : la règle O-31, --application-terraform, le relevé forge-ops/application@1 et --sortie sont appelés par README.md et CLAUDE.md (loi n° 1)");
+  ok(/TF-2397/.test(lireDoc97("references/GESTES-EXPLOITATION.md")) && /--sortie/.test(lireDoc97("references/GESTES-EXPLOITATION.md")), "TF-2397 : le geste G-06 de GESTES-EXPLOITATION.md nomme --sortie et la règle");
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

@@ -1,0 +1,36 @@
+{
+  "format": "forge-ops/application@1",
+  "pile": "infra",
+  "projet": "abcdefghijklmnopqrst",
+  "executer": true,
+  "sonde": "jouee",
+  "debut": "2026-11-12T09:00:00.000Z",
+  "fin": "2026-11-12T09:03:10.000Z",
+  "verdict": "applique",
+  "code": 0,
+  "relances": 0,
+  "constat": null,
+  "derniere_sonde": {
+    "etat": "malsain",
+    "lectures": 4,
+    "services": [
+      {
+        "nom": "realtime",
+        "statut": "UNHEALTHY",
+        "sain": false
+      }
+    ]
+  },
+  "etapes": [
+    {
+      "etape": "sonde avant l'application",
+      "etat": "malsain",
+      "detail": "service(s) non sain(s) : realtime (UNHEALTHY) (4 lecture(s))"
+    },
+    {
+      "etape": "application, essai 1",
+      "etat": "ok",
+      "detail": "terraform apply : exit 0"
+    }
+  ]
+}

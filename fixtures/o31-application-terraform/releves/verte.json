@@ -1,0 +1,61 @@
+{
+  "format": "forge-ops/application@1",
+  "pile": "infra",
+  "projet": "abcdefghijklmnopqrst",
+  "executer": true,
+  "sonde": "jouee",
+  "debut": "2026-11-12T09:00:00.000Z",
+  "fin": "2026-11-12T09:03:10.000Z",
+  "verdict": "applique",
+  "code": 0,
+  "relances": 0,
+  "constat": null,
+  "derniere_sonde": {
+    "etat": "sain",
+    "lectures": 1,
+    "services": [
+      {
+        "nom": "auth",
+        "statut": "ACTIVE_HEALTHY",
+        "sain": true
+      },
+      {
+        "nom": "db",
+        "statut": "ACTIVE_HEALTHY",
+        "sain": true
+      },
+      {
+        "nom": "pooler",
+        "statut": "ACTIVE_HEALTHY",
+        "sain": true
+      },
+      {
+        "nom": "realtime",
+        "statut": "ACTIVE_HEALTHY",
+        "sain": true
+      },
+      {
+        "nom": "rest",
+        "statut": "ACTIVE_HEALTHY",
+        "sain": true
+      },
+      {
+        "nom": "storage",
+        "statut": "ACTIVE_HEALTHY",
+        "sain": true
+      }
+    ]
+  },
+  "etapes": [
+    {
+      "etape": "sonde avant l'application",
+      "etat": "sain",
+      "detail": "6 service(s) sain(s) (1 lecture(s))"
+    },
+    {
+      "etape": "application, essai 1",
+      "etat": "ok",
+      "detail": "terraform apply : exit 0"
+    }
+  ]
+}

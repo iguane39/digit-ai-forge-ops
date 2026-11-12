@@ -15,6 +15,8 @@
 //                         relance sur l'erreur de santé seulement, au plus `relances` fois, en relisant la santé entre
 //                         deux essais. Toute autre erreur de Terraform s'arrête au premier essai : une relance n'est
 //                         jamais un remède à une erreur dont on ignore la cause.
+//   construireReleve(…)   le relevé `forge-ops/application@1` que `--sortie` écrit et qu'oracle-ops.mjs --application-terraform
+//                         (O-31, scripts/lib-application-chaine.mjs) juge à la MEP (TF-2397).
 // Désactiver un service inutilisé (realtime) reste une décision du produit, qui l'utilise ou non : la forge la nomme dans
 // son constat, elle ne la prend pas.
 import { Buffer } from "node:buffer";
@@ -29,8 +31,11 @@ export const ATTENTE_PAR_DEFAUT_S = 120;
 
 const REF_PROJET = /^[a-z0-9-]{3,64}$/;
 const NOM_SERVICE = /^[a-z_]{2,32}$/;
-// Les services dont l'API de gestion rend la santé (lus dans sa référence ; non rejoués ici, aucun appel réseau).
-const SERVICES_CONNUS = new Set(["auth", "db", "db_postgres_user", "pooler", "pg_bouncer", "realtime", "rest", "storage"]);
+// Les services dont l'API de gestion rend la santé, relus dans sa référence publique sans jeton (aucun appel ici).
+// Rejoués le 12/11/2026 sur la référence (opération v1-get-services-health) : même liste (TF-2397) ; fixtures/appliquer-terraform/api-sante-statuts.json.
+export const SERVICES_CONNUS = new Set(["auth", "db", "db_postgres_user", "pooler", "pg_bouncer", "realtime", "rest", "storage"]);
+// Le format du relevé que l'outil écrit par --sortie et que l'oracle O-31 juge (TF-2397).
+export const FORMAT_RELEVE = "forge-ops/application@1";
 
 // Le ou les services que le message d'erreur dit malsains (« unhealthy service realtime »), pour le constat.
 export function servicesDuMessage(texte) {
@@ -41,7 +46,8 @@ export function servicesDuMessage(texte) {
 export const erreurDeSante = (sortie) => MOTIF_SANTE.test(`${sortie?.stderr ?? ""}\n${sortie?.stdout ?? ""}`);
 
 // Un service est sain quand son statut est ACTIVE_HEALTHY ; faute de statut, quand `healthy` vaut true. COMING_UP n'est
-// PAS sain : le service démarre, la relecture suivante dira.
+// PAS sain : le service démarre, la relecture suivante dira. Les trois statuts (COMING_UP, ACTIVE_HEALTHY, UNHEALTHY) et le
+// booléen `healthy` (déprécié, « Use `status` instead ») sont ceux de la référence de l'API de gestion, relue le 12/11/2026.
 export function etatService(s) {
   const nom = String(s?.name ?? "?");
   const statut = typeof s?.status === "string" ? s.status : null;
@@ -100,8 +106,9 @@ export function constatMalsain(services) {
 //   verdict « erreur »              exit 2 : autre erreur de Terraform, ou sonde en erreur ; jamais relancée.
 export async function appliquer({ pile, lancer, sonder = null, relances = RELANCES_PAR_DEFAUT, attenteMs = ATTENTE_PAR_DEFAUT_S * 1000, dormir }) {
   const etapes = [];
-  const fin = (verdict, code, constat = null, nbRelances = 0) => ({ verdict, code, etapes, relances: nbRelances, constat });
-  const attendre = async () => attendreSante({ sonder, lectures: relances + 1, attenteMs, dormir });
+  let derniereSonde = null;   // la dernière lecture de santé, pour le relevé (TF-2397)
+  const fin = (verdict, code, constat = null, nbRelances = 0) => ({ verdict, code, etapes, relances: nbRelances, constat, sonde: derniereSonde });
+  const attendre = async () => { const s = await attendreSante({ sonder, lectures: relances + 1, attenteMs, dormir }); derniereSonde = s; return s; };
 
   if (sonder) {
     const s = await attendre();
@@ -141,6 +148,27 @@ export async function appliquer({ pile, lancer, sonder = null, relances = RELANC
     }
   }
   return fin("erreur", 2, "boucle épuisée sans verdict", relances); // inatteignable : la boucle rend toujours
+}
+
+// Le relevé `forge-ops/application@1` de ce que l'outil a fait, écrit par `--sortie` et jugé par l'oracle O-31 (TF-2397) :
+// la pile, le choix de sonde, les étapes, le verdict, la dernière lecture de santé. Il ne conserve jamais la sortie de
+// Terraform (elle peut citer des valeurs de la pile) ni le jeton : l'erreur « qui n'est pas de santé » est tronquée avant elle.
+export function construireReleve({ pile, projet, sansSonde, res, debut, fin }) {
+  const coupe = (d) => String(d).replace(/( aucune relance) : [\s\S]*$/, "$1 (sortie de Terraform non conservée dans le relevé)");
+  return {
+    format: FORMAT_RELEVE,
+    pile,
+    projet: sansSonde ? null : projet,
+    executer: true,
+    sonde: sansSonde ? "non-jouee" : "jouee",
+    debut, fin,
+    verdict: res.verdict,
+    code: res.code,
+    relances: res.relances,
+    constat: res.constat ?? null,
+    derniere_sonde: res.sonde ? { etat: res.sonde.etat, lectures: res.sonde.lectures, services: (res.sonde.services ?? []).map(s => ({ nom: s.nom, statut: s.statut, sain: s.sain })) } : null,
+    etapes: res.etapes.map(e => ({ etape: e.etape, etat: e.etat, detail: coupe(e.detail) })),
+  };
 }
 
 // Les gestes que la commande jouerait, pour l'essai à blanc (sans --executer, rien n'est appelé ni appliqué).

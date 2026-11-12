@@ -1,0 +1,26 @@
+{
+  "format": "forge-ops/application@1",
+  "pile": "infra",
+  "projet": null,
+  "executer": true,
+  "sonde": "non-jouee",
+  "debut": "2026-11-12T09:00:00.000Z",
+  "fin": "2026-11-12T09:03:10.000Z",
+  "verdict": "applique",
+  "code": 0,
+  "relances": 0,
+  "constat": null,
+  "derniere_sonde": null,
+  "etapes": [
+    {
+      "etape": "sonde avant l'application",
+      "etat": "non-jouee",
+      "detail": "--sans-sonde : la sante du projet n'a pas ete lue avant d'appliquer"
+    },
+    {
+      "etape": "application, essai 1",
+      "etat": "ok",
+      "detail": "terraform apply : exit 0"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "format": "forge-ops/application@1",
+  "pile": "infra",
+  "projet": "abcdefghijklmnopqrst",
+  "executer": true,
+  "sonde": "jouee",
+  "debut": "2026-11-12T09:00:00.000Z",
+  "fin": "2026-11-12T09:03:10.000Z",
+  "verdict": "sante-refusee",
+  "code": 1,
+  "relances": 0,
+  "constat": "realtime : la sonde le lit non sain apres toutes les lectures permises.",
+  "derniere_sonde": {
+    "etat": "malsain",
+    "lectures": 4,
+    "services": [
+      {
+        "nom": "auth",
+        "statut": "ACTIVE_HEALTHY",
+        "sain": true
+      },
+      {
+        "nom": "realtime",
+        "statut": "UNHEALTHY",
+        "sain": false
+      }
+    ]
+  },
+  "etapes": [
+    {
+      "etape": "sonde avant l'application",
+      "etat": "malsain",
+      "detail": "service(s) non sain(s) : realtime (UNHEALTHY) (4 lecture(s))"
+    }
+  ]
+}

@@ -98,6 +98,11 @@
 //       le corps de la réponse de santé (chemin `sante.chemin` du gabarit, `/healthz` par défaut), ou les champs que le test
 //       déclare, est identique : un champ changé est un constat bloquant, une relecture absente aussi (TF-2308, classe
 //       etat-servi-non-relu-apres-epreuve). Relevé introuvable : SKIP.
+//   O31 --application-terraform <racine ou fichier de chaîne> [--racine <dépôt>] [--releve <application.json>] : si une pile de la racine pose
+//       `supabase_settings` (directement ou par un module local), aucune chaîne ne l'applique par un `terraform apply` direct
+//       (bloquant, avec la commande de remplacement `scripts/appliquer-terraform.mjs … --executer --sortie`) ; l'outil appelé avec
+//       `--executer` sans `--sortie` est un constat majeur ; le relevé `forge-ops/application@1` que l'outil écrit prouve l'apply
+//       abouti, la santé lue saine avant (ou `--sans-sonde` dit) et des étapes cohérentes avec son verdict (TF-2397).
 //   O12 (implicite, cible .md à `remediation_securite:` déclaré) : la fiche liste les
 //       ENVIRONNEMENTS où elle a été rejouée (TF-1115) — sans quoi « appliquée » ne dit rien
 //       de son périmètre réel.
@@ -131,6 +136,7 @@ import { defautsDuSecret } from "../scripts/lib-secret-humain.mjs";
 import { jugerVersionServie } from "../scripts/lib-version-servie.mjs";
 import { jugerEtatServi } from "../scripts/lib-etat-servi.mjs";
 import { lireCapture, commandeRemplacement } from "../scripts/lib-convergence.mjs";
+import { jugerChaineApplication, jugerReleveApplication } from "../scripts/lib-application-chaine.mjs";
 import { chargerRegistre, cheminRegistreDuPilot, jugerReglages } from "../scripts/lib-reglages.mjs";
 import { fileURLToPath } from "node:url";
 
@@ -2340,6 +2346,64 @@ if (args.includes("--etat-servi")) {
   for (const c of jugerEtatServi(releve30).constats) add(c.sev, "O30", c.msg, path.basename(fichier30));
   const durs30 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
   fin30(durs30.length ? "FAIL" : "PASS", durs30.length ? 1 : 0);
+}
+// ── O31 · une chaîne qui pose supabase_settings passe par appliquer-terraform.mjs, jamais par un terraform apply direct (TF-2397) ───
+//
+// LE FAIT (suite de TF-2312, chaîne de dev 42685313136 du 09/11/2026). L'outil scripts/appliquer-terraform.mjs sonde la santé du
+// projet avant l'apply et ne relance que sur « Project Services Unhealthy » ; une chaîne qui garde son `terraform apply` direct
+// retombe sur l'échec, après avoir posé des réglages à moitié, et rien dans la forge ne le voyait. Mesure de départ du 12/11/2026 :
+// l'oracle lisait la chaîne comme une cible de release (O1 « COURANT absent »), jamais pour son apply direct ; l'outil n'écrivait
+// aucun relevé.
+//
+// CE QUI EST JUGÉ (aucun appel réseau, aucun appel à Terraform ; logique : scripts/lib-application-chaine.mjs) :
+//   la CHAÎNE (`--application-terraform <racine ou fichier de chaîne>`) : si une pile de la racine pose `supabase_settings`
+//     (directement ou par un module local), chaque apply direct (`terraform`, `tofu`, `terragrunt`) vers cette pile, ou vers une
+//     pile qu'on ne sait pas lire, est un constat bloquant avec sa commande de remplacement ; un appel de l'outil avec
+//     `--executer` sans `--sortie` est un constat majeur (le relevé ne serait jamais écrit) ;
+//   le RELEVÉ (`--releve <application.json>`, `forge-ops/application@1`, écrit par `appliquer-terraform.mjs --sortie`) : l'apply a
+//     abouti (verdict applique, exit 0), la santé a été lue saine avant (ou `--sans-sonde` est dit, en information), les étapes
+//     sont cohérentes avec le verdict ; un projet refusé, une santé persistante ou une erreur sont des constats bloquants.
+// Aucune pile ne pose supabase_settings et aucun relevé : SKIP (sans objet).
+if (args.includes("--application-terraform")) {
+  const i31 = args.indexOf("--application-terraform");
+  const suivant31 = args[i31 + 1];
+  const chaine31 = suivant31 && !suivant31.startsWith("--") ? suivant31 : null;
+  const iReleve31 = args.indexOf("--releve");
+  const releve31 = iReleve31 >= 0 ? args[iReleve31 + 1] : null;
+  const DOM31 = "Exploitation : une chaîne qui pose supabase_settings applique par l'outil sondé, jamais par un terraform apply direct (O-31)";
+  const NJ31 = [
+    "les chaînes qui ne sont pas des fichiers de la racine donnée (service d'intégration continue configuré dans une interface, script appelé depuis un autre dépôt, étape pliée `>` d'un workflow) : la règle lit les fichiers .yml/.yaml/.sh/.bash/.ps1/.cmd/.bat/.mk et les Makefile sous la racine",
+    "une pile hors de la racine donnée : un apply vers un dossier qu'on ne lit pas est tenu pour concerné si la racine pose supabase_settings, jamais pour sain",
+    "que le relevé vient de la chaîne jugée : le fichier est celui que l'appelant donne ; l'oracle vérifie qu'il est cohérent avec lui-même (étapes, verdict, sonde), pas qu'il n'est pas forgé",
+    "le choix `--sans-sonde` : il est dit en information, il n'est pas refusé (c'est un choix écrit de la chaîne, TF-2312)",
+    "les statuts de santé servis par l'API de gestion au jour de l'apply : ceux du relevé sont lus tels quels ; leur énumération (COMING_UP, ACTIVE_HEALTHY, UNHEALTHY) a été relue sur la référence publique le 12/11/2026",
+  ];
+  const fin31 = (verdict, code) => {
+    process.stdout.write(JSON.stringify({ oracle: "oracle-ops", domaine: DOM31, artefact: chaine31 ?? releve31 ?? null, verdict, findings: F.length ? F : [{ sev: "info", regle: "O31", msg: `${chaine31 ? "aucun apply direct vers une pile qui pose supabase_settings" : ""}${chaine31 && releve31 ? ", et " : ""}${releve31 ? "le relevé de l'outil est cohérent avec son verdict" : ""}`, where: chaine31 ?? releve31 }], non_juge: NJ31 }, null, jsonOnly ? 0 : 2));
+    process.exit(code);
+  };
+  if (iReleve31 >= 0 && (!releve31 || releve31.startsWith("--"))) { add("bloquant", "O31", "--releve attend le chemin du relevé forge-ops/application@1", "--releve"); fin31("FAIL", 1); }
+  if (!chaine31 && !releve31) { add("info", "O31", "ni chaîne ni relevé donnés (--application-terraform <racine ou fichier> et/ou --releve <application.json>) : rien n'est jugé", "--application-terraform"); fin31("SKIP", 2); }
+  if (chaine31 && !fs.existsSync(chaine31)) { add("info", "O31", "chaîne introuvable — l'application des réglages n'est pas prouvée", String(chaine31)); fin31("SKIP", 2); }
+  let juge31 = false, pilesSupabase31 = 0;
+  if (chaine31) {
+    const iRacine31 = args.indexOf("--racine");
+    const ch31 = jugerChaineApplication(chaine31, { racine: iRacine31 >= 0 ? args[iRacine31 + 1] : null });
+    pilesSupabase31 = ch31.piles.length;
+    for (const c of ch31.constats) add(c.sev, "O31", c.msg, String(chaine31));
+    juge31 = pilesSupabase31 > 0 && (ch31.directs.length > 0 || ch31.outils.length > 0);
+    if (!pilesSupabase31) add("info", "O31", `aucune pile sous ${chaine31} ne pose supabase_settings (${ch31.fichiers} fichier(s) de chaîne lu(s)) : la règle est sans objet pour cette chaîne`, String(chaine31));
+  }
+  if (releve31) {
+    if (!fs.existsSync(releve31)) { add("bloquant", "O31", "relevé de l'application introuvable : l'outil n'a pas prouvé ce qu'il a fait (le prendre par `scripts/appliquer-terraform.mjs … --executer --sortie application.json`)", String(releve31)); fin31("FAIL", 1); }
+    let r31 = null, lisible31 = true;
+    try { r31 = JSON.parse(fs.readFileSync(releve31, "utf8")); } catch { lisible31 = false; add("bloquant", "O31", "relevé illisible (JSON invalide) : un fichier non lu ne vaut jamais PASS", path.basename(releve31)); }
+    if (lisible31) for (const c of jugerReleveApplication(r31).constats) add(c.sev, "O31", c.msg, path.basename(releve31));
+    juge31 = true;
+  }
+  const durs31 = F.filter(f => f.sev === "bloquant" || f.sev === "majeur");
+  if (!durs31.length && !juge31) fin31("SKIP", 2);
+  fin31(durs31.length ? "FAIL" : "PASS", durs31.length ? 1 : 0);
 }
 // ── Verdict « rollback recommandé » · seuils SLO fixés par l'humain (TF-0107) ───────
 // RECOMMANDATION SEULE : compare des mesures post-bascule à des seuils que l'humain a

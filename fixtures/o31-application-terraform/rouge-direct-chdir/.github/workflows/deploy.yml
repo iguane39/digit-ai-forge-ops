@@ -1,0 +1,13 @@
+name: deploiement-dev
+on: workflow_dispatch
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - name: Appliquer les reglages
+        run: |
+          terraform -chdir=infra init
+          terraform -chdir=infra \
+            apply -input=false -auto-approve

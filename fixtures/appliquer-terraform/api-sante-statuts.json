@@ -1,0 +1,10 @@
+{
+  "source": "https://api.supabase.com/api/v1-json, opération v1-get-services-health (GET /v1/projects/{ref}/health), schéma V1ServiceHealthResponse_Output",
+  "lue_le": "2026-11-12",
+  "lecture": "référence publique de l'API de gestion, lecture seule, sans jeton ; extrait des seules énumérations que lib-application.mjs consomme (TF-2397)",
+  "status": ["COMING_UP", "ACTIVE_HEALTHY", "UNHEALTHY"],
+  "healthy": { "type": "boolean", "deprecated": true, "description": "Deprecated. Use `status` instead." },
+  "name": ["auth", "db", "db_postgres_user", "pooler", "realtime", "rest", "storage", "pg_bouncer"],
+  "services_en_requete": "liste séparée par des virgules, ou tableau (services=a&services=b)",
+  "reponses": ["200 (tableau de services)", "401", "403", "429", "500"]
+}
