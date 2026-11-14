@@ -3564,5 +3564,103 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   ok(/TF-2397/.test(lireDoc97("references/GESTES-EXPLOITATION.md")) && /--sortie/.test(lireDoc97("references/GESTES-EXPLOITATION.md")), "TF-2397 : le geste G-06 de GESTES-EXPLOITATION.md nomme --sortie et la règle");
 }
 
+// ── TF-2412 (Produit-84, lot 20261110a, ledger seq 278) : UNE COPIE pg_dump SE RESTAURE SANS LES PRIVILÈGES PAR DÉFAUT DE supabase_admin ─
+// Le fait : `pg_restore --clean --single-transaction` d'une copie échouait sur « permission denied to change default privileges », la
+// copie portant les entrées DEFAULT ACL de supabase_admin que postgres ne peut pas rejouer ; le sommaire filtré (--list puis --use-list)
+// a rendu une restauration conforme en 52 s. Décision R-58 du 10/11/2026 : le gabarit de restauration filtre ces entrées, et le garde-fou
+// de plateforme entre au registre de la forge (G-07). La forge ne restaure rien : le gabarit écrit la liste filtrée et refuse celle qui garde
+// une entrée refusée ; le sommaire de la fixture suit la forme de `pg_restore --list` (pg_restore absent du poste de la campagne, dit en G-07).
+{
+  console.log("");
+  const gab12 = path.join(ici, "..", "gabarits", "restauration-supabase.mjs");
+  const lib12 = await import("../gabarits/restauration-supabase.mjs");
+  const fx12 = f => path.join(fx("restauration-supabase"), f);
+  const tmp12 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2412-"));
+  const cli12 = (...a) => { const r = spawnSync(process.execPath, [gab12, ...a], { encoding: "utf8" }); return { status: r.status, out: (r.stdout || "") + (r.stderr || ""), stdout: r.stdout || "" }; };
+  const lire12 = f => fs.readFileSync(f, "utf8").replace(/\r\n/g, "\n");
+  try {
+    const sommaire = fx12("sommaire-copie.txt");
+    const texte12 = lire12(sommaire);
+
+    // ROUGE : le sommaire d'une copie, tel que pg_restore --list l'écrit, porte 3 entrées que postgres ne peut pas rejouer.
+    const rouge = cli12("verifier", sommaire);
+    ok(rouge.status === 1 && ["5105", "5106", "5107"].every(id => rouge.out.includes(`« ${id};`)) && /ÉCHEC/.test(rouge.out),
+      "TF-2412 ROUGE : le sommaire non filtré d'une copie -> `verifier` exit 1, les 3 entrées DEFAULT ACL de supabase_admin nommées");
+    ok(!/« (5104|5120|4292|4302);/.test(rouge.out),
+      "TF-2412 ROUGE précis : le privilège par défaut de postgres, l'ACL d'une table et les objets que supabase_admin possède ne sont PAS refusés");
+
+    // VERT : la liste filtrée attendue est conforme, et le remède (liste puis verifier) la rend à l'identique.
+    const attendue = fx12("liste-filtree-attendue.txt");
+    ok(cli12("verifier", attendue).status === 0 && /PASS/.test(cli12("verifier", attendue).out),
+      "TF-2412 VERT : la liste filtrée attendue passe `verifier` (exit 0)");
+    const sortie12 = path.join(tmp12, "liste-filtree.txt");
+    const liste = cli12("liste", sommaire, "--sortie", sortie12);
+    ok(liste.status === 0 && /3 entrée\(s\) DEFAULT ACL retirée\(s\) sur 14 : 5105 \(supabase_admin\), 5106 \(supabase_admin\), 5107 \(supabase_admin\)/.test(liste.out),
+      `TF-2412 : \`liste\` nomme les 3 entrées retirées sur 14 (obtenu : ${liste.out.trim().slice(0, 160)})`);
+    ok(fs.existsSync(sortie12) && lire12(sortie12) === lire12(attendue),
+      "TF-2412 : la liste écrite est celle de la fixture verte, ligne pour ligne");
+    const rem = cli12("verifier", sortie12);
+    ok(rem.status === 0 && /PASS : aucune entrée DEFAULT ACL de supabase_admin sur 11 entrées/.test(rem.out),
+      "TF-2412 remède JOUÉ (TF-1013) : la liste que `liste` écrit passe `verifier`, 11 entrées actives (14 - 3)");
+
+    // Chirurgie : seules les 3 lignes refusées changent, chacune préfixée d'un « ; » ; le reste est identique à l'octet près.
+    const avant = texte12.split("\n"), apres = lire12(sortie12).split("\n");
+    const diff = avant.map((l, i) => [l, apres[i]]).filter(([a, b]) => a !== b);
+    ok(avant.length === apres.length && diff.length === 3 && diff.every(([a, b]) => b === `;${a}` && /DEFAULT ACL .* supabase_admin$/.test(a)),
+      "TF-2412 : seules les 3 lignes DEFAULT ACL de supabase_admin changent (préfixe « ; »), le reste est identique");
+
+    // Fins de ligne : un sommaire écrit en CRLF reste en CRLF, sans ligne LF isolée.
+    const crlf = lib12.filtrerSommaire(texte12.replace(/\n/g, "\r\n"));
+    ok(crlf.retirees.length === 3 && !/[^\r]\n/.test(crlf.texte) && crlf.texte.split("\r\n").length === avant.length,
+      "TF-2412 : un sommaire en CRLF est filtré sans mélanger les fins de ligne");
+
+    // Un texte qui n'est pas un sommaire n'est jamais un PASS.
+    const vide = fx12("sommaire-vide.txt");
+    const v1 = cli12("verifier", vide), v2 = cli12("liste", vide, "--sortie", path.join(tmp12, "x.txt"));
+    ok(v1.status === 2 && v2.status === 2 && /aucune entrée numérotée/.test(v1.out) && !fs.existsSync(path.join(tmp12, "x.txt")),
+      "TF-2412 ROUGE : un texte sans entrée (sommaire vide) -> exit 2 des deux verbes, aucune liste écrite");
+    ok(cli12("verifier", path.join(tmp12, "absent.txt")).status === 2 && cli12("liste", sommaire, "--inconnue").status === 2 && cli12("verifier").status === 2,
+      "TF-2412 : fichier absent, option inconnue et fichier non donné -> exit 2");
+
+    // Un autre rôle ne se retire que s'il est nommé : seul supabase_admin a été mesuré.
+    const autre = path.join(tmp12, "autre-role.txt");
+    fs.writeFileSync(autre, lire12(attendue) + "5108; 826 16604 DEFAULT ACL auth DEFAULT PRIVILEGES FOR TABLES supabase_auth_admin\n", "utf8");
+    ok(cli12("verifier", attendue).status === 0 && cli12("verifier", autre).status === 0 && cli12("verifier", autre, "--role", "supabase_auth_admin").status === 1,
+      "TF-2412 : un rôle non mesuré n'est refusé que par `--role` (sans lui exit 0, avec lui exit 1)");
+    const filtre = lib12.filtrerSommaire(texte12 + "5108; 826 16604 DEFAULT ACL auth DEFAULT PRIVILEGES FOR TABLES supabase_auth_admin\n", [...lib12.ROLES_DEFAUT, "supabase_auth_admin"]);
+    ok(filtre.retirees.length === 4 && lib12.verifierListe(filtre.texte, [...lib12.ROLES_DEFAUT, "supabase_auth_admin"]).conforme,
+      "TF-2412 : `--role` retire aussi le rôle nommé (4 entrées) et la liste passe");
+    ok(lib12.verifierListe(texte12).conforme === false && lib12.verifierListe(lib12.filtrerSommaire(texte12).texte).conforme === true,
+      "TF-2412 : verifierListe (bibliothèque) est rouge sur le sommaire, verte sur sa liste filtrée");
+
+    // Les commandes, dans l'ordre : sommaire, filtre, vérification, restauration par la liste ; rien d'exécuté, aucun secret.
+    const plan12 = cli12("plan", "copie.dump");
+    const cmds = plan12.stdout.trim().split("\n");
+    const pos = m => cmds.findIndex(c => c.includes(m));
+    ok(plan12.status === 0 && cmds.length === 4 && pos("pg_restore --list copie.dump") === 0 && pos(" liste sommaire.txt") === 1 && pos(" verifier liste-filtree.txt") === 2
+        && pos("--use-list liste-filtree.txt") === 3 && /--clean --single-transaction/.test(cmds[3]),
+      "TF-2412 plan : sommaire, filtre, vérification, restauration par la liste — dans cet ordre, avec les options mesurées");
+    ok(/--dbname "\$SUPABASE_DB_URL"/.test(cmds[3]) && !/postgres(ql)?:\/\//i.test(plan12.stdout) && /GO humain \(R-38\)/.test(cmds[3]),
+      "TF-2412 plan : la connexion vient de l'environnement du run (aucune chaîne de connexion écrite), la restauration est dite sous GO humain");
+    ok(/<COPIE_PG_DUMP>/.test(cli12("plan").stdout), "TF-2412 plan : sans copie nommée, le jeton <COPIE_PG_DUMP> reste à remplir");
+
+    // Le plan supabase de la forge porte le geste (loi n° 1 : le gabarit est appelé), et le jeton est déclaré.
+    const planSup = JSON.parse(run(ops, ["plan", "supabase", "<BUILD>"]));
+    const ligne12 = planSup.phases.rollback.find(l => l.includes("restauration-supabase.mjs"));
+    ok(ligne12 && /--use-list/.test(ligne12) && /permission denied to change default privileges/.test(ligne12) && /G-07/.test(ligne12) && /GO humain \(R-38\)/.test(ligne12)
+        && planSup.placeholders.includes("<COPIE_PG_DUMP>") && jetonsNonDeclares(planSup).length === 0,
+      "TF-2412 : le plan supabase (rollback) cite le gabarit, l'erreur, G-07 et le GO humain ; <COPIE_PG_DUMP> est déclaré");
+    ok(planSup.phases.rollback.indexOf(ligne12) < planSup.phases.rollback.findIndex(l => l.startsWith("DERNIER RECOURS")),
+      "TF-2412 : la restauration d'une copie précède le DERNIER RECOURS (geste humain irréversible) dans le retour arrière");
+
+    // Loi n° 1 : le garde-fou est au registre des gestes et appelé depuis la documentation de la forge.
+    const lireDoc12 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+    const g07 = lireDoc12("references/GESTES-EXPLOITATION.md");
+    ok(/## G-07 ·/.test(g07) && g07.includes("restauration-supabase.mjs") && g07.includes("SUPABASE_DB_URL") && g07.includes("42786008105") && /TF-2412/.test(g07)
+        && ["CLAUDE.md", "README.md"].every(f => lireDoc12(f).includes("restauration-supabase.mjs") && lireDoc12(f).includes("TF-2412")),
+      "TF-2412 : le garde-fou est inscrit au registre (G-07, avec ses exécutions et sa variable) et appelé par CLAUDE.md et README.md");
+  } finally { fs.rmSync(tmp12, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

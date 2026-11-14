@@ -350,6 +350,20 @@ réseau. L'outil n'appelle jamais Azure et ne choisit rien : il propose la régi
 l'applique. O-5 refuse un plan azure sans repli ou dont la sonde suit le groupe. Le message
 `SkuNotAvailable` mène à l'entrée G-05 de `references/GESTES-EXPLOITATION.md`.
 
+## Restaurer une copie pg_dump dans Supabase (TF-2412, G-07)
+
+Une copie pg_dump ne se restaure pas telle quelle dans un projet Supabase : `pg_restore --clean --single-transaction` échoue sur
+« permission denied to change default privileges », car la copie porte les privilèges par défaut de `supabase_admin` sur `public`
+(entrées `DEFAULT ACL` de son sommaire), que `postgres` ne peut pas rejouer (lot Produit-84 20261110a, ledger seq 278). Le gabarit
+`gabarits/restauration-supabase.mjs` (à copier chez le produit, il n'importe rien de forge-ops) filtre ces entrées du sommaire :
+`plan <copie.dump>` écrit les quatre commandes dans l'ordre (`pg_restore --list`, `liste`, `verifier`, `pg_restore --use-list`) ;
+`liste` COMMENTE d'un « ; » les entrées `DEFAULT ACL` de `supabase_admin` (`--role` en ajoute) et laisse le reste du sommaire
+identique à l'octet près ; `verifier` refuse une liste où il en reste (exit 1) et un texte qui n'est pas un sommaire (exit 2).
+La forge ne se connecte à rien et ne restaure rien : la restauration (`--clean`, sur un service hébergé) se joue sous le GO du run
+(R-38), la connexion par `SUPABASE_DB_URL` de l'environnement du run. Le plan `supabase` (phase `rollback`) le cite ; fixtures
+`fixtures/restauration-supabase/`. Le fait et ses limites : G-07. Lacune dite : la forme des lignes `DEFAULT ACL` n'a pas été
+relevée sur un vrai sommaire (`pg_restore` absent du poste de la campagne).
+
 ## Gestes d'exploitation constatés — `references/GESTES-EXPLOITATION.md`
 
 Les **faits du monde** rencontrés en exploitation, qu'aucune documentation d'éditeur n'énonce et

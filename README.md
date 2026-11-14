@@ -162,6 +162,12 @@ node scripts/appliquer-terraform.mjs <pile> --projet <ref> --executer --sortie a
 node oracles/oracle-ops.mjs --application-terraform <racine du dépôt de la chaîne> [--releve application.json]   # exit 0 conforme · 1 apply direct ou relevé refusé · 2 sans objet
 node oracles/oracle-ops.mjs --application-terraform <fichier de chaîne> --racine <dépôt> [--releve application.json]   # un seul fichier de chaîne
 
+# Restauration d'une copie pg_dump dans Supabase (TF-2412, G-07) : le sommaire de la copie porte les privilèges par défaut de supabase_admin,
+# que postgres ne peut pas rejouer (« permission denied to change default privileges ») ; le gabarit les COMMENTE avant `pg_restore --use-list`
+node gabarits/restauration-supabase.mjs plan <copie.dump>                              # écrit les quatre commandes dans l'ordre, n'en exécute aucune
+node gabarits/restauration-supabase.mjs liste sommaire.txt --sortie liste-filtree.txt [--role <autre>]   # exit 0 · les entrées DEFAULT ACL retirées sont nommées
+node gabarits/restauration-supabase.mjs verifier liste-filtree.txt                    # exit 0 conforme · 1 il reste des entrées refusées · 2 texte qui n'est pas un sommaire
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 
