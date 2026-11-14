@@ -102,6 +102,10 @@ node oracles/oracle-ops.mjs --workflow-deploiement .github/workflows/deploiement
 # exemple : fixtures/o22-mise-en-service-planifiee/verte.md ; --le fixe l'instant de référence (sinon : maintenant)
 node oracles/oracle-ops.mjs --mise-en-service docs/projet/COMPOSANTS-OPS.md [--le "AAAA-MM-JJ HH:MM"]
 
+# Surveillance des échéances (TF-2560, D-108 (b)) : une échéance dépassée sans publication lue = une alerte nommée (exit 1),
+# lancée d'un planificateur AUTRE que celui des tâches surveillées ; aucun appel à une plateforme ; exemples : fixtures/echeances/
+node scripts/surveiller-echeances.mjs controler echeancier.json releve.json --lance-par <planificateur du contrôle> [--le <ISO 8601>]
+
 # Oracle O-23 : un réseau Docker posé par Terraform relève les plages prises et ne dérive pas (TF-2164)
 # gabarit : gabarits/reseau-docker.tf (+ scripts/plages-docker.mjs à copier à côté) — faits : references/RESEAU-ET-FRONTAL-DOCKER.md
 node oracles/oracle-ops.mjs --reseau-docker <pile-terraform-ou-fichier.tf>
@@ -449,7 +453,31 @@ Exemples : `fixtures/o22-mise-en-service-planifiee/` (`verte.md`, `rouge.md`, `r
 de relecture) ; la mise en service, lue telle que déclarée, sans lecture du planificateur ; une tâche déclarée en
 service hors des tables désignées ; l'échéance, lue telle que déclarée, jamais recalculée depuis la cadence ; le
 fuseau (heure locale du poste) ; **l'alerte au sens d'une notification** : l'oracle rend un constat quand on le
-rejoue, il ne tourne pas à l'échéance. Qui le rejoue, et quand, est une décision de run.
+rejoue, il ne tourne pas à l'échéance — c'est le contrôle ci-dessous qui surveille.
+
+## Une échéance dépassée sans publication lue alerte, depuis un autre planificateur que la tâche (TF-2560, D-108 (b) du 14/11/2026)
+
+`node scripts/surveiller-echeances.mjs controler <echeancier.json> <releve.json> --lance-par <planificateur du contrôle> [--le <ISO 8601>] [--sortie verdict.json]`
+lit deux fichiers que le run écrit, et n'appelle aucune plateforme. L'échéancier `forge-ops/echeancier@1` dit ce que
+chaque tâche doit publier (`nom`, `planificateur`, `delai_min`, `echeances` en ISO 8601 avec fuseau) ; le relevé
+`forge-ops/publications-lues@1` dit ce que le run a lu (`releve_le`, `lectures` : tâche, identifiant ou URL, `publie_le`,
+`lu_le`). Une échéance est **dépassée** quand sa fenêtre (échéance + `delai_min`) est close à l'instant de référence ; elle
+est **honorée** par une lecture valide de la même tâche publiée dans `[échéance − délai, échéance + délai]` (un identifiant
+qui n'en est pas un, ou qui cite un essai, ne compte pas, et se liste en `lectures_ignorees`). Chaque échéance dépassée non
+honorée est une alerte `ECHEANCE-DEPASSEE`, nommée (tâche, échéance, retard en minutes, dernière publication lue).
+
+Exit 0 `a-jour` · 1 `alerte` · 2 entrée illisible ou usage · 3 `releve-anterieur` : une échéance dépassée dont la fenêtre se
+ferme après le relevé, que le relevé ne peut pas juger — jamais un « à jour » par défaut. **Le contrôle ne s'exécute pas
+dans la tâche qu'il contrôle** : `--lance-par` est obligatoire et refusé (exit 2) s'il est le `planificateur` d'une tâche de
+l'échéancier, parce qu'une tâche arrêtée n'exécute plus sa propre surveillance — le fait du 21/10/2026. Aucun défaut
+implicite : `delai_min` obligatoire, fenêtres qui se chevauchent refusées, `--le` illisible refusé.
+Exemples : `fixtures/echeances/` (`echeancier.json` ; relevés vert, rouge sans publication, rouge antérieur). Registre :
+`references/GESTES-EXPLOITATION.md`, G-09.
+
+**Ce qui n'est pas jugé :** la vérité d'un identifiant (le relevé est celui du run) ; `--lance-par` est une déclaration, la
+forge ne voit pas le planificateur du run ; qui lance le contrôle, à quelle cadence, et vers qui va l'alerte (le code 1 et
+les lignes `ALERTE` en sont la matière) sont des décisions de run : la forge ne planifie rien. Les échéances sont celles
+déclarées, jamais recalculées d'une cadence.
 
 ## Un travail planifié s'exerce (O-8, TF-0527)
 

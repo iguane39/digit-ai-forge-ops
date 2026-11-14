@@ -1,0 +1,23 @@
+{
+  "format": "forge-ops/echeancier@1",
+  "taches": [
+    {
+      "nom": "publication-exemple",
+      "planificateur": "planificateur-publication-exemple",
+      "delai_min": 60,
+      "echeances": [
+        "2026-10-21T09:00:00Z",
+        "2026-10-22T09:00:00Z",
+        "2026-10-23T09:00:00Z",
+        "2026-10-24T09:00:00Z",
+        "2026-10-25T09:00:00Z"
+      ]
+    },
+    {
+      "nom": "veille-exemple",
+      "planificateur": "planificateur-veille-exemple",
+      "delai_min": 30,
+      "echeances": ["2026-10-24T18:45:00Z"]
+    }
+  ]
+}

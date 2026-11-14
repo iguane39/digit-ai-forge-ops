@@ -193,7 +193,15 @@ findings,non_juge}`, exit 0/1/2 :
   `fixtures/o22-mise-en-service-planifiee/`. **Depuis le 14/11/2026 (TF-2560, D-108 (b)) la lecture est
   postérieure à la mise en service** : colonne `En service depuis` (date et heure), une lecture qui la précède
   ou l'égale est un constat — l'identifiant d'une publication lue pendant l'essai n'est pas celui de la tâche en
-  service.
+  service. **L'alerte d'échéance est tenue hors de la tâche** : `node scripts/surveiller-echeances.mjs controler
+  <echeancier.json> <releve.json> --lance-par <planificateur du contrôle> [--le <ISO 8601>]` lit l'échéancier
+  déclaré (`forge-ops/echeancier@1`) et le relevé des publications lues (`forge-ops/publications-lues@1`, écrit
+  par le run) et rend une alerte `ECHEANCE-DEPASSEE` nommée par échéance dépassée sans publication lue (exit 1) ;
+  `releve-anterieur` (exit 3) quand le relevé précède la fenêtre qu'il devrait juger, exit 2 pour une entrée
+  illisible et pour un contrôle lancé par le planificateur d'une tâche qu'il surveille (une tâche arrêtée
+  n'exécute plus sa propre surveillance : le fait du 21/10/2026). Aucun appel à une plateforme ; qui le lance,
+  quand, et vers qui va l'alerte restent des décisions de run (limites dites : `references/GESTES-EXPLOITATION.md`
+  G-09 ; logique `scripts/lib-echeances.mjs`, fixtures `fixtures/echeances/`).
 
 - **O23** `--reseau-docker <pile ou fichier.tf>` (TF-2164, lot Produit-86 20261104a RO-2). Un réseau Docker posé
   par Terraform relève les plages prises avant d'en choisir une (`scripts/plages-docker.mjs`, branché par un

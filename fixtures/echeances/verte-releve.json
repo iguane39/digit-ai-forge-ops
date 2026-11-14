@@ -1,0 +1,12 @@
+{
+  "format": "forge-ops/publications-lues@1",
+  "releve_le": "2026-10-25T16:59:00Z",
+  "lectures": [
+    { "tache": "publication-exemple", "identifiant": "https://reseau.exemple/publication/17912345601", "publie_le": "2026-10-21T09:00:12Z", "lu_le": "2026-10-21T18:50:00Z" },
+    { "tache": "publication-exemple", "identifiant": "post-17912345602", "publie_le": "2026-10-22T09:00:08Z", "lu_le": "2026-10-22T18:50:00Z" },
+    { "tache": "publication-exemple", "identifiant": "post-17912345603", "publie_le": "2026-10-23T08:59:50Z", "lu_le": "2026-10-23T18:50:00Z" },
+    { "tache": "publication-exemple", "identifiant": "post-17912345604", "publie_le": "2026-10-24T09:00:30Z", "lu_le": "2026-10-24T18:50:00Z" },
+    { "tache": "publication-exemple", "identifiant": "post-17912345605", "publie_le": "2026-10-25T09:00:02Z", "lu_le": "2026-10-25T16:50:00Z" },
+    { "tache": "veille-exemple", "identifiant": "job-0057", "publie_le": "2026-10-24T18:45:20Z", "lu_le": "2026-10-24T19:02:00Z" }
+  ]
+}

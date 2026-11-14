@@ -1,0 +1,8 @@
+{
+  "format": "forge-ops/publications-lues@1",
+  "releve_le": "2026-10-25T16:59:00Z",
+  "lectures": [
+    { "tache": "publication-exemple", "identifiant": "essai-0042 (à blanc)", "publie_le": "2026-10-21T04:56:00Z", "lu_le": "2026-10-21T05:00:00Z" },
+    { "tache": "autre-tache-exemple", "identifiant": "post-17912345678", "publie_le": "2026-10-22T09:00:00Z", "lu_le": "2026-10-22T09:05:00Z" }
+  ]
+}

@@ -3784,5 +3784,126 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   } finally { fs.rmSync(tmp19, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 }
 
+// ── TF-2560 (œil critique du 29/10/2026, décision D-108 (b) du 14/11/2026, option (a)) : UNE ÉCHÉANCE DÉPASSÉE SANS PUBLICATION LUE ALERTE ─
+// Le fait : une tâche planifiée de publication déclarée « en service » le 21/10 à 04:56, 0 publication du 20 au 25/10, la vérification de
+// 18:45 armée dans la tâche n'a pas eu lieu. Le contrôle lit l'échéancier déclaré et le relevé des publications lues, rend une alerte nommée
+// par échéance dépassée, ne tourne pas dans la tâche qu'il surveille (`--lance-par`) et n'appelle aucune plateforme. Fixtures construites.
+{
+  console.log("");
+  const outil60 = path.join(ici, "..", "scripts", "surveiller-echeances.mjs");
+  const lib60 = await import("../scripts/lib-echeances.mjs");
+  const fx60 = f => path.join(fx("echeances"), f);
+  const tmp60 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2560-"));
+  const REF60 = "2026-10-25T17:00:00Z", SURV60 = "surveillance-exemple";
+  const cli60 = (...a) => { const r = spawnSync(process.execPath, [outil60, ...a], { encoding: "utf8" }); let json = null; try { json = JSON.parse(r.stdout); } catch { /* sortie non JSON */ } return { status: r.status, stdout: r.stdout || "", stderr: r.stderr || "", json }; };
+  const ctl60 = (ech, rel, ...extra) => cli60("controler", ech, rel, "--lance-par", SURV60, "--le", REF60, ...extra);
+  const ecrire60 = (nom, o) => { const f = path.join(tmp60, nom); fs.writeFileSync(f, typeof o === "string" ? o : JSON.stringify(o), "utf8"); return f; };
+  const lire60 = f => JSON.parse(fs.readFileSync(f, "utf8"));
+  const ECH60 = fx60("echeancier.json");
+  let n60 = 0; // compteur de fichiers temporaires : un nom par appel
+  try {
+    // ROUGE : le fait du 21/10 sous forme construite — aucune publication valide lue pour 6 échéances dépassées.
+    const rouge = ctl60(ECH60, fx60("rouge-releve-sans-publication.json"));
+    const noms = (rouge.json?.alertes || []).map(a => `${a.tache}@${a.echeance.slice(0, 10)}`).sort();
+    ok(rouge.status === 1 && rouge.json?.verdict === "alerte" && noms.length === 6 && rouge.json.alertes.every(a => a.nom === "ECHEANCE-DEPASSEE")
+        && noms.join() === ["publication-exemple@2026-10-21", "publication-exemple@2026-10-22", "publication-exemple@2026-10-23", "publication-exemple@2026-10-24", "publication-exemple@2026-10-25", "veille-exemple@2026-10-24"].join(),
+      `TF-2560 ROUGE : 6 échéances dépassées sans publication lue -> exit 1, une alerte ECHEANCE-DEPASSEE nommée par échéance et par tâche (obtenu exit ${rouge.status}, ${noms.length} alertes)`);
+    const a25 = rouge.json?.alertes?.find(a => a.echeance.startsWith("2026-10-25"));
+    ok(a25 && a25.depassee_depuis_min === 420 && a25.derniere_lecture === null && /ALERTE ECHEANCE-DEPASSEE/.test(rouge.stderr) && (rouge.stderr.match(/ALERTE ECHEANCE-DEPASSEE/g) || []).length === 6,
+      "TF-2560 ROUGE : l'alerte dit le retard mesuré (25/10 09:00 + 60 min, à 17:00 : 420 min), la dernière lecture connue, et se lit sur la sortie d'erreur à raison d'une ligne par échéance");
+    ok(rouge.json?.lectures_ignorees?.length === 1 && /cite un essai/.test(rouge.json.lectures_ignorees[0].motif),
+      "TF-2560 ROUGE : l'identifiant d'un essai (« essai-0042 (à blanc) ») n'honore pas l'échéance, il est listé en lecture ignorée ; la lecture d'une autre tâche n'honore pas non plus");
+    // VERTE et remède (TF-1013) : le relevé complété des publications lues rend exit 0.
+    const verte = ctl60(ECH60, fx60("verte-releve.json"));
+    ok(verte.status === 0 && verte.json?.verdict === "a-jour" && verte.json.alertes.length === 0 && verte.json.echeances_honorees === 6,
+      `TF-2560 VERT : une publication lue dans la fenêtre de chacune des 6 échéances -> exit 0 « a-jour » (obtenu exit ${verte.status}, ${verte.json?.echeances_honorees} honorées)`);
+    const lectures = lire60(fx60("verte-releve.json")).lectures;
+    const remede = ctl60(ECH60, ecrire60("remede.json", { ...lire60(fx60("rouge-releve-sans-publication.json")), lectures }));
+    ok(remede.status === 0 && remede.json?.verdict === "a-jour", "TF-2560 remède : le relevé du rouge, complété des publications lues -> exit 0 (le remède que dit l'alerte se joue)");
+    // Mixte : seules les échéances manquées alertent.
+    const mixte = ctl60(ECH60, ecrire60("mixte.json", { ...lire60(fx60("verte-releve.json")), lectures: lectures.filter(l => !l.publie_le.startsWith("2026-10-23") && l.tache !== "veille-exemple") }));
+    ok(mixte.status === 1 && mixte.json.alertes.length === 2 && mixte.json.alertes.map(a => a.tache + "@" + a.echeance.slice(0, 10)).sort().join() === "publication-exemple@2026-10-23,veille-exemple@2026-10-24"
+        && mixte.json.alertes[0].derniere_lecture?.identifiant === "post-17912345605",
+      "TF-2560 ROUGE : une publication manquée au milieu de quatre honorées, et une veille muette -> exactement ces 2 alertes, la dernière publication lue de la tâche nommée");
+    // Bornes de fenêtre : fenêtre = échéance ± délai, fermée.
+    const base = lire60(ECH60);
+    const un = (echeances, delai) => ecrire60(`un-${++n60}.json`, { format: base.format, taches: [{ nom: "pub-exemple", planificateur: "planif-pub-exemple", delai_min: delai, echeances }] });
+    const rel = (lectures, releve_le = "2026-10-25T16:59:00Z") => ecrire60(`rel-${++n60}.json`, { format: "forge-ops/publications-lues@1", releve_le, lectures });
+    const lec = publie => [{ tache: "pub-exemple", identifiant: "post-1234567", publie_le: publie, lu_le: publie }];
+    const E1 = ["2026-10-24T09:00:00Z"];
+    ok(ctl60(un(E1, 60), rel(lec("2026-10-24T10:00:00Z"))).status === 0 && ctl60(un(E1, 60), rel(lec("2026-10-24T10:01:00Z"))).status === 1,
+      "TF-2560 borne : publiée à E + délai pile -> honorée ; une minute plus tard -> alerte (publication tardive)");
+    ok(ctl60(un(E1, 60), rel(lec("2026-10-24T08:00:00Z"))).status === 0 && ctl60(un(E1, 60), rel(lec("2026-10-24T07:59:00Z"))).status === 1,
+      "TF-2560 borne : publiée à E − délai pile -> honorée ; une minute plus tôt -> alerte");
+    const refFin = (ref) => cli60("controler", un(E1, 60), rel([], ref), "--lance-par", SURV60, "--le", ref);
+    ok(refFin("2026-10-24T10:00:00Z").status === 0 && refFin("2026-10-24T10:00:00Z").json.echeances_a_venir === 1 && refFin("2026-10-24T10:01:00Z").status === 1,
+      "TF-2560 borne : à E + délai pile, l'échéance n'est pas dépassée (à venir, exit 0) ; une minute après elle l'est, relevé du même instant (exit 1)");
+    // Le relevé antérieur à la fenêtre ne dit pas « à jour » : exit 3, nommé.
+    const ant = ctl60(ECH60, fx60("rouge-releve-anterieur.json"));
+    ok(ant.status === 3 && ant.json?.verdict === "releve-anterieur" && ant.json.non_jugeables.length === 6 && ant.json.alertes.length === 0 && /refaire le relevé/.test(ant.stderr),
+      `TF-2560 ROUGE : relevé du 20/10 face à des échéances échues du 21 au 25 -> exit 3 « releve-anterieur », 6 non jugeables, jamais un « à jour » (obtenu exit ${ant.status})`);
+    const mix = ctl60(ECH60, ecrire60("mix-anterieur.json", { ...lire60(fx60("rouge-releve-sans-publication.json")), releve_le: "2026-10-24T00:00:00Z", lectures: [] }));
+    ok(mix.status === 1 && mix.json.alertes.length === 3 && mix.json.non_jugeables.length === 3, "TF-2560 : un relevé du 24/10 à minuit juge les échéances closes avant lui (3 alertes) et nomme celles qu'il ne peut pas juger (3) ; l'alerte l'emporte sur le code 3");
+    // INDÉPENDANCE : le contrôle ne s'exécute pas dans la tâche qu'il contrôle.
+    const dedans = cli60("controler", ECH60, fx60("verte-releve.json"), "--lance-par", "planificateur-publication-exemple", "--le", REF60);
+    ok(dedans.status === 2 && /s'arrête avec elle/.test(dedans.stderr) && dedans.json?.alertes === undefined,
+      "TF-2560 ROUGE : --lance-par égal au planificateur d'une tâche surveillée -> exit 2, ni verdict ni « à jour » (le contrôle posé dans la tâche meurt avec elle)");
+    ok(ctl60(ECH60, fx60("verte-releve.json")).status === 0 && cli60("controler", ECH60, fx60("verte-releve.json"), "--le", REF60).status === 2
+        && /obligatoire/.test(cli60("controler", ECH60, fx60("verte-releve.json"), "--le", REF60).stderr),
+      "TF-2560 : lancé d'un autre planificateur -> exit 0 ; --lance-par absent -> exit 2 (obligatoire, aucun défaut implicite)");
+    // Illisible : jamais un verdict inventé.
+    const racine = lire60(fx60("verte-releve.json"));
+    const tache = base.taches[0];
+    const refusEch = [
+      ["format de l'échéancier", { ...base, format: "autre@1" }, racine, /échéancier : format/],
+      ["échéancier sans tâche", { ...base, taches: [] }, racine, /aucune tâche/],
+      ["tâche sans planificateur", { ...base, taches: [{ ...tache, planificateur: "" }] }, racine, /sans planificateur/],
+      ["délai absent", { ...base, taches: [{ ...tache, delai_min: undefined }] }, racine, /delai_min/],
+      ["délai nul", { ...base, taches: [{ ...tache, delai_min: 0 }] }, racine, /delai_min/],
+      ["échéance sans fuseau", { ...base, taches: [{ ...tache, echeances: ["2026-10-21T09:00:00"] }] }, racine, /illisible — attendu ISO 8601 avec fuseau/],
+      ["tâche sans échéance", { ...base, taches: [{ ...tache, echeances: [] }] }, racine, /sans échéances/],
+      ["tâche en double", { ...base, taches: [tache, tache] }, racine, /deux fois/],
+      ["fenêtres qui se chevauchent", { ...base, taches: [{ ...tache, delai_min: 721 }] }, racine, /se chevauchent/],
+      ["format du relevé", base, { ...racine, format: "autre@1" }, /relevé : format/],
+      ["relevé sans releve_le", base, { ...racine, releve_le: undefined }, /releve_le/],
+      ["relevé du futur", base, { ...racine, releve_le: "2026-10-26T00:00:00Z" }, /postérieur à l'instant de référence/],
+      ["lectures absentes", base, { ...racine, lectures: undefined }, /lectures absentes/],
+      ["lecture lue après le relevé", base, { ...racine, lectures: [{ ...racine.lectures[0], lu_le: "2026-10-25T17:00:00Z" }] }, /lue après le relevé/],
+      ["lecture lue avant d'être publiée", base, { ...racine, lectures: [{ ...racine.lectures[0], lu_le: "2026-10-21T08:00:00Z" }] }, /lue avant d'être publiée/],
+      ["lecture sans fuseau", base, { ...racine, lectures: [{ ...racine.lectures[0], publie_le: "2026-10-21 09:00" }] }, /publie_le ou lu_le illisible/],
+    ];
+    const refus = refusEch.map(([nom, e, r, motif]) => { const x = ctl60(ecrire60("e-" + nom.replace(/\W/g, "-") + ".json", e), ecrire60("r-" + nom.replace(/\W/g, "-") + ".json", r)); return { nom, ok: x.status === 2 && x.json?.verdict === "illisible" && motif.test(x.stderr) && x.json?.alertes === undefined }; });
+    ok(refus.every(r => r.ok), `TF-2560 ROUGE : 16 entrées illisibles (formats, délai, fuseau, chevauchement, relevé du futur, lectures incohérentes...) -> exit 2 chacune, pour sa raison (${refus.filter(r => !r.ok).map(r => r.nom).join(", ") || "16 sur 16"})`);
+    const ok2 = (...a) => cli60(...a).status === 2;
+    ok(ok2("controler", path.join(tmp60, "absent.json"), fx60("verte-releve.json"), "--lance-par", SURV60) && ok2("controler", ECH60, path.join(tmp60, "absent.json"), "--lance-par", SURV60)
+        && ok2("controler", ECH60, ecrire60("pas-du-json.json", "pas du json"), "--lance-par", SURV60) && ok2("controler", ECH60) && ok2("lire", ECH60, fx60("verte-releve.json"))
+        && ok2("controler", ECH60, fx60("verte-releve.json"), "--lance-par", SURV60, "--inconnue") && ok2("controler", ECH60, fx60("verte-releve.json"), "--lance-par", SURV60, "--le", "hier")
+        && ok2("controler", ECH60, fx60("verte-releve.json"), "--lance-par") && ok2("controler", ECH60, fx60("verte-releve.json"), "--lance-par", SURV60, "--le", "2026-10-25 17:00"),
+      "TF-2560 : fichier absent, JSON illisible, relevé non donné, verbe inconnu, option inconnue, --le illisible ou sans fuseau, --lance-par sans valeur -> exit 2, jamais un repli silencieux sur maintenant");
+    // Sans --le, l'instant de référence est maintenant : les échéances de 2026 d'un échéancier futur ne sont pas échues.
+    const futur = ecrire60("futur.json", { format: base.format, taches: [{ nom: "pub-exemple", planificateur: "planif-pub-exemple", delai_min: 60, echeances: ["2099-01-01T09:00:00Z"] }] });
+    const sansLe = cli60("controler", futur, rel([], "2026-10-25T16:59:00Z"), "--lance-par", SURV60);
+    ok(sansLe.status === 0 && sansLe.json?.echeances_a_venir === 1, "TF-2560 : sans --le, la référence est maintenant — une échéance de 2099 est à venir (exit 0), jamais un faux « dépassée »");
+    const sortie = path.join(tmp60, "verdict.json");
+    const avecSortie = ctl60(ECH60, fx60("rouge-releve-sans-publication.json"), "--sortie", sortie);
+    ok(avecSortie.status === 1 && fs.existsSync(sortie) && lire60(sortie).alertes.length === 6, "TF-2560 : --sortie écrit le verdict et ses alertes, même à l'exit 1 (le dossier de run le cite)");
+    // Identifiants de publication : un identifiant ou une URL, jamais un mot, une date ou un essai (mêmes mots qu'O-22).
+    ok(lib60.refusIdentifiant("ok") && lib60.refusIdentifiant("publié") && lib60.refusIdentifiant("2026-10-21 18:50") && lib60.refusIdentifiant("") && lib60.refusIdentifiant("publication d'essai 123456")
+        && lib60.refusIdentifiant("https://reseau.exemple/p/881122 (essai à blanc)") && !lib60.refusIdentifiant("id 17912345678") && !lib60.refusIdentifiant("https://reseau.exemple/p/881122")
+        && !lib60.refusIdentifiant("https://reseau.exemple/p/881122 (publication réelle, après l'essai à blanc)"),
+      "TF-2560 : un mot, une date, un essai ne sont pas un identifiant ; un identifiant à chiffres ou une URL, oui ; « réelle » dit dans la cellule lève le soupçon d'essai");
+    // La forge n'appelle rien : ni réseau, ni processus, ni lecture d'environnement.
+    const sources60 = ["scripts/surveiller-echeances.mjs", "scripts/lib-echeances.mjs"].map(f => fs.readFileSync(path.join(ici, "..", f), "utf8").replace(/^\s*\/\/.*$/gm, ""));
+    ok(sources60.every(s => !/\bfetch\s*\(|node:(http|https|net|child_process)|process\.env|spawn|exec(File)?Sync/.test(s)),
+      "TF-2560 : le contrôle et sa bibliothèque n'appellent aucune plateforme, ne lancent aucun processus et ne lisent pas l'environnement");
+    // Loi n° 1 : les deux garde-fous sont au registre des gestes et appelés par la documentation de la forge.
+    const lireDoc60 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+    const g09 = lireDoc60("references/GESTES-EXPLOITATION.md");
+    ok(/## G-09 ·/.test(g09) && g09.includes("surveiller-echeances.mjs") && g09.includes("--mise-en-service") && g09.includes("En service depuis") && g09.includes("ECHEANCE-DEPASSEE") && g09.includes("D-108 (b)")
+        && ["CLAUDE.md", "README.md"].every(f => { const t = lireDoc60(f); return t.includes("surveiller-echeances.mjs") && t.includes("TF-2560") && t.includes("En service depuis") && t.includes("fixtures/echeances"); }),
+      "TF-2560 : les deux garde-fous (O-22 « En service depuis » et la surveillance des échéances) sont inscrits au registre (G-09) et appelés par CLAUDE.md et README.md");
+  } finally { fs.rmSync(tmp60, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);
