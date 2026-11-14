@@ -233,7 +233,7 @@ FORGE_OPS_EXERCICE_TERRAFORM=1 node oracles/self-test.mjs
 | O19 | `--sauvegarde <declaration.json> [--le AAAA-MM-JJ]` : sur une déclaration `forge-ops/sauvegarde@1`, chaque actif de données critique porte RPO, RTO, mécanisme, fréquence (≤ RPO) et configuration de sauvegarde, et un exercice de restauration réussi depuis ≤ 12 mois, de durée ≤ RTO et d'intégrité constatée ; `actifs: []` exige `aucun_actif_critique` motivé (TF-1212 ; CTL-D05-09, CTL-D12-06, CTL-D16-09 du référentiel d'audit) |
 | O20 | `--conteneurs-a-etat <racine> [--composants <COMPOSANTS-OPS.md>]` : chaque `docker run` et chaque service compose d'une image à état monte un volume nommé ou un dossier de l'hôte sur le chemin exact de ses données ; chaque `docker start` vise un conteneur dont la commande de création est écrite ; la table « Composants à état » déclare volume et commande de création (TF-1986) |
 | O21 | `--workflow-deploiement <fichier.yml> [--environnement <nom>] [--protection <capture.json>]` : un job qui déploie référence un environnement ; le job de production a son GO humain prouvé (job de garde qui lit l'environnement par l'API, ou capture de `gh api …/environments/<nom>`) ; il est couvert par un groupe de concurrence sans `cancel-in-progress: true` ; `id-token: write` ne va qu'à lui (TF-2003) |
-| O22 | `--mise-en-service <COMPOSANTS-OPS.md> [--le "AAAA-MM-JJ HH:MM"]` : une tâche planifiée ou récurrente déclarée « en service » (« actif », « partagé » ou « en service ») porte l'identifiant ou l'URL d'une première exécution réelle lue, la date et l'heure de lecture, et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat (D-108 (b)) |
+| O22 | `--mise-en-service <COMPOSANTS-OPS.md> [--le "AAAA-MM-JJ HH:MM"]` : une tâche planifiée ou récurrente déclarée « en service » (« actif », « partagé » ou « en service ») porte l'identifiant ou l'URL d'une première exécution réelle lue, la date et l'heure de lecture, postérieure à la date de sa mise en service (`En service depuis`, TF-2560), et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat (D-108 (b)) |
 | O23 | `--reseau-docker <pile Terraform ou fichier.tf>` : chaque `docker_network` à `ipam_config` pose `lifecycle { ignore_changes = [ipam_config] }` et tient son `subnet` d'un relevé des plages prises (`data "external"` qui appelle `scripts/plages-docker.mjs`), jamais d'un CIDR écrit à la main ; gabarit `gabarits/reseau-docker.tf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2164) |
 | O24 | `--frontal-nginx <fichier.conf ou dossier>` : chaque `proxy_pass`, `fastcgi_pass`, `uwsgi_pass`, `scgi_pass` et `grpc_pass` vers un nom d'hôte passe par une variable, avec un `resolver` qui porte `valid=` ; un groupe `upstream` à serveur nommé porte `resolve` et son resolver dans son bloc ou dans `http` ; gabarit `gabarits/frontal-nginx.conf`, faits `references/RESEAU-ET-FRONTAL-DOCKER.md` (TF-2165, étendu par TF-2177) |
 | O25 | `--identifiants-test <fichier.json> [--journal <journal.jsonl>]` : sur un fichier `forge-ops/identifiants-test@1`, le mot de passe de chaque compte tient en 20 caractères au moins d'un alphabet sans sosie (0 O 1 l I) ni signe ; le constat nomme le compte et la position, jamais la valeur (générateur `scripts/tirer-secret-humain.mjs`, TF-2167). Avec le journal de `scripts/identifiants-test.mjs` : aucun renouvellement sans demande de l'humain, aucune création hors fichier ou compte absent, chaque création ou renouvellement suivi d'une connexion réussie (TF-2166) ; faits `references/IDENTIFIANTS-DE-TEST.md` |
@@ -427,6 +427,7 @@ colonne `Type` qui dit planifié, récurrent, cron. Quand elle est « en service
 
 | Colonne | Contenu |
 |---|---|
+| `En service depuis` | la date ET l'heure de la mise en service, `AAAA-MM-JJ HH:MM` (`Mise en service le` accepté) ; toute lecture lui est **postérieure** (TF-2560, D-108 (b) du 14/11/2026) : l'identifiant d'une publication lue pendant l'essai, avant la mise en service, n'est pas celui de la tâche en service |
 | `Première exécution lue` | l'identifiant ou l'URL de la publication réelle ; ni « l'essai a passé », ni une date, ni un mot |
 | `Première lecture le` | la date ET l'heure où elle a été lue, `AAAA-MM-JJ HH:MM` (`THH:MM` et `HHhMM` acceptés) |
 | `Prochaine échéance` | l'instant où l'exécution suivante doit être relue ; sans heure, elle vaut la fin de son jour |
@@ -434,19 +435,21 @@ colonne `Type` qui dit planifié, récurrent, cron. Quand elle est « en service
 
 Constats, tous bloquants, un par raison et par tâche : preuve absente, ou un essai (« à blanc », « simulé »)
 sans le mot « réelle » ; lecture sans date, sans heure, illisible ou postérieure à l'instant de référence ;
+**lecture antérieure ou égale à la mise en service**, mise en service absente, sans heure ou illisible ;
 échéance absente ou illisible ; **échéance dépassée sans lecture plus récente qu'elle**, le constat disant
 la lecture la plus récente connue. Une table sans les colonnes de preuve rend un seul constat qui nomme les
 tâches en service et les colonnes. Le remède est dit dans chaque constat : lire l'exécution et dater la
 lecture, ou ramener le statut à « déclaré », la forme honnête d'une tâche dont aucune exécution n'a été lue
 (non jugée). Aucune tâche désignée, ou aucune en service : SKIP, jamais un PASS vide. `--le` fixe l'instant de
 référence, une date seule valant la fin de son jour ; un `--le` illisible rend `donnees_insuffisantes`.
-Exemples : `fixtures/o22-mise-en-service-planifiee/` (`verte.md`, `rouge.md`, `rouge-sans-colonnes.md`).
+Exemples : `fixtures/o22-mise-en-service-planifiee/` (`verte.md`, `rouge.md`, `rouge-sans-colonnes.md`,
+`rouge-lecture-avant-mise-en-service.md`).
 
 **Ce qui n'est pas jugé :** la vérité de l'identifiant (un identifiant inventé passe : l'ouvrir reste un geste
-de relecture) ; une tâche déclarée en service hors des tables désignées ; l'échéance, lue telle que déclarée,
-jamais recalculée depuis la cadence ; le fuseau (heure locale du poste) ; **l'alerte au sens d'une
-notification** : l'oracle rend un constat quand on le rejoue, il ne tourne pas à l'échéance. Qui le rejoue, et
-quand, est une décision de run.
+de relecture) ; la mise en service, lue telle que déclarée, sans lecture du planificateur ; une tâche déclarée en
+service hors des tables désignées ; l'échéance, lue telle que déclarée, jamais recalculée depuis la cadence ; le
+fuseau (heure locale du poste) ; **l'alerte au sens d'une notification** : l'oracle rend un constat quand on le
+rejoue, il ne tourne pas à l'échéance. Qui le rejoue, et quand, est une décision de run.
 
 ## Un travail planifié s'exerce (O-8, TF-0527)
 

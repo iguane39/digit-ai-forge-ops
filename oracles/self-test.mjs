@@ -1899,21 +1899,40 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   const tmp22 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-o22-"));
   try {
     const ecrire = (nom, texte) => { const p = path.join(tmp22, nom); fs.writeFileSync(p, texte, "utf8"); return p; };
-    const EN = ["Composant", "Statut", "Première exécution lue", "Première lecture le", "Prochaine échéance"];
+    const EN = ["Composant", "Statut", "Première exécution lue", "Première lecture le", "Prochaine échéance", "En service depuis"];
+    const SVC = "2026-10-01 00:00"; // mise en service antérieure à toutes les lectures des cas ci-dessous (TF-2560)
     const doc22 = (entetes, ...lignes) => `## Tâches planifiées\n\n| ${entetes.join(" | ")} |\n|${entetes.map(() => "---").join("|")}|\n${lignes.map(l => `| ${l.join(" | ")} |`).join("\n")}\n`;
-    const un = (id, stat, pre, lec, ech) => ecrire(`${id}.md`, doc22(EN, [id, stat, pre, lec, ech]));
+    const un = (id, stat, pre, lec, ech) => ecrire(`${id}.md`, doc22(EN, [id, stat, pre, lec, ech, SVC]));
     const sansConstat = (r) => r.verdict === "PASS" && durs(r).length === 0;
     // TF-1013 : les remèdes que nomment les constats se jouent, et rendent PASS.
-    const tacheRouge = ["veille-exemple", "en service", "job-0042", "2026-10-20 08:00", "2026-10-21 18:45"];
+    const tacheRouge = ["veille-exemple", "en service", "job-0042", "2026-10-20 08:00", "2026-10-21 18:45", "2026-10-20 06:00"];
     ok(o22(ecrire("echue.md", doc22(EN, tacheRouge)), "--le", REF22).verdict === "FAIL", "O22 remède : la tâche à échéance passée, seule dans sa table -> FAIL");
     ok(sansConstat(o22(ecrire("echue-relue.md", doc22([...EN, "Dernière exécution lue", "Dernière lecture le"], [...tacheRouge, "job-0057", "2026-10-25 09:00"])), "--le", REF22)),
       "O22 remède 1 : lire la dernière exécution (identifiant + heure de lecture) après l'échéance -> PASS, l'échéance restant passée");
-    const rDecl = o22(ecrire("declaree.md", doc22(EN, ["veille-exemple", "déclaré", "—", "—", "—"])), "--le", REF22);
+    const rDecl = o22(ecrire("declaree.md", doc22(EN, ["veille-exemple", "déclaré", "—", "—", "—", "—"])), "--le", REF22);
     ok(rDecl.verdict === "SKIP" && durs(rDecl).length === 0, `O22 remède 2 : ramener le Statut à « déclaré » -> plus de constat, SKIP et jamais un PASS vide (obtenu ${rDecl.verdict})`);
     ok(sansConstat(o22(un("pub-exemple", "actif", "https://reseau.exemple/p/881122", "2026-10-21 18:50", "2026-10-26 18:45"), "--le", REF22)),
       "O22 remède 3 : l'URL de la publication réelle + l'heure de lecture + l'échéance -> PASS");
-    ok(sansConstat(o22(ecrire("colonnes-ajoutees.md", doc22(EN, ["publication-exemple", "actif", "post-17912345678", "2026-10-21 18:50", "2026-10-26 18:45"])), "--le", REF22)),
+    ok(sansConstat(o22(ecrire("colonnes-ajoutees.md", doc22(EN, ["publication-exemple", "actif", "post-17912345678", "2026-10-21 18:50", "2026-10-26 18:45", "2026-10-21 04:56"])), "--le", REF22)),
       "O22 remède 4 : table de rouge-sans-colonnes.md complétée des trois colonnes -> PASS");
+    // TF-2560 (D-108 (b) du 14/11/2026) : la publication lue l'est APRÈS la mise en service. Colonne « En service depuis ».
+    const rAvant22 = o22(fx22("rouge-lecture-avant-mise-en-service.md"), "--le", REF22);
+    ok(rAvant22.verdict === "FAIL" && durs(rAvant22).length === 1 && /AVANT la mise en service \(2026-10-21 04:56\)/.test(durs(rAvant22)[0].msg),
+      `TF-2560 ROUGE O22 : identifiant valide lu le 20/10 à 22:00, tâche en service le 21/10 à 04:56 -> FAIL, ce seul constat, qui nomme la mise en service (obtenu ${rAvant22.verdict}, ${durs(rAvant22).length})`);
+    const avantRemede = fs.readFileSync(fx22("rouge-lecture-avant-mise-en-service.md"), "utf8");
+    ok(sansConstat(o22(ecrire("apres-remede.md", avantRemede.replace("2026-10-20 22:00", "2026-10-21 18:50")), "--le", REF22)),
+      "TF-2560 remède O22 : lire une exécution réelle APRÈS la mise en service (même identifiant, lecture du 21/10 à 18:50) -> PASS");
+    const svcAvec = (svc, lec = "2026-10-21 18:50") => o22(ecrire("svc.md", doc22(EN, ["pub-exemple", "actif", "post-123456", lec, "2026-10-26 18:45", svc])), "--le", REF22);
+    ok(durs(svcAvec("2026-10-21 18:50"))[0]?.msg.includes("AVANT la mise en service") && sansConstat(svcAvec("2026-10-21 18:49")),
+      "TF-2560 O22 : lecture à la minute même de la mise en service = pas postérieure -> constat ; une minute après -> PASS");
+    ok(/absentes/.test(durs(svcAvec(""))[0]?.msg || "") && /illisibles/.test(durs(svcAvec("hier soir"))[0]?.msg || "") && /SANS heure/.test(durs(svcAvec("2026-10-21"))[0]?.msg || ""),
+      "TF-2560 O22 : mise en service absente, illisible ou sans heure -> constat (rien ne dit que la lecture lui est postérieure)");
+    ok(/après l'instant de référence/.test(durs(svcAvec("2026-11-01 08:00"))[0]?.msg || ""), "TF-2560 O22 : mise en service datée du futur -> constat");
+    const derAvant = o22(ecrire("derniere-avant.md", doc22([...EN, "Dernière exécution lue", "Dernière lecture le"], ["pub-exemple", "en service", "post-123456", "2026-10-21 18:50", "2026-10-21 18:45", "2026-10-21 04:56", "post-123457", "2026-10-21 04:00"])), "--le", REF22);
+    ok(derAvant.verdict === "FAIL" && durs(derAvant).some(f => /dernière exécution : lecture datée du 2026-10-21 04:00, AVANT la mise en service/.test(f.msg)),
+      "TF-2560 ROUGE O22 : la dernière exécution lue avant la mise en service ne compte pas non plus (elle ne lève pas l'échéance dépassée) -> constat");
+    ok(sansConstat(o22(ecrire("svc-accents.md", doc22(["Composant", "Statut", "Première exécution lue", "Première lecture le", "Prochaine échéance", "Mise en service le"], ["pub-exemple", "actif", "post-123456", "2026-10-21 18:50", "2026-10-26 18:45", "2026-10-21 04:56"])), "--le", REF22)),
+      "TF-2560 O22 : la colonne se lit aussi « Mise en service le »");
     // La preuve : un identifiant ou une URL, jamais une date, une heure, un mot ou un essai.
     const refus = (pre) => o22(un("preuve", "actif", pre, "2026-10-21 18:50", "2026-10-26 18:45"), "--le", REF22);
     ok(refus("2026-10-21 18:50").verdict === "FAIL" && refus("ok").verdict === "FAIL" && refus("publié").verdict === "FAIL",
@@ -1940,7 +1959,7 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
       "O22 : une colonne Type « tâche planifiée » désigne la tâche, sans titre ni Cadence -> jugée");
     ok(o22(ecrire("sans-designation.md", `## Inventaire\n\n| ${ent2.join(" | ")} |\n|---|---|---|\n| pub-exemple | application | actif |\n`), "--le", REF22).verdict === "SKIP",
       "O22 : « actif » sans titre, Cadence ni Type de tâche planifiée -> non jugé, SKIP");
-    ok(sansConstat(o22(ecrire("sans-accents.md", doc22(["Composant", "Statut", "Premiere execution lue", "Premiere lecture le", "Prochaine echeance"], ["pub-exemple", "actif", "post-123456", "2026-10-21 18:50", "2026-10-26 18:45"])), "--le", REF22)),
+    ok(sansConstat(o22(ecrire("sans-accents.md", doc22(["Composant", "Statut", "Premiere execution lue", "Premiere lecture le", "Prochaine echeance", "En service depuis"], ["pub-exemple", "actif", "post-123456", "2026-10-21 18:50", "2026-10-26 18:45", "2026-10-21 04:56"])), "--le", REF22)),
       "O22 : en-têtes écrits sans accents -> lus pareil");
     ok(o22(ecrire("sans-statut.md", "## Tâches planifiées\n\n| Composant | Cadence |\n|---|---|\n| pub-exemple | chaque jour |\n"), "--le", REF22).verdict === "FAIL",
       "O22 : table de tâches planifiées sans colonne Statut -> FAIL");

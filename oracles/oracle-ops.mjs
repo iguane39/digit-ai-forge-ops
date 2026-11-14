@@ -58,8 +58,9 @@
 //       concurrence sans cancel-in-progress: true ; id-token: write ne va qu'à lui (TF-2003).
 //   O22 --mise-en-service <COMPOSANTS-OPS.md> [--le AAAA-MM-JJ[ HH:MM]] : une tâche planifiée ou
 //       récurrente déclarée « en service » (« actif », « partagé » ou « en service ») porte la lecture
-//       d'une première exécution RÉELLE (identifiant ou URL de la publication, date et heure de lecture)
-//       et sa prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat
+//       d'une première exécution RÉELLE (identifiant ou URL de la publication, date et heure de lecture,
+//       postérieure à la date de sa mise en service, colonne « En service depuis », TF-2560) et sa
+//       prochaine échéance ; une échéance dépassée sans lecture plus récente est un constat
 //       (D-108 (b)). Aucune tâche désignée ou aucune en service : SKIP.
 //   O23 --reseau-docker <pile ou fichier.tf> : chaque `docker_network` à `ipam_config` pose `lifecycle {
 //       ignore_changes = [ipam_config] }` et tient son `subnet` d'un relevé des plages prises (`data
@@ -1618,8 +1619,10 @@ if (args.includes("--workflow-deploiement")) {
 // récurrentes », colonne « Cadence » (ou « Planification », « Récurrence ») renseignée, ou colonne « Type »
 // qui dit planifié, récurrent, cron… Le Statut « déclaré » n'est pas jugé : c'est la forme honnête d'une
 // tâche dont aucune exécution n'a encore été lue — le remède que nomment les constats.
-// Colonnes lues : Statut ; Première exécution lue ; Première lecture le ; Prochaine échéance ; et, quand
-// l'échéance est passée, Dernière exécution lue + Dernière lecture le (la preuve plus récente).
+// Colonnes lues : Statut ; En service depuis (TF-2560 : toute lecture lui est postérieure — une exécution lue
+// avant la mise en service est un essai, pas la tâche en service) ; Première exécution lue ; Première lecture
+// le ; Prochaine échéance ; et, quand l'échéance est passée, Dernière exécution lue + Dernière lecture le
+// (la preuve plus récente).
 // Instants au format AAAA-MM-JJ HH:MM (« THH:MM », « HHhMM » acceptés), heure LOCALE du poste ; une
 // échéance sans heure vaut la fin de son jour ; `--le AAAA-MM-JJ[ HH:MM]` fixe l'instant de référence
 // (bancs reproductibles), une date seule valant la fin de son jour ; sinon, maintenant.
@@ -1662,6 +1665,7 @@ if (args.includes("--mise-en-service")) {
     "une tâche planifiée déclarée en service HORS des tables lues — sans titre « Tâches planifiées / récurrentes », sans colonne Cadence ni Type qui la désigne, elle n'est pas vue (la désignation est explicite, jamais devinée du nom)",
     "la prochaine échéance est celle DÉCLARÉE : l'oracle ne la recalcule ni de la cadence ni de la définition (O-8 lit les définitions de planification), et ne lit aucun historique d'exécution",
     "l'ALERTE au sens d'une notification : l'oracle rend un constat quand on le rejoue, il ne tourne pas à l'échéance ; qui le rejoue, et quand, est une décision de run (supervision continue : hors périmètre)",
+    "la date de mise en service est celle DÉCLARÉE dans « En service depuis » : l'oracle ne la lit ni au planificateur ni à la plateforme, il vérifie seulement que la lecture lui est postérieure",
     "le fuseau : les instants s'écrivent sans fuseau et se comparent à l'heure locale du poste qui joue l'oracle",
     "la lecture des mots « essai », « à blanc », « simulé » : une preuve qui les cite sans dire « réelle » est refusée, et l'identifiant d'un essai qui ne les cite pas passe — l'oracle lit des mots, jamais le fait",
   ];
@@ -1702,16 +1706,25 @@ if (args.includes("--mise-en-service")) {
       pre2: _colonne(t, "derniere execution lue", "derniere execution"),
       lec2: _colonne(t, "derniere lecture le", "derniere lecture"),
       ech: _colonne(t, "prochaine echeance", "echeance"),
+      svc: _colonne(t, "en service depuis", "en service le", "mise en service le", "mise en service"),
     };
-    const manquantes = [col.pre1 < 0 ? "Première exécution lue" : null, col.lec1 < 0 ? "Première lecture le" : null, col.ech < 0 ? "Prochaine échéance" : null].filter(Boolean);
+    const manquantes = [col.pre1 < 0 ? "Première exécution lue" : null, col.lec1 < 0 ? "Première lecture le" : null, col.ech < 0 ? "Prochaine échéance" : null, col.svc < 0 ? "En service depuis" : null].filter(Boolean);
     if (manquantes.length) {
-      add("bloquant", "O22", `table (ligne ${t.ligne}) : ${enService.length} tâche(s) planifiée(s) déclarée(s) en service (${enService.map(l => _valeurCellule(l[iNom])).join(", ")}) sans colonne ${manquantes.map(c => `« ${c} »`).join(" ni ")} — « en service » n'a rien à lire : la preuve d'une première exécution réelle lue et la prochaine échéance s'écrivent dans la table, ou le Statut reste « déclaré » (D-108 (b))`, `${base22}:${t.ligne}`);
+      add("bloquant", "O22", `table (ligne ${t.ligne}) : ${enService.length} tâche(s) planifiée(s) déclarée(s) en service (${enService.map(l => _valeurCellule(l[iNom])).join(", ")}) sans colonne ${manquantes.map(c => `« ${c} »`).join(" ni ")} — « en service » n'a rien à lire : la preuve d'une première exécution réelle lue, la date de mise en service et la prochaine échéance s'écrivent dans la table, ou le Statut reste « déclaré » (D-108 (b))`, `${base22}:${t.ligne}`);
       continue;
     }
     for (const l of enService) {
       const nom = _valeurCellule(l[iNom]);
       const ko = msg => add("bloquant", "O22", `tâche « ${nom} » déclarée « ${_valeurCellule(l[iStatut])} » : ${msg} (D-108 (b))`, nom);
       const lectures = [];
+      // La mise en service : l'instant (date ET heure) où la tâche a été déclarée en service. Une exécution lue AVANT lui n'est pas
+      // celle de la tâche en service (TF-2560, D-108 (b) du 14/11/2026 : « lue après la mise en service »).
+      const svcInst = _instantO22(l[col.svc]);
+      let enServiceMs = null;
+      if (!svcInst) ko(`mise en service : date et heure ${_vide(l[col.svc]) ? "absentes" : `illisibles (« ${_valeurCellule(l[col.svc])} »)`} — attendu AAAA-MM-JJ HH:MM dans « En service depuis » ; sans elle, rien ne dit que la lecture est postérieure à la mise en service`);
+      else if (!svcInst.heure) ko(`mise en service datée du ${_valeurCellule(l[col.svc])} SANS heure — l'heure de la mise en service se dit`);
+      else if (svcInst.ms > reference) ko(`mise en service datée du ${aff(svcInst.ms)}, après l'instant de référence ${aff(reference)}`);
+      else enServiceMs = svcInst.ms;
       // Une lecture : preuve d'une exécution réelle + instant (date ET heure), passé par rapport à la référence.
       const lire = (pre, lec, qui) => {
         const refus = _refusPreuveO22(l[pre]);
@@ -1720,6 +1733,7 @@ if (args.includes("--mise-en-service")) {
         if (!inst) ko(`${qui} : date et heure de lecture ${_vide(l[lec]) ? "absentes" : `illisibles (« ${_valeurCellule(l[lec])} »)`} — attendu AAAA-MM-JJ HH:MM`);
         else if (!inst.heure) ko(`${qui} : lecture datée du ${_valeurCellule(l[lec])} SANS heure — l'heure de lecture se dit`);
         else if (inst.ms > reference) ko(`${qui} : lecture datée du ${aff(inst.ms)}, après l'instant de référence ${aff(reference)} — une preuve datée du futur n'en est pas une`);
+        else if (enServiceMs !== null && inst.ms <= enServiceMs) ko(`${qui} : lecture datée du ${aff(inst.ms)}, AVANT la mise en service (${aff(enServiceMs)}) — une exécution lue avant que la tâche soit en service n'est pas la sienne (essai, test) ; lire une exécution réelle après la mise en service`);
         else if (!refus) lectures.push(inst.ms);
       };
       lire(col.pre1, col.lec1, "première exécution réelle");

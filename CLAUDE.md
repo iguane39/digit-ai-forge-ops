@@ -190,7 +190,10 @@ findings,non_juge}`, exit 0/1/2 :
   service » sur la foi d'un essai ; aucune publication du 20 au 25/10, vérification de 18 h 45 non faite. La
   tâche est désignée par sa table (titre, Cadence ou Type), jamais devinée. Document seul, aucun appel réseau ;
   l'oracle ne tourne pas à l'échéance, c'est le run qui le rejoue. Fixtures :
-  `fixtures/o22-mise-en-service-planifiee/`.
+  `fixtures/o22-mise-en-service-planifiee/`. **Depuis le 14/11/2026 (TF-2560, D-108 (b)) la lecture est
+  postérieure à la mise en service** : colonne `En service depuis` (date et heure), une lecture qui la précède
+  ou l'égale est un constat — l'identifiant d'une publication lue pendant l'essai n'est pas celui de la tâche en
+  service.
 
 - **O23** `--reseau-docker <pile ou fichier.tf>` (TF-2164, lot Produit-86 20261104a RO-2). Un réseau Docker posé
   par Terraform relève les plages prises avant d'en choisir une (`scripts/plages-docker.mjs`, branché par un
