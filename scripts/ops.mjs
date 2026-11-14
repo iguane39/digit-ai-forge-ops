@@ -306,6 +306,8 @@ const PLANS = {
     ],
     healthcheck: [
       "railway status   # deploiement SUCCESS attendu",
+      // TF-2519 (Produit-02, lot 20261105a RT-148, ledger seq 693) : « Wait for CI » marque SKIPPED le deploiement d'un commit dont les controles echouent ; relances au vert, Railway ne le rattrape pas.
+      "si le deploiement du commit est SKIPPED (« Wait for CI » l'a saute pendant que les controles etaient en echec, puis les controles relances sont passes au vert : Railway ne le rattrape pas, la production sert l'ancienne version, 16 minutes le 05/11/2026) : `node <FORGE_OPS>/scripts/rattraper-railway.mjs juger releve-railway.json` lit le releve ecrit par le run (conclusion des controles du commit, deploiements du service : id, statut, commit, date de creation) et ECRIT le geste, un deploiement NEUF du meme commit (`serviceInstanceDeployV2`, API GraphQL), jamais joue par la forge : il change la production, sous GO humain (R-38) ; puis `version-servie.mjs lire` rend le commit servi ; fait : references/GESTES-EXPLOITATION.md, G-08",
       "curl -fsS <URL_SERVICE>/sante   # 200 attendu (contrat sante.mjs de forge-ops)",
       "node <FORGE_OPS>/scripts/version-servie.mjs lire <URL_SERVICE> --attendu <COMMIT> --sortie version-servie.json   # TF-2244 : le commit passe a la construction est celui que /healthz rend ; la sortie JSON est citee au dossier de MEP, jamais un commit reconstitue ; la capture se juge par oracle-ops.mjs --version-servie",
     ],

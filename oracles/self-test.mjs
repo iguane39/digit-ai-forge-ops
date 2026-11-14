@@ -3662,5 +3662,108 @@ fs.rmSync(base, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }
   } finally { fs.rmSync(tmp12, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
 }
 
+// ── TF-2519 (Produit-02, lot 20261105a RT-148, ledger seq 693) : UN DÉPLOIEMENT RAILWAY SKIPPED PAR « Wait for CI » SE RATTRAPE ─
+// Le fait : la poussée du 05/11 à 21:33 fait échouer les contrôles pour une cause sans lien (Chrome), Railway saute le déploiement du commit,
+// les contrôles relancés passent au vert à 21:46 et le déploiement reste SKIPPED : production sur l'ancienne version 16 minutes, rattrapée par
+// un déploiement neuf du même commit. Décision R-58 du 14/11/2026 : la chaîne documente (G-08) et outille ce rattrapage. L'outil juge un relevé
+// écrit par le run et ÉCRIT le geste ; il n'appelle ni Railway ni GitHub. Les fixtures sont construites (identifiants fictifs).
+{
+  console.log("");
+  const outil19 = path.join(ici, "..", "scripts", "rattraper-railway.mjs");
+  const lib19 = await import("../scripts/lib-rattrapage-railway.mjs");
+  const fx19 = f => path.join(fx("rattrapage-railway"), f);
+  const tmp19 = fs.mkdtempSync(path.join(tmpdir(), "forge-ops-tf2519-"));
+  const cli19 = (...a) => { const r = spawnSync(process.execPath, [outil19, ...a], { encoding: "utf8" }); let json = null; try { json = JSON.parse(r.stdout); } catch { /* sortie non JSON */ } return { status: r.status, stdout: r.stdout || "", stderr: r.stderr || "", json }; };
+  const ecrire19 = (nom, o) => { const f = path.join(tmp19, nom); fs.writeFileSync(f, typeof o === "string" ? o : JSON.stringify(o), "utf8"); return f; };
+  const lire19 = f => JSON.parse(fs.readFileSync(f, "utf8"));
+  try {
+    // ROUGE : dernier déploiement du commit SKIPPED, contrôles au vert -> le rattrapage est requis et le geste est écrit.
+    const rouge = cli19("juger", fx19("rouge-skipped-controles-verts.json"));
+    const g = rouge.json?.geste;
+    ok(rouge.status === 1 && rouge.json?.verdict === "rattrapage-requis" && rouge.json?.deploiement?.id === "dep-saute-0002" && /SKIPPED/.test(rouge.stderr),
+      "TF-2519 ROUGE : déploiement du commit SKIPPED, contrôles au vert -> exit 1 « rattrapage-requis », le déploiement sauté est nommé");
+    ok(g && g.mutation === 'mutation { serviceInstanceDeployV2(commitSha: "237dc8d0c1b2a39485766a5b4c3d2e1f0a9b8c7d", environmentId: "00000000-0000-4000-8000-000000000002", serviceId: "00000000-0000-4000-8000-000000000001") }'
+        && g.api === "https://backboard.railway.com/graphql/v2" && /RAILWAY_TOKEN/.test(g.jeton) && /jamais en argument/.test(g.jeton),
+      "TF-2519 : le geste écrit est un déploiement NEUF du commit ENTIER, avec les identifiants du relevé ; le jeton vient de l'environnement du run");
+    ok(/non joué/.test(rouge.stderr) && /GO humain \(R-38\)/.test(rouge.stderr) && /relisent/.test(g?.limite || "") && /version-servie\.mjs lire/.test(g?.apres || ""),
+      "TF-2519 : le geste est dit non joué, sous GO humain ; sa limite (arguments à relire chez l'éditeur) et la relecture du commit servi sont écrites");
+
+    // VERTES : le garde-fou ne déploie ni à tort ni deux fois.
+    const garde = cli19("juger", fx19("verte-garde-tenue.json"));
+    ok(garde.status === 0 && garde.json?.verdict === "garde-tenue" && !garde.json?.geste && /garde « Wait for CI » qui tient/.test(garde.stderr),
+      "TF-2519 VERT : déploiement SKIPPED et contrôles en échec -> exit 0 « garde-tenue », aucun geste (un déploiement neuf contournerait la garde)");
+    const rattrape = cli19("juger", fx19("verte-rattrape.json"));
+    ok(rattrape.status === 0 && rattrape.json?.verdict === "servi" && rattrape.json?.deploiement?.id === "dep-neuf-0003" && !rattrape.json?.geste,
+      "TF-2519 VERT : un déploiement SUCCESS plus récent du même commit (sha court dans la liste) -> exit 0 « servi », le rattrapage déjà joué n'est pas rejoué");
+    const enCours = cli19("juger", fx19("verte-en-cours.json"));
+    ok(enCours.status === 0 && enCours.json?.verdict === "en-cours" && !enCours.json?.geste && /BUILDING/.test(enCours.stderr),
+      "TF-2519 VERT : un déploiement neuf en construction -> exit 0 « en-cours », aucun second déploiement");
+    const echec = cli19("juger", fx19("rouge-autre-echec.json"));
+    ok(echec.status === 3 && echec.json?.verdict === "autre-echec" && !echec.json?.geste && /journaux de déploiement/.test(echec.stderr),
+      "TF-2519 ROUGE : dernier déploiement FAILED -> exit 3 « autre-echec », pas de geste (ce n'est pas le remède), le diagnostic est nommé");
+
+    // Le DERNIER déploiement du commit juge, quel que soit l'ordre de la liste ; un autre commit ne masque rien.
+    const base = lire19(fx19("verte-rattrape.json"));
+    const inverse = ecrire19("inverse.json", { ...base, deploiements: [...base.deploiements].reverse() });
+    ok(cli19("juger", inverse).json?.verdict === "servi", "TF-2519 : la liste dans l'ordre inverse donne le même verdict (le plus récent par date de création)");
+    const successAncien = ecrire19("success-ancien.json", { ...base, deploiements: [{ id: "dep-ancien", statut: "SUCCESS", commit: base.commit, cree_le: "2026-11-05T21:00:00Z" }, { id: "dep-saute", statut: "SKIPPED", commit: base.commit, cree_le: "2026-11-05T21:33:41Z" }] });
+    const sa = cli19("juger", successAncien);
+    ok(sa.status === 1 && sa.json?.deploiement?.id === "dep-saute", "TF-2519 ROUGE : un SUCCESS plus ancien du même commit ne masque pas le SKIPPED plus récent");
+    const sansIds = ecrire19("sans-ids.json", { ...lire19(fx19("rouge-skipped-controles-verts.json")), service_id: undefined, environnement_id: undefined });
+    ok(/environmentId: "<ID_ENVIRONNEMENT>", serviceId: "<ID_SERVICE>"/.test(cli19("juger", sansIds).json?.geste?.mutation || ""),
+      "TF-2519 : sans identifiants au relevé, le geste porte <ID_SERVICE> et <ID_ENVIRONNEMENT> à remplir, rien d'inventé");
+
+    // Illisible : jamais un verdict inventé, jamais de geste.
+    const sans = cli19("juger", fx19("rouge-sans-deploiement-du-commit.json"));
+    ok(sans.status === 2 && sans.json?.verdict === "illisible" && /aucun déploiement du commit 237dc8d/.test(sans.stderr) && !sans.json?.geste,
+      "TF-2519 ROUGE : une liste sans déploiement du commit -> exit 2, ni verdict ni geste");
+    const hostile = cli19("juger", fx19("rouge-identifiant-hostile.json"));
+    ok(hostile.status === 2 && /service_id/.test(hostile.stderr) && hostile.json?.geste === undefined && !/"mutation"/.test(hostile.stdout),
+      "TF-2519 ROUGE : un identifiant qui porte une seconde mutation est refusé, la mutation n'est pas écrite");
+    const racine = lire19(fx19("rouge-skipped-controles-verts.json"));
+    const cas = [
+      ["format", { ...racine, format: "autre@1" }, /format/],
+      ["commit court", { ...racine, commit: "237dc8d" }, /sha entier/],
+      ["conclusion absente", { ...racine, controles: {} }, /conclusion des contrôles/],
+      ["statut inconnu", { ...racine, deploiements: [{ ...racine.deploiements[1], statut: "REMOVED" }] }, /non jugé/],
+      ["date illisible", { ...racine, deploiements: [{ ...racine.deploiements[1], cree_le: "hier soir" }] }, /incomplet/],
+      ["liste vide", { ...racine, deploiements: [] }, /aucun déploiement au relevé/],
+    ];
+    const refus = cas.map(([nom, o, motif]) => { const r = cli19("juger", ecrire19(`illisible-${nom.replace(/ /g, "-")}.json`, o)); return { nom, ok: r.status === 2 && motif.test(r.stderr) && !r.json?.geste }; });
+    ok(refus.every(r => r.ok), `TF-2519 ROUGE : relevé de mauvais format, commit court, conclusion absente, statut inconnu, date illisible, liste vide -> exit 2 chacun, pour sa raison (${refus.filter(r => !r.ok).map(r => r.nom).join(", ") || "6 sur 6"})`);
+    ok(cli19("juger", ecrire19("pas-du-json.json", "pas du json")).status === 2 && cli19("juger", path.join(tmp19, "absent.json")).status === 2
+        && cli19("juger").status === 2 && cli19("lire", fx19("verte-rattrape.json")).status === 2 && cli19("juger", fx19("verte-rattrape.json"), "--inconnue").status === 2,
+      "TF-2519 : JSON illisible, relevé absent, relevé non donné, verbe inconnu, option inconnue -> exit 2");
+
+    // --sortie : le verdict s'écrit aussi pour un rattrapage requis (le dossier de MEP le cite).
+    const sortie = path.join(tmp19, "verdict.json");
+    const avecSortie = cli19("juger", fx19("rouge-skipped-controles-verts.json"), "--sortie", sortie);
+    ok(avecSortie.status === 1 && fs.existsSync(sortie) && lire19(sortie).verdict === "rattrapage-requis" && lire19(sortie).geste?.mutation === rouge.json.geste.mutation,
+      "TF-2519 : --sortie écrit le verdict et le geste, même quand le rattrapage est requis (exit 1)");
+
+    // La forge n'appelle rien : ni réseau, ni processus, ni lecture d'environnement dans l'outil et sa bibliothèque.
+    const sources19 = ["scripts/rattraper-railway.mjs", "scripts/lib-rattrapage-railway.mjs"].map(f => fs.readFileSync(path.join(ici, "..", f), "utf8").replace(/^\s*\/\/.*$/gm, ""));
+    ok(sources19.every(s => !/\bfetch\s*\(|node:(http|https|net|child_process)|process\.env|spawn|exec(File)?Sync/.test(s)),
+      "TF-2519 : l'outil et sa bibliothèque n'appellent aucun service, ne lancent aucun processus et ne lisent aucun jeton (le geste est écrit, jamais joué)");
+    // Le remède écrit est lisible par la bibliothèque : le geste du rouge désigne le commit que le relevé rouge nomme.
+    ok(lib19.jugerRattrapage(racine).geste.mutation.includes(racine.commit) && lib19.FORMAT === "forge-ops/rattrapage-railway@1",
+      "TF-2519 : la bibliothèque rend le même verdict que l'outil (formes partagées)");
+
+    // Le plan railway de la forge porte le geste (loi n° 1) et n'emploie aucun jeton non déclaré.
+    const planRw = JSON.parse(run(ops, ["plan", "railway", "<BUILD>"]));
+    const ligne19 = planRw.phases.healthcheck.find(l => l.includes("rattraper-railway.mjs"));
+    ok(ligne19 && /SKIPPED/.test(ligne19) && /Wait for CI/.test(ligne19) && /GO humain \(R-38\)/.test(ligne19) && /G-08/.test(ligne19) && /serviceInstanceDeployV2/.test(ligne19)
+        && planRw.phases.healthcheck.indexOf(ligne19) > planRw.phases.healthcheck.findIndex(l => l.startsWith("railway status")) && jetonsNonDeclares(planRw).length === 0,
+      "TF-2519 : le plan railway (healthcheck, sous `railway status`) cite l'outil, le saut « Wait for CI », le GO humain et G-08 ; aucun jeton non déclaré");
+
+    // Loi n° 1 : le garde-fou est au registre des gestes et appelé par la documentation de la forge.
+    const lireDoc19 = f => fs.readFileSync(path.join(ici, "..", f), "utf8");
+    const g08 = lireDoc19("references/GESTES-EXPLOITATION.md");
+    ok(/## G-08 ·/.test(g08) && g08.includes("rattraper-railway.mjs") && g08.includes("RAILWAY_TOKEN") && g08.includes("42107402758") && g08.includes("serviceInstanceDeployV2")
+        && ["CLAUDE.md", "README.md"].every(f => lireDoc19(f).includes("rattraper-railway.mjs") && lireDoc19(f).includes("TF-2519")),
+      "TF-2519 : le garde-fou est inscrit au registre (G-08, avec ses exécutions et sa variable) et appelé par CLAUDE.md et README.md");
+  } finally { fs.rmSync(tmp19, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
+}
+
 console.log(`\nSelf-test forge-ops : ${pass} PASS, ${echec} FAIL`);
 process.exit(echec ? 1 : 0);

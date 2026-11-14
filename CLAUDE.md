@@ -364,6 +364,20 @@ La forge ne se connecte à rien et ne restaure rien : la restauration (`--clean`
 `fixtures/restauration-supabase/`. Le fait et ses limites : G-07. Lacune dite : la forme des lignes `DEFAULT ACL` n'a pas été
 relevée sur un vrai sommaire (`pg_restore` absent du poste de la campagne).
 
+## Rattraper un déploiement Railway SKIPPED (TF-2519, G-08)
+
+Quand les contrôles d'un commit échouent, le réglage « Wait for CI » de Railway marque son déploiement SKIPPED ; les contrôles relancés
+au vert ne le redéclenchent pas, et la production reste sur l'ancienne version (16 minutes le 05/11/2026, lot Produit-02 20261105a
+RT-148, ledger seq 693). `node scripts/rattraper-railway.mjs juger <releve.json> [--sortie verdict.json]` juge le relevé
+`forge-ops/rattrapage-railway@1` que le run écrit (conclusion des contrôles, déploiements du service) : exit 1 `rattrapage-requis` (dernier
+déploiement du commit SKIPPED, contrôles au vert) et ÉCRIT le geste, un déploiement NEUF du même commit (`serviceInstanceDeployV2`) ;
+exit 0 quand le saut est la garde qui tient (contrôles non verts), quand le commit est déjà servi ou en route ; exit 3 pour FAILED ou
+CRASHED ; exit 2 pour un relevé illisible. La forge n'appelle ni Railway ni GitHub : le geste change la production, il se joue sous le
+GO du run (R-38), jeton de projet dans `RAILWAY_TOKEN` de l'environnement du run. Le plan `railway` (phase `healthcheck`) le cite ;
+logique `scripts/lib-rattrapage-railway.mjs`, fixtures `fixtures/rattrapage-railway/`. Lacunes dites : arguments de la mutation et
+en-tête du jeton à relire à l'API de Railway avant le premier envoi ; le workflow de rattrapage automatique et la stabilité de Chrome
+dans l'oracle du consentement relèvent du produit.
+
 ## Gestes d'exploitation constatés — `references/GESTES-EXPLOITATION.md`
 
 Les **faits du monde** rencontrés en exploitation, qu'aucune documentation d'éditeur n'énonce et

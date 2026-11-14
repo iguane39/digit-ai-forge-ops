@@ -168,6 +168,10 @@ node gabarits/restauration-supabase.mjs plan <copie.dump>                       
 node gabarits/restauration-supabase.mjs liste sommaire.txt --sortie liste-filtree.txt [--role <autre>]   # exit 0 · les entrées DEFAULT ACL retirées sont nommées
 node gabarits/restauration-supabase.mjs verifier liste-filtree.txt                    # exit 0 conforme · 1 il reste des entrées refusées · 2 texte qui n'est pas un sommaire
 
+# Déploiement Railway SKIPPED par « Wait for CI » que les contrôles relancés au vert ne rattrapent pas (TF-2519, G-08) : l'outil juge un relevé écrit
+# par le run et ÉCRIT le geste (un déploiement neuf du même commit), sans appeler Railway ni GitHub — le geste se joue sous le GO du run
+node scripts/rattraper-railway.mjs juger releve-railway.json [--sortie verdict.json]   # exit 1 rattrapage requis · 0 garde tenue, déjà servi ou en route · 3 autre échec · 2 illisible ; relevé forge-ops/rattrapage-railway@1
+
 # Verdict « rollback recommandé » : seuils SLO humains vs mesures post-bascule (jamais d'exécution)
 node oracles/oracle-ops.mjs --verdict-rollback mesures.json --seuils seuils-slo.json
 

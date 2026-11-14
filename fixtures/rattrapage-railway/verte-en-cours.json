@@ -1,0 +1,9 @@
+{
+  "format": "forge-ops/rattrapage-railway@1",
+  "commit": "237dc8d0c1b2a39485766a5b4c3d2e1f0a9b8c7d",
+  "controles": { "conclusion": "success", "lu_le": "2026-11-05T21:46:06Z" },
+  "deploiements": [
+    { "id": "dep-saute-0002", "statut": "SKIPPED", "commit": "237dc8d0c1b2a39485766a5b4c3d2e1f0a9b8c7d", "cree_le": "2026-11-05T21:33:41Z" },
+    { "id": "dep-neuf-0003", "statut": "BUILDING", "commit": "237dc8d0c1b2a39485766a5b4c3d2e1f0a9b8c7d", "cree_le": "2026-11-05T21:49:48Z" }
+  ]
+}
